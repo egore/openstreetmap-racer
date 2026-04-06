@@ -71,6 +71,14 @@ func _get_building_height(tags: Dictionary) -> float:
 			return levels * FLOOR_HEIGHT
 	return DEFAULT_HEIGHT
 
+func _is_polygon_ccw(points: PackedVector3Array) -> bool:
+	# Compute signed area in the XZ plane using the shoelace formula.
+	# Positive = CCW in standard math coords, but our Z is negated so positive = CW in world.
+	var signed_area := 0.0
+	for i: int in range(points.size() - 1):
+		signed_area += points[i].x * points[i + 1].z - points[i + 1].x * points[i].z
+	return signed_area < 0.0
+
 func _build_walls(points: PackedVector3Array, height: float, color: Color) -> MeshInstance3D:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -78,6 +86,8 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	st.set_material(mat)
+
+	var ccw := _is_polygon_ccw(points)
 
 	for i: int in range(points.size() - 1):
 		var p0 := points[i]
@@ -88,25 +98,44 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 		var tr := Vector3(p1.x, BUILDING_Y + height, p1.z)
 		var tl := Vector3(p0.x, BUILDING_Y + height, p0.z)
 
-		# Compute wall normal
+		# Compute wall normal (flip based on winding)
 		var wall_dir := (br - bl).normalized()
-		var normal := Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
+		var normal: Vector3
+		if ccw:
+			normal = Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
+		else:
+			normal = Vector3(-wall_dir.z, 0.0, wall_dir.x).normalized()
 
-		# Triangle 1 (reversed winding for outward-facing normals)
-		st.set_normal(normal)
-		st.add_vertex(bl)
-		st.set_normal(normal)
-		st.add_vertex(tr)
-		st.set_normal(normal)
-		st.add_vertex(br)
+		if ccw:
+			# CCW polygon: bl -> tr -> br, bl -> tl -> tr
+			st.set_normal(normal)
+			st.add_vertex(bl)
+			st.set_normal(normal)
+			st.add_vertex(tr)
+			st.set_normal(normal)
+			st.add_vertex(br)
 
-		# Triangle 2
-		st.set_normal(normal)
-		st.add_vertex(bl)
-		st.set_normal(normal)
-		st.add_vertex(tl)
-		st.set_normal(normal)
-		st.add_vertex(tr)
+			st.set_normal(normal)
+			st.add_vertex(bl)
+			st.set_normal(normal)
+			st.add_vertex(tl)
+			st.set_normal(normal)
+			st.add_vertex(tr)
+		else:
+			# CW polygon: bl -> br -> tr, bl -> tr -> tl
+			st.set_normal(normal)
+			st.add_vertex(bl)
+			st.set_normal(normal)
+			st.add_vertex(br)
+			st.set_normal(normal)
+			st.add_vertex(tr)
+
+			st.set_normal(normal)
+			st.add_vertex(bl)
+			st.set_normal(normal)
+			st.add_vertex(tr)
+			st.set_normal(normal)
+			st.add_vertex(tl)
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Walls"
