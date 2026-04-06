@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="sample">
+  <bounds minlat="49.4800" minlon="8.4600" maxlat="49.4900" maxlon="8.4750"/>
+
+  <!-- Nodes for a main road (east-west) -->
+  <node id="1" lat="49.4850" lon="8.4600"/>
+  <node id="2" lat="49.4850" lon="8.4650"/>
+  <node id="3" lat="49.4850" lon="8.4700"/>
+  <node id="4" lat="49.4850" lon="8.4750"/>
+
+  <!-- Nodes for a cross street (north-south) -->
+  <node id="10" lat="49.4880" lon="8.4675"/>
+  <node id="11" lat="49.4860" lon="8.4675"/>
+  <node id="12" lat="49.4850" lon="8.4675"/>
+  <node id="13" lat="49.4840" lon="8.4675"/>
+  <node id="14" lat="49.4820" lon="8.4675"/>
+
+  <!-- Traffic light at intersection -->
+  <node id="100" lat="49.4850" lon="8.4675">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+
+  <!-- A tree -->
+  <node id="101" lat="49.4855" lon="8.4660">
+    <tag k="natural" v="tree"/>
+  </node>
+
+  <!-- A bench -->
+  <node id="102" lat="49.4848" lon="8.4665">
+    <tag k="amenity" v="bench"/>
+  </node>
+
+  <!-- Street lamp -->
+  <node id="103" lat="49.4850" lon="8.4640">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+
+  <!-- Another tree -->
+  <node id="104" lat="49.4845" lon="8.4710">
+    <tag k="natural" v="tree"/>
+  </node>
+
+  <!-- Bus stop -->
+  <node id="105" lat="49.4852" lon="8.4720">
+    <tag k="highway" v="bus_stop"/>
+  </node>
+
+  <!-- Building corner nodes -->
+  <node id="200" lat="49.4855" lon="8.4690"/>
+  <node id="201" lat="49.4855" lon="8.4700"/>
+  <node id="202" lat="49.4860" lon="8.4700"/>
+  <node id="203" lat="49.4860" lon="8.4690"/>
+
+  <!-- Second building -->
+  <node id="210" lat="49.4840" lon="8.4630"/>
+  <node id="211" lat="49.4840" lon="8.4645"/>
+  <node id="212" lat="49.4845" lon="8.4645"/>
+  <node id="213" lat="49.4845" lon="8.4630"/>
+
+  <!-- Third building (taller) -->
+  <node id="220" lat="49.4862" lon="8.4640"/>
+  <node id="221" lat="49.4862" lon="8.4655"/>
+  <node id="222" lat="49.4868" lon="8.4655"/>
+  <node id="223" lat="49.4868" lon="8.4640"/>
+
+  <!-- Residential area nodes -->
+  <node id="300" lat="49.4835" lon="8.4690"/>
+  <node id="301" lat="49.4835" lon="8.4730"/>
+  <node id="302" lat="49.4845" lon="8.4730"/>
+  <node id="303" lat="49.4845" lon="8.4690"/>
+
+  <!-- Park area nodes -->
+  <node id="310" lat="49.4870" lon="8.4710"/>
+  <node id="311" lat="49.4870" lon="8.4740"/>
+  <node id="312" lat="49.4885" lon="8.4740"/>
+  <node id="313" lat="49.4885" lon="8.4710"/>
+
+  <!-- Multipolygon building outer nodes -->
+  <node id="400" lat="49.4875" lon="8.4620"/>
+  <node id="401" lat="49.4875" lon="8.4635"/>
+  <node id="402" lat="49.4880" lon="8.4635"/>
+  <node id="403" lat="49.4880" lon="8.4620"/>
+
+  <!-- Main road (east-west, primary) -->
+  <way id="1000">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <tag k="highway" v="primary"/>
+    <tag k="name" v="Hauptstraße"/>
+    <tag k="lanes" v="2"/>
+  </way>
+
+  <!-- Cross street (north-south, residential) -->
+  <way id="1001">
+    <nd ref="10"/>
+    <nd ref="11"/>
+    <nd ref="12"/>
+    <nd ref="13"/>
+    <nd ref="14"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Querstraße"/>
+  </way>
+
+  <!-- Building 1 -->
+  <way id="2000">
+    <nd ref="200"/>
+    <nd ref="201"/>
+    <nd ref="202"/>
+    <nd ref="203"/>
+    <nd ref="200"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- Building 2 -->
+  <way id="2001">
+    <nd ref="210"/>
+    <nd ref="211"/>
+    <nd ref="212"/>
+    <nd ref="213"/>
+    <nd ref="210"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+
+  <!-- Building 3 (taller) -->
+  <way id="2002">
+    <nd ref="220"/>
+    <nd ref="221"/>
+    <nd ref="222"/>
+    <nd ref="223"/>
+    <nd ref="220"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="5"/>
+  </way>
+
+  <!-- Residential landuse area -->
+  <way id="3000">
+    <nd ref="300"/>
+    <nd ref="301"/>
+    <nd ref="302"/>
+    <nd ref="303"/>
+    <nd ref="300"/>
+    <tag k="landuse" v="residential"/>
+  </way>
+
+  <!-- Park -->
+  <way id="3001">
+    <nd ref="310"/>
+    <nd ref="311"/>
+    <nd ref="312"/>
+    <nd ref="313"/>
+    <nd ref="310"/>
+    <tag k="leisure" v="park"/>
+    <tag k="name" v="Stadtpark"/>
+  </way>
+
+  <!-- Multipolygon building outer way -->
+  <way id="4000">
+    <nd ref="400"/>
+    <nd ref="401"/>
+    <nd ref="402"/>
+    <nd ref="403"/>
+    <nd ref="400"/>
+  </way>
+
+  <!-- Relation: multipolygon building -->
+  <relation id="5000">
+    <member type="way" ref="4000" role="outer"/>
+    <tag k="type" v="multipolygon"/>
+    <tag k="building" v="industrial"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="name" v="Fabrikhalle"/>
+  </relation>
+</osm>
