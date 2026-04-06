@@ -49,7 +49,7 @@ https://overpass-api.de/api/map?bbox=8.46,49.48,8.48,49.49
 
 ### Running
 
-1. Open this project in Godot 4.2+
+1. Open this project in Godot 4.6+
 2. Ensure `data/map.osm` exists with your desired map data
 3. Press F5 to run
 
