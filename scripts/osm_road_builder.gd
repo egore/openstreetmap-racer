@@ -98,17 +98,17 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		st.set_normal(Vector3.UP)
 		st.add_vertex(v0)
 		st.set_normal(Vector3.UP)
-		st.add_vertex(v1)
-		st.set_normal(Vector3.UP)
 		st.add_vertex(v2)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(v1)
 
 		# Triangle 2
 		st.set_normal(Vector3.UP)
 		st.add_vertex(v0)
 		st.set_normal(Vector3.UP)
-		st.add_vertex(v2)
-		st.set_normal(Vector3.UP)
 		st.add_vertex(v3)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(v2)
 
 	mesh_instance.mesh = st.commit()
 	return mesh_instance
