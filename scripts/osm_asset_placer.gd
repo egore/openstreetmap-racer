@@ -4,8 +4,11 @@ extends RefCounted
 ## Places placeholder 3D assets for OSM nodes based on their tags.
 ## Each asset type is a simple colored box/shape with a label.
 
-# Asset definitions: tag_key -> { tag_value -> { color, size, y_offset, label } }
+# Asset definitions: tag_key -> { tag_value -> { color, size, y_offset, label, scene (optional) } }
 # If tag_value is "*", matches any value for that key.
+# If "scene" is set, that PackedScene is instanced instead of a placeholder box.
+
+var _scene_cache: Dictionary = {}  # path -> PackedScene
 const ASSET_DEFS := {
 	"highway": {
 		"traffic_signals": { "color": Color(0.1, 0.7, 0.1), "size": Vector3(0.3, 3.0, 0.3), "y_offset": 1.5, "label": "Traffic Light" },
@@ -16,8 +19,8 @@ const ASSET_DEFS := {
 		"give_way": { "color": Color(0.9, 0.9, 0.1), "size": Vector3(0.5, 2.0, 0.05), "y_offset": 1.0, "label": "Give Way" },
 	},
 	"natural": {
-		"tree": { "color": Color(0.15, 0.5, 0.1), "size": Vector3(2.0, 5.0, 2.0), "y_offset": 2.5, "label": "Tree" },
-		"tree_row": { "color": Color(0.15, 0.5, 0.1), "size": Vector3(2.0, 5.0, 2.0), "y_offset": 2.5, "label": "Tree" },
+		"tree": { "color": Color(0.15, 0.5, 0.1), "size": Vector3(2.0, 5.0, 2.0), "y_offset": 2.5, "label": "Tree", "scene": "res://scenes/models/tree.blend" },
+		"tree_row": { "color": Color(0.15, 0.5, 0.1), "size": Vector3(2.0, 5.0, 2.0), "y_offset": 2.5, "label": "Tree", "scene": "res://scenes/models/tree.blend" },
 		"peak": { "color": Color(0.6, 0.5, 0.4), "size": Vector3(1.0, 3.0, 1.0), "y_offset": 1.5, "label": "Peak" },
 	},
 	"amenity": {
@@ -63,7 +66,16 @@ func place_asset(node: OSMParser.OSMNode) -> Node3D:
 	root.name = "%s_%d" % [def["label"].replace(" ", ""), node.id]
 	root.position = node.local_pos
 
-	# Create the placeholder box
+	# If a scene is defined, instance it instead of a placeholder box
+	if def.has("scene"):
+		var scene_path: String = def["scene"]
+		var scene := _load_scene(scene_path)
+		if scene != null:
+			var instance := scene.instantiate()
+			root.add_child(instance)
+			return root
+
+	# Fallback: create a placeholder box
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Mesh"
 
@@ -80,6 +92,16 @@ func place_asset(node: OSMParser.OSMNode) -> Node3D:
 	root.add_child(mesh_instance)
 
 	return root
+
+func _load_scene(path: String) -> PackedScene:
+	if _scene_cache.has(path):
+		return _scene_cache[path]
+	if ResourceLoader.exists(path):
+		var scene: PackedScene = load(path)
+		_scene_cache[path] = scene
+		return scene
+	push_warning("OSMAssetPlacer: Scene not found: %s, using placeholder" % path)
+	return null
 
 func _find_asset_def(tags: Dictionary) -> Dictionary:
 	for tag_key: String in ASSET_DEFS:
