@@ -187,8 +187,16 @@ func _unload_tile(tkey: Vector2i) -> void:
 	_loaded_tiles.erase(tkey)
 
 func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
+	var ground_body := StaticBody3D.new()
+	ground_body.name = "Ground"
+	ground_body.position = Vector3(
+		(tkey.x + 0.5) * tile_size,
+		-0.05,
+		(tkey.y + 0.5) * tile_size
+	)
+
 	var ground := MeshInstance3D.new()
-	ground.name = "Ground"
+	ground.name = "GroundMesh"
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(tile_size, tile_size)
 	ground.mesh = plane
@@ -196,13 +204,16 @@ func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.35, 0.55, 0.25)  # grass green
 	ground.material_override = mat
+	ground_body.add_child(ground)
 
-	ground.position = Vector3(
-		(tkey.x + 0.5) * tile_size,
-		-0.05,
-		(tkey.y + 0.5) * tile_size
-	)
-	parent.add_child(ground)
+	var col_shape := CollisionShape3D.new()
+	col_shape.name = "GroundCollision"
+	var box := BoxShape3D.new()
+	box.size = Vector3(tile_size, 0.1, tile_size)
+	col_shape.shape = box
+	ground_body.add_child(col_shape)
+
+	parent.add_child(ground_body)
 
 func _is_road(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("highway")
