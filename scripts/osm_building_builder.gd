@@ -92,21 +92,21 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 		var wall_dir := (br - bl).normalized()
 		var normal := Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
 
-		# Triangle 1
+		# Triangle 1 (reversed winding for outward-facing normals)
 		st.set_normal(normal)
 		st.add_vertex(bl)
 		st.set_normal(normal)
-		st.add_vertex(br)
-		st.set_normal(normal)
 		st.add_vertex(tr)
+		st.set_normal(normal)
+		st.add_vertex(br)
 
 		# Triangle 2
 		st.set_normal(normal)
 		st.add_vertex(bl)
 		st.set_normal(normal)
-		st.add_vertex(tr)
-		st.set_normal(normal)
 		st.add_vertex(tl)
+		st.set_normal(normal)
+		st.add_vertex(tr)
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Walls"
