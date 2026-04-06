@@ -32,7 +32,7 @@ const ASSET_DEFS := {
 		"parking": { "color": Color(0.3, 0.3, 0.7), "size": Vector3(1.0, 2.0, 0.1), "y_offset": 1.0, "label": "Parking Sign" },
 	},
 	"barrier": {
-		"bollard": { "color": Color(0.5, 0.5, 0.5), "size": Vector3(0.2, 0.8, 0.2), "y_offset": 0.4, "label": "Bollard" },
+		"bollard": { "color": Color(0.5, 0.5, 0.5), "size": Vector3(0.2, 0.8, 0.2), "y_offset": 0.4, "label": "Bollard", "scene": "res://scenes/models/bollard.blend" },
 		"gate": { "color": Color(0.4, 0.3, 0.2), "size": Vector3(3.0, 1.5, 0.1), "y_offset": 0.75, "label": "Gate" },
 		"fence": { "color": Color(0.5, 0.4, 0.3), "size": Vector3(0.1, 1.5, 0.1), "y_offset": 0.75, "label": "Fence Post" },
 	},
@@ -73,6 +73,7 @@ func place_asset(node: OSMParser.OSMNode) -> Node3D:
 		if scene != null:
 			var instance := scene.instantiate()
 			root.add_child(instance)
+			_add_debug_label(root, def, node.tags)
 			return root
 
 	# Fallback: create a placeholder box
@@ -90,8 +91,27 @@ func place_asset(node: OSMParser.OSMNode) -> Node3D:
 	mesh_instance.position.y = def["y_offset"]
 
 	root.add_child(mesh_instance)
+	_add_debug_label(root, def, node.tags)
 
 	return root
+
+func _add_debug_label(parent: Node3D, def: Dictionary, tags: Dictionary) -> void:
+	var label := Label3D.new()
+	label.name = "DebugLabel"
+	var text: String = def["label"]
+	if tags.has("name"):
+		text += " - " + tags["name"]
+	label.text = text
+	label.font_size = 32
+	label.pixel_size = 0.01
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.modulate = Color(1.0, 1.0, 1.0, 0.9)
+	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
+	label.outline_size = 8
+	var label_y: float = def["y_offset"] * 2.0 + 1.0
+	label.position = Vector3(0.0, label_y, 0.0)
+	parent.add_child(label)
 
 func _load_scene(path: String) -> PackedScene:
 	if _scene_cache.has(path):
