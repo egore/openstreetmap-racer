@@ -53,6 +53,7 @@ const ASSET_DEFS := {
 		"*": { "color": Color(0.8, 0.6, 0.2), "size": Vector3(1.0, 2.5, 1.0), "y_offset": 1.25, "label": "Shop" },
 	},
 	"traffic_sign": {
+		"city_limit": { "color": Color(0.9, 0.9, 0.9), "size": Vector3(0.6, 2.0, 0.05), "y_offset": 1.5, "label": "Traffic Sign", "scene": "res://scenes/models/city_limit.blend" },
 		"*": { "color": Color(0.9, 0.9, 0.9), "size": Vector3(0.6, 2.0, 0.05), "y_offset": 1.5, "label": "Traffic Sign" },
 	},
 }
