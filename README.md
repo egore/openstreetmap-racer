@@ -1,4 +1,4 @@
-# Autobahnraser
+# OpenStreetMap Racer
 
 A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environments.
 
@@ -97,7 +97,7 @@ The current `.osm` file approach works well for areas up to ~10 km².
 ## Project Structure
 
 ```
-autobahnraser/
+openstreetmap-racer/
 ├── project.godot
 ├── README.md
 ├── data/

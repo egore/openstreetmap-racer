@@ -14,7 +14,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 [application]
 
-config/name="Autobahnraser"
+config/name="OpenStreetMap Racer"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.6")
 
