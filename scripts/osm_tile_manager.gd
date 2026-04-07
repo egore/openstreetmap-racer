@@ -233,55 +233,9 @@ func _is_area(way: OSMParser.OSMWay) -> bool:
 
 func _build_area(way: OSMParser.OSMWay) -> MeshInstance3D:
 	# Simple colored flat polygon for land use areas
-	var points: PackedVector3Array = []
-	for nid: int in way.node_ids:
-		if _osm_data.nodes.has(nid):
-			points.append(_osm_data.nodes[nid].local_pos)
-	if points.size() < 3:
-		return null
-
-	var color := Color(0.3, 0.6, 0.3)  # default green
-	var tags := way.tags
-	if tags.has("landuse"):
-		match tags["landuse"]:
-			"residential": color = Color(0.7, 0.7, 0.65)
-			"industrial": color = Color(0.6, 0.55, 0.5)
-			"commercial": color = Color(0.75, 0.65, 0.6)
-			"farmland": color = Color(0.55, 0.7, 0.35)
-			"forest": color = Color(0.2, 0.5, 0.15)
-			"grass": color = Color(0.4, 0.7, 0.3)
-	elif tags.has("natural"):
-		match tags["natural"]:
-			"water": color = Color(0.2, 0.4, 0.8)
-			"wood": color = Color(0.15, 0.45, 0.1)
-			"scrub": color = Color(0.4, 0.55, 0.25)
-	elif tags.has("leisure"):
-		match tags["leisure"]:
-			"park": color = Color(0.35, 0.7, 0.3)
-			"pitch": color = Color(0.3, 0.65, 0.25)
-
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = "Area_%d" % way.id
-
-	# Triangulate the polygon
-	var pts_2d: PackedVector2Array = []
-	for p: Vector3 in points:
-		pts_2d.append(Vector2(p.x, p.z))
-
-	var indices := Geometry2D.triangulate_polygon(pts_2d)
-	if indices.size() == 0:
-		return null
-
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	st.set_material(mat)
-
-	for i: int in range(indices.size()):
-		var idx: int = indices[i]
-		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(points[idx].x, 0.01, points[idx].z))
-
-	mesh_instance.mesh = st.commit()
+	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+	var color := PolygonUtils.get_area_color(way.tags)
+	var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color)
+	if mesh_instance != null:
+		mesh_instance.name = "Area_%d" % way.id
 	return mesh_instance
