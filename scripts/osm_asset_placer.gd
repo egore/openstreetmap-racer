@@ -223,6 +223,40 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 		st.set_normal(right_normal_inv)
 		st.add_vertex(br1)
 
+		# Start cap (first segment only)
+		if i == 0:
+			var cap_normal := -forward
+			st.set_normal(cap_normal)
+			st.add_vertex(bl0)
+			st.set_normal(cap_normal)
+			st.add_vertex(tr0)
+			st.set_normal(cap_normal)
+			st.add_vertex(br0)
+
+			st.set_normal(cap_normal)
+			st.add_vertex(bl0)
+			st.set_normal(cap_normal)
+			st.add_vertex(tl0)
+			st.set_normal(cap_normal)
+			st.add_vertex(tr0)
+
+		# End cap (last segment only)
+		if i == points.size() - 2:
+			var cap_normal := forward
+			st.set_normal(cap_normal)
+			st.add_vertex(bl1)
+			st.set_normal(cap_normal)
+			st.add_vertex(br1)
+			st.set_normal(cap_normal)
+			st.add_vertex(tr1)
+
+			st.set_normal(cap_normal)
+			st.add_vertex(bl1)
+			st.set_normal(cap_normal)
+			st.add_vertex(tr1)
+			st.set_normal(cap_normal)
+			st.add_vertex(tl1)
+
 	mesh_instance.mesh = st.commit()
 	root.add_child(mesh_instance)
 
