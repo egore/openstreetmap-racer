@@ -157,6 +157,10 @@ func _load_tile(tkey: Vector2i) -> void:
 			var mesh_instance := _building_builder.build_building_from_way(way, _osm_data)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
+		elif _is_barrier_way(way):
+			var barrier_node := _asset_placer.place_way_asset(way, _osm_data)
+			if barrier_node != null:
+				tile_root.add_child(barrier_node)
 		elif _is_area(way):
 			var mesh_instance := _build_area(way)
 			if mesh_instance != null:
@@ -220,6 +224,9 @@ func _is_road(way: OSMParser.OSMWay) -> bool:
 
 func _is_building(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("building")
+
+func _is_barrier_way(way: OSMParser.OSMWay) -> bool:
+	return way.tags.has("barrier")
 
 func _is_area(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure") or (way.tags.has("amenity") and way.tags.has("area"))

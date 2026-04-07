@@ -35,6 +35,7 @@ const ASSET_DEFS := {
 		"bollard": { "color": Color(0.5, 0.5, 0.5), "size": Vector3(0.2, 0.8, 0.2), "y_offset": 0.4, "label": "Bollard", "scene": "res://scenes/models/bollard.blend" },
 		"gate": { "color": Color(0.4, 0.3, 0.2), "size": Vector3(3.0, 1.5, 0.1), "y_offset": 0.75, "label": "Gate" },
 		"fence": { "color": Color(0.5, 0.4, 0.3), "size": Vector3(0.1, 1.5, 0.1), "y_offset": 0.75, "label": "Fence Post" },
+		"hedge": { "color": Color(0.2, 0.45, 0.15), "size": Vector3(0.6, 1.2, 0.6), "y_offset": 0.6, "label": "Hedge" },
 	},
 	"man_made": {
 		"tower": { "color": Color(0.6, 0.6, 0.6), "size": Vector3(2.0, 15.0, 2.0), "y_offset": 7.5, "label": "Tower" },
@@ -96,7 +97,145 @@ func place_asset(node: OSMParser.OSMNode) -> Node3D:
 
 	return root
 
+func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node3D:
+	var def := _find_asset_def(way.tags)
+	if def.is_empty():
+		return null
+
+	var points: PackedVector3Array = []
+	for nid: int in way.node_ids:
+		if osm_data.nodes.has(nid):
+			points.append(osm_data.nodes[nid].local_pos)
+	if points.size() < 2:
+		return null
+
+	var root := Node3D.new()
+	root.name = "%s_%d" % [def["label"].replace(" ", ""), way.id]
+
+	var color: Color = def["color"]
+	var height: float = def["size"].y
+	var width: float = def["size"].x
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "Mesh"
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	st.set_material(mat)
+
+	var half_w := width / 2.0
+
+	for i: int in range(points.size() - 1):
+		var p0 := points[i]
+		var p1 := points[i + 1]
+		var forward := (p1 - p0).normalized()
+		var right := Vector3(-forward.z, 0.0, forward.x).normalized() * half_w
+
+		# Bottom vertices
+		var bl0 := Vector3(p0.x - right.x, 0.0, p0.z - right.z)
+		var br0 := Vector3(p0.x + right.x, 0.0, p0.z + right.z)
+		var bl1 := Vector3(p1.x - right.x, 0.0, p1.z - right.z)
+		var br1 := Vector3(p1.x + right.x, 0.0, p1.z + right.z)
+
+		# Top vertices
+		var tl0 := Vector3(bl0.x, height, bl0.z)
+		var tr0 := Vector3(br0.x, height, br0.z)
+		var tl1 := Vector3(bl1.x, height, bl1.z)
+		var tr1 := Vector3(br1.x, height, br1.z)
+
+		# Top face
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tl0)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tr1)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tr0)
+
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tl0)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tl1)
+		st.set_normal(Vector3.UP)
+		st.add_vertex(tr1)
+
+		# Left face (both windings so it's visible from either side)
+		var left_normal := -right.normalized()
+		st.set_normal(left_normal)
+		st.add_vertex(bl0)
+		st.set_normal(left_normal)
+		st.add_vertex(tl0)
+		st.set_normal(left_normal)
+		st.add_vertex(tl1)
+
+		st.set_normal(left_normal)
+		st.add_vertex(bl0)
+		st.set_normal(left_normal)
+		st.add_vertex(tl1)
+		st.set_normal(left_normal)
+		st.add_vertex(bl1)
+
+		var left_normal_inv := -left_normal
+		st.set_normal(left_normal_inv)
+		st.add_vertex(bl0)
+		st.set_normal(left_normal_inv)
+		st.add_vertex(tl1)
+		st.set_normal(left_normal_inv)
+		st.add_vertex(tl0)
+
+		st.set_normal(left_normal_inv)
+		st.add_vertex(bl0)
+		st.set_normal(left_normal_inv)
+		st.add_vertex(bl1)
+		st.set_normal(left_normal_inv)
+		st.add_vertex(tl1)
+
+		# Right face (both windings so it's visible from either side)
+		var right_normal := right.normalized()
+		st.set_normal(right_normal)
+		st.add_vertex(br0)
+		st.set_normal(right_normal)
+		st.add_vertex(tr1)
+		st.set_normal(right_normal)
+		st.add_vertex(tr0)
+
+		st.set_normal(right_normal)
+		st.add_vertex(br0)
+		st.set_normal(right_normal)
+		st.add_vertex(br1)
+		st.set_normal(right_normal)
+		st.add_vertex(tr1)
+
+		var right_normal_inv := -right_normal
+		st.set_normal(right_normal_inv)
+		st.add_vertex(br0)
+		st.set_normal(right_normal_inv)
+		st.add_vertex(tr0)
+		st.set_normal(right_normal_inv)
+		st.add_vertex(tr1)
+
+		st.set_normal(right_normal_inv)
+		st.add_vertex(br0)
+		st.set_normal(right_normal_inv)
+		st.add_vertex(tr1)
+		st.set_normal(right_normal_inv)
+		st.add_vertex(br1)
+
+	mesh_instance.mesh = st.commit()
+	root.add_child(mesh_instance)
+
+	# Place label at the midpoint of the way
+	var mid_point := points[points.size() / 2]
+	_add_debug_label_at(root, def, way.tags, mid_point)
+
+	return root
+
 func _add_debug_label(parent: Node3D, def: Dictionary, tags: Dictionary) -> void:
+	_add_debug_label_at(parent, def, tags, Vector3.ZERO)
+
+func _add_debug_label_at(parent: Node3D, def: Dictionary, tags: Dictionary, pos: Vector3) -> void:
 	var label := Label3D.new()
 	label.name = "DebugLabel"
 	var text: String = def["label"]
@@ -111,7 +250,7 @@ func _add_debug_label(parent: Node3D, def: Dictionary, tags: Dictionary) -> void
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
 	label.outline_size = 8
 	var label_y: float = def["y_offset"] * 2.0 + 1.0
-	label.position = Vector3(0.0, label_y, 0.0)
+	label.position = Vector3(pos.x, label_y, pos.z)
 	parent.add_child(label)
 
 func _load_scene(path: String) -> PackedScene:
