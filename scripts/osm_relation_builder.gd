@@ -40,10 +40,7 @@ func _build_multipolygon_building(rel: OSMParser.OSMRelation, osm_data: OSMParse
 			continue
 
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
-		var points: PackedVector3Array = []
-		for nid: int in way.node_ids:
-			if osm_data.nodes.has(nid):
-				points.append(osm_data.nodes[nid].local_pos)
+		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
 		if points.size() < 3:
 			continue
@@ -67,22 +64,7 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 	root.name = "RelArea_%d" % rel.id
 	var has_children := false
 
-	var color := Color(0.3, 0.6, 0.3)
-	if rel.tags.has("landuse"):
-		match rel.tags["landuse"]:
-			"residential": color = Color(0.7, 0.7, 0.65)
-			"industrial": color = Color(0.6, 0.55, 0.5)
-			"commercial": color = Color(0.75, 0.65, 0.6)
-			"farmland": color = Color(0.55, 0.7, 0.35)
-			"forest": color = Color(0.2, 0.5, 0.15)
-			"grass": color = Color(0.4, 0.7, 0.3)
-	elif rel.tags.has("natural"):
-		match rel.tags["natural"]:
-			"water": color = Color(0.2, 0.4, 0.8)
-			"wood": color = Color(0.15, 0.45, 0.1)
-	elif rel.tags.has("leisure"):
-		match rel.tags["leisure"]:
-			"park": color = Color(0.35, 0.7, 0.3)
+	var color := PolygonUtils.get_area_color(rel.tags)
 
 	for member: Dictionary in rel.members:
 		if member["type"] != "way":
@@ -95,37 +77,13 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 			continue
 
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
-		var points: PackedVector3Array = []
-		for nid: int in way.node_ids:
-			if osm_data.nodes.has(nid):
-				points.append(osm_data.nodes[nid].local_pos)
+		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
-		if points.size() < 3:
+		var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color)
+		if mesh_instance == null:
 			continue
 
-		var pts_2d: PackedVector2Array = []
-		for p: Vector3 in points:
-			pts_2d.append(Vector2(p.x, p.z))
-
-		var indices := Geometry2D.triangulate_polygon(pts_2d)
-		if indices.size() == 0:
-			continue
-
-		var mesh_instance := MeshInstance3D.new()
 		mesh_instance.name = "AreaPart_%d" % way_id
-
-		var st := SurfaceTool.new()
-		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = color
-		st.set_material(mat)
-
-		for i: int in range(indices.size()):
-			var idx: int = indices[i]
-			st.set_normal(Vector3.UP)
-			st.add_vertex(Vector3(points[idx].x, 0.01, points[idx].z))
-
-		mesh_instance.mesh = st.commit()
 		root.add_child(mesh_instance)
 		has_children = true
 

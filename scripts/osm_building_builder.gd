@@ -24,11 +24,7 @@ const BUILDING_COLORS := {
 const DEFAULT_BUILDING_COLOR := Color(0.7, 0.68, 0.62)
 
 func build_building_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node3D:
-	var points: PackedVector3Array = []
-	for nid: int in way.node_ids:
-		if osm_data.nodes.has(nid):
-			var node: OSMParser.OSMNode = osm_data.nodes[nid]
-			points.append(node.local_pos)
+	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
 	if points.size() < 3:
 		return null
@@ -72,12 +68,7 @@ func _get_building_height(tags: Dictionary) -> float:
 	return DEFAULT_HEIGHT
 
 func _is_polygon_ccw(points: PackedVector3Array) -> bool:
-	# Compute signed area in the XZ plane using the shoelace formula.
-	# Positive = CCW in standard math coords, but our Z is negated so positive = CW in world.
-	var signed_area := 0.0
-	for i: int in range(points.size() - 1):
-		signed_area += points[i].x * points[i + 1].z - points[i + 1].x * points[i].z
-	return signed_area < 0.0
+	return PolygonUtils.is_polygon_ccw(points)
 
 func _build_walls(points: PackedVector3Array, height: float, color: Color) -> MeshInstance3D:
 	var st := SurfaceTool.new()
@@ -143,27 +134,7 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 	return mesh_instance
 
 func _build_roof(points: PackedVector3Array, height: float) -> MeshInstance3D:
-	var pts_2d: PackedVector2Array = []
-	for p: Vector3 in points:
-		pts_2d.append(Vector2(p.x, p.z))
-
-	var indices := Geometry2D.triangulate_polygon(pts_2d)
-	if indices.size() == 0:
-		return null
-
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = ROOF_COLOR
-	st.set_material(mat)
-
-	for i: int in range(indices.size()):
-		var idx: int = indices[i]
-		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(points[idx].x, BUILDING_Y + height, points[idx].z))
-
-	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.name = "Roof"
-	mesh_instance.mesh = st.commit()
+	var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, ROOF_COLOR, BUILDING_Y + height)
+	if mesh_instance != null:
+		mesh_instance.name = "Roof"
 	return mesh_instance

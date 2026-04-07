@@ -51,11 +51,7 @@ const DEFAULT_COLOR := Color(0.5, 0.5, 0.5)
 const ROAD_Y := 0.02  # slightly above ground
 
 func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInstance3D:
-	var points: PackedVector3Array = []
-	for nid: int in way.node_ids:
-		if osm_data.nodes.has(nid):
-			var node: OSMParser.OSMNode = osm_data.nodes[nid]
-			points.append(node.local_pos)
+	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
 	if points.size() < 2:
 		return null

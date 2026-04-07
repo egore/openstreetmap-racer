@@ -102,10 +102,7 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 	if def.is_empty():
 		return null
 
-	var points: PackedVector3Array = []
-	for nid: int in way.node_ids:
-		if osm_data.nodes.has(nid):
-			points.append(osm_data.nodes[nid].local_pos)
+	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 	if points.size() < 2:
 		return null
 
