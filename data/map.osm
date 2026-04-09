@@ -1,227 +1,767 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <osm version="0.6" generator="sample">
-  <bounds minlat="49.4800" minlon="8.4600" maxlat="49.4900" maxlon="8.4750"/>
+  <bounds minlat="49.4830" minlon="8.4640" maxlat="49.4880" maxlon="8.4720"/>
 
-  <!-- Nodes for a main road (east-west) -->
-  <node id="1" lat="49.4850" lon="8.4600"/>
-  <node id="2" lat="49.4850" lon="8.4650"/>
-  <node id="3" lat="49.4850" lon="8.4700"/>
-  <node id="4" lat="49.4850" lon="8.4750"/>
+  <!-- ============================================================ -->
+  <!-- ROAD NETWORK — dense urban grid + motorway                   -->
+  <!-- ============================================================ -->
 
-  <!-- Nodes for a cross street (north-south) -->
-  <node id="10" lat="49.4880" lon="8.4675"/>
-  <node id="11" lat="49.4860" lon="8.4675"/>
-  <node id="12" lat="49.4850" lon="8.4675"/>
-  <node id="13" lat="49.4840" lon="8.4675"/>
-  <node id="14" lat="49.4820" lon="8.4675"/>
+  <!-- Hauptstraße (E-W primary, with gentle curve) -->
+  <node id="1" lat="49.4855" lon="8.4640"/>
+  <node id="2" lat="49.4855" lon="8.4650"/>
+  <node id="3" lat="49.4855" lon="8.4660"/>
+  <node id="4" lat="49.48552" lon="8.4670"/>
+  <node id="5" lat="49.48555" lon="8.4680"/>
+  <node id="6" lat="49.4856" lon="8.4690"/>
+  <node id="7" lat="49.4856" lon="8.4700"/>
+  <node id="8" lat="49.4856" lon="8.4710"/>
+  <node id="9" lat="49.4856" lon="8.4720"/>
 
-  <!-- Traffic light at intersection -->
-  <node id="100" lat="49.4850" lon="8.4675">
+  <!-- Bahnhofstraße (E-W secondary, south of Hauptstraße) -->
+  <node id="20" lat="49.4845" lon="8.4640"/>
+  <node id="21" lat="49.4845" lon="8.4650"/>
+  <node id="22" lat="49.4845" lon="8.4660"/>
+  <node id="23" lat="49.4845" lon="8.4670"/>
+  <node id="24" lat="49.4845" lon="8.4680"/>
+  <node id="25" lat="49.4845" lon="8.4690"/>
+  <node id="26" lat="49.4845" lon="8.4700"/>
+  <node id="27" lat="49.4845" lon="8.4710"/>
+  <node id="28" lat="49.4845" lon="8.4720"/>
+
+  <!-- Gartenstraße (E-W residential, north of Hauptstraße) -->
+  <node id="30" lat="49.4865" lon="8.4640"/>
+  <node id="31" lat="49.4865" lon="8.4650"/>
+  <node id="32" lat="49.4865" lon="8.4660"/>
+  <node id="33" lat="49.4865" lon="8.4670"/>
+  <node id="34" lat="49.4865" lon="8.4680"/>
+  <node id="35" lat="49.4865" lon="8.4690"/>
+  <node id="36" lat="49.4865" lon="8.4700"/>
+  <node id="37" lat="49.4865" lon="8.4710"/>
+  <node id="38" lat="49.4865" lon="8.4720"/>
+
+  <!-- Ringstraße (E-W, far south) -->
+  <node id="40" lat="49.4835" lon="8.4640"/>
+  <node id="41" lat="49.4835" lon="8.4660"/>
+  <node id="42" lat="49.4835" lon="8.4680"/>
+  <node id="43" lat="49.4835" lon="8.4700"/>
+  <node id="44" lat="49.4835" lon="8.4720"/>
+
+  <!-- Nordstraße (E-W, far north) -->
+  <node id="45" lat="49.4875" lon="8.4640"/>
+  <node id="46" lat="49.4875" lon="8.4660"/>
+  <node id="47" lat="49.4875" lon="8.4680"/>
+  <node id="48" lat="49.4875" lon="8.4700"/>
+  <node id="49" lat="49.4875" lon="8.4720"/>
+
+  <!-- Querstraße (N-S cross street at lon 8.4670) -->
+  <node id="50" lat="49.4878" lon="8.4670"/>
+  <node id="51" lat="49.4870" lon="8.4670"/>
+  <node id="52" lat="49.4862" lon="8.4670"/>
+  <node id="53" lat="49.4850" lon="8.4670"/>
+  <node id="54" lat="49.4842" lon="8.4670"/>
+  <node id="55" lat="49.4832" lon="8.4670"/>
+
+  <!-- Schulstraße (N-S at lon 8.4690) -->
+  <node id="60" lat="49.4878" lon="8.4690"/>
+  <node id="61" lat="49.4870" lon="8.4690"/>
+  <node id="62" lat="49.4860" lon="8.4690"/>
+  <node id="63" lat="49.4850" lon="8.4690"/>
+  <node id="64" lat="49.4842" lon="8.4690"/>
+  <node id="65" lat="49.4832" lon="8.4690"/>
+
+  <!-- Kirchgasse (N-S at lon 8.4650) -->
+  <node id="70" lat="49.4878" lon="8.4650"/>
+  <node id="71" lat="49.4868" lon="8.4650"/>
+  <node id="72" lat="49.4860" lon="8.4650"/>
+  <node id="73" lat="49.4850" lon="8.4650"/>
+  <node id="74" lat="49.4840" lon="8.4650"/>
+  <node id="75" lat="49.4832" lon="8.4650"/>
+
+  <!-- Lindenallee (N-S at lon 8.4710) -->
+  <node id="80" lat="49.4878" lon="8.4710"/>
+  <node id="81" lat="49.4868" lon="8.4710"/>
+  <node id="82" lat="49.4860" lon="8.4710"/>
+  <node id="83" lat="49.4850" lon="8.4710"/>
+  <node id="84" lat="49.4840" lon="8.4710"/>
+  <node id="85" lat="49.4832" lon="8.4710"/>
+
+  <!-- ============================================================ -->
+  <!-- POI NODES — traffic lights, trees, lamps, benches, bus stops -->
+  <!-- ============================================================ -->
+
+  <!-- Traffic lights at major intersections -->
+  <node id="100" lat="49.4855" lon="8.4670">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="101" lat="49.4855" lon="8.4690">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="102" lat="49.4845" lon="8.4670">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="103" lat="49.4845" lon="8.4690">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="104" lat="49.4865" lon="8.4670">
+    <tag k="highway" v="traffic_signals"/>
+  </node>
+  <node id="105" lat="49.4865" lon="8.4690">
     <tag k="highway" v="traffic_signals"/>
   </node>
 
-  <!-- A tree -->
-  <node id="101" lat="49.4855" lon="8.4660">
+  <!-- Trees along Hauptstraße -->
+  <node id="110" lat="49.48558" lon="8.46430">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="111" lat="49.48558" lon="8.46480">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="112" lat="49.48558" lon="8.46530">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="113" lat="49.48558" lon="8.46580">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="114" lat="49.48565" lon="8.46730">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="115" lat="49.48565" lon="8.46780">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="116" lat="49.48565" lon="8.46830">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="117" lat="49.48565" lon="8.46880">
     <tag k="natural" v="tree"/>
   </node>
 
-  <!-- A bench -->
-  <node id="102" lat="49.4848" lon="8.4665">
-    <tag k="amenity" v="bench"/>
+  <!-- Trees along Bahnhofstraße -->
+  <node id="120" lat="49.48458" lon="8.46430">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="121" lat="49.48458" lon="8.46530">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="122" lat="49.48458" lon="8.46730">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="123" lat="49.48458" lon="8.46830">
+    <tag k="natural" v="tree"/>
   </node>
 
-  <!-- Street lamp -->
-  <node id="103" lat="49.4850" lon="8.4640">
+  <!-- Trees along Gartenstraße -->
+  <node id="124" lat="49.48658" lon="8.46430">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="125" lat="49.48658" lon="8.46530">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="126" lat="49.48658" lon="8.46730">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="127" lat="49.48658" lon="8.46830">
+    <tag k="natural" v="tree"/>
+  </node>
+
+  <!-- Trees in park area -->
+  <node id="128" lat="49.48700" lon="8.47020">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="129" lat="49.48720" lon="8.47050">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="130" lat="49.48710" lon="8.47080">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="131" lat="49.48740" lon="8.47040">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="132" lat="49.48730" lon="8.47070">
+    <tag k="natural" v="tree"/>
+  </node>
+  <node id="133" lat="49.48750" lon="8.47090">
+    <tag k="natural" v="tree"/>
+  </node>
+
+  <!-- Street lamps along Hauptstraße (both sides) -->
+  <node id="140" lat="49.48542" lon="8.46420">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="141" lat="49.48542" lon="8.46520">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="142" lat="49.48542" lon="8.46620">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="143" lat="49.48570" lon="8.46720">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="144" lat="49.48570" lon="8.46820">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="145" lat="49.48570" lon="8.46920">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="146" lat="49.48542" lon="8.46920">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="147" lat="49.48542" lon="8.46820">
     <tag k="highway" v="street_lamp"/>
   </node>
 
-  <!-- Another tree -->
-  <node id="104" lat="49.4845" lon="8.4710">
-    <tag k="natural" v="tree"/>
+  <!-- Street lamps along cross streets -->
+  <node id="148" lat="49.48620" lon="8.46705">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="149" lat="49.48520" lon="8.46705">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="150" lat="49.48620" lon="8.46895">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="151" lat="49.48520" lon="8.46895">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="152" lat="49.48620" lon="8.46505">
+    <tag k="highway" v="street_lamp"/>
+  </node>
+  <node id="153" lat="49.48520" lon="8.46505">
+    <tag k="highway" v="street_lamp"/>
   </node>
 
-  <!-- Bus stop -->
-  <node id="105" lat="49.4852" lon="8.4720">
+  <!-- Benches -->
+  <node id="160" lat="49.48545" lon="8.46650">
+    <tag k="amenity" v="bench"/>
+  </node>
+  <node id="161" lat="49.48545" lon="8.46750">
+    <tag k="amenity" v="bench"/>
+  </node>
+  <node id="162" lat="49.48710" lon="8.47060">
+    <tag k="amenity" v="bench"/>
+  </node>
+  <node id="163" lat="49.48735" lon="8.47035">
+    <tag k="amenity" v="bench"/>
+  </node>
+  <node id="164" lat="49.48455" lon="8.46650">
+    <tag k="amenity" v="bench"/>
+  </node>
+  <node id="165" lat="49.48455" lon="8.46750">
+    <tag k="amenity" v="bench"/>
+  </node>
+
+  <!-- Bus stops -->
+  <node id="170" lat="49.48558" lon="8.46620">
     <tag k="highway" v="bus_stop"/>
+    <tag k="name" v="Marktplatz"/>
+  </node>
+  <node id="171" lat="49.48542" lon="8.46860">
+    <tag k="highway" v="bus_stop"/>
+    <tag k="name" v="Schulzentrum"/>
+  </node>
+  <node id="172" lat="49.48458" lon="8.46620">
+    <tag k="highway" v="bus_stop"/>
+    <tag k="name" v="Bahnhof"/>
+  </node>
+  <node id="173" lat="49.48658" lon="8.46620">
+    <tag k="highway" v="bus_stop"/>
+    <tag k="name" v="Gartenstraße"/>
   </node>
 
-  <!-- Building corner nodes (~10m x 12m residential) -->
-  <node id="200" lat="49.48571" lon="8.46918"/>
-  <node id="201" lat="49.48571" lon="8.46935"/>
-  <node id="202" lat="49.48580" lon="8.46935"/>
-  <node id="203" lat="49.48580" lon="8.46918"/>
+  <!-- Bollards -->
+  <node id="180" lat="49.48555" lon="8.46640">
+    <tag k="barrier" v="bollard"/>
+  </node>
+  <node id="181" lat="49.48555" lon="8.46642">
+    <tag k="barrier" v="bollard"/>
+  </node>
+  <node id="182" lat="49.48555" lon="8.46644">
+    <tag k="barrier" v="bollard"/>
+  </node>
 
-  <!-- Second building (~15m x 20m commercial) -->
-  <node id="210" lat="49.48393" lon="8.46330"/>
-  <node id="211" lat="49.48393" lon="8.46358"/>
-  <node id="212" lat="49.48407" lon="8.46358"/>
-  <node id="213" lat="49.48407" lon="8.46330"/>
+  <!-- ============================================================ -->
+  <!-- BUILDINGS — densely packed along streets                     -->
+  <!-- ============================================================ -->
 
-  <!-- Third building (taller, ~18m x 22m apartments) -->
-  <node id="220" lat="49.48642" lon="8.46440"/>
-  <node id="221" lat="49.48642" lon="8.46470"/>
-  <node id="222" lat="49.48658" lon="8.46470"/>
-  <node id="223" lat="49.48658" lon="8.46440"/>
+  <!-- == Block A: North side of Hauptstraße, between Kirchgasse & Querstraße == -->
+  <!-- Building A1: ~10m x 15m -->
+  <node id="200" lat="49.48570" lon="8.46520"/>
+  <node id="201" lat="49.48570" lon="8.46540"/>
+  <node id="202" lat="49.48579" lon="8.46540"/>
+  <node id="203" lat="49.48579" lon="8.46520"/>
+  <!-- Building A2: ~10m x 12m -->
+  <node id="204" lat="49.48570" lon="8.46545"/>
+  <node id="205" lat="49.48570" lon="8.46562"/>
+  <node id="206" lat="49.48579" lon="8.46562"/>
+  <node id="207" lat="49.48579" lon="8.46545"/>
+  <!-- Building A3: ~8m x 18m -->
+  <node id="208" lat="49.48570" lon="8.46567"/>
+  <node id="209" lat="49.48570" lon="8.46592"/>
+  <node id="210" lat="49.48577" lon="8.46592"/>
+  <node id="211" lat="49.48577" lon="8.46567"/>
+  <!-- Building A4: ~10m x 14m -->
+  <node id="212" lat="49.48570" lon="8.46600"/>
+  <node id="213" lat="49.48570" lon="8.46620"/>
+  <node id="214" lat="49.48579" lon="8.46620"/>
+  <node id="215" lat="49.48579" lon="8.46600"/>
+  <!-- Building A5: ~10m x 16m -->
+  <node id="216" lat="49.48570" lon="8.46625"/>
+  <node id="217" lat="49.48570" lon="8.46648"/>
+  <node id="218" lat="49.48579" lon="8.46648"/>
+  <node id="219" lat="49.48579" lon="8.46625"/>
 
-  <!-- Residential area nodes (~60m x 80m landuse zone) -->
-  <node id="300" lat="49.48373" lon="8.46940"/>
-  <node id="301" lat="49.48373" lon="8.47050"/>
-  <node id="302" lat="49.48427" lon="8.47050"/>
-  <node id="303" lat="49.48427" lon="8.46940"/>
+  <!-- == Block B: North side of Hauptstraße, between Querstraße & Schulstraße == -->
+  <!-- Building B1: ~10m x 14m -->
+  <node id="220" lat="49.48565" lon="8.46720"/>
+  <node id="221" lat="49.48565" lon="8.46740"/>
+  <node id="222" lat="49.48575" lon="8.46740"/>
+  <node id="223" lat="49.48575" lon="8.46720"/>
+  <!-- Building B2: ~10m x 12m -->
+  <node id="224" lat="49.48565" lon="8.46745"/>
+  <node id="225" lat="49.48565" lon="8.46762"/>
+  <node id="226" lat="49.48575" lon="8.46762"/>
+  <node id="227" lat="49.48575" lon="8.46745"/>
+  <!-- Building B3: ~10m x 16m -->
+  <node id="228" lat="49.48565" lon="8.46768"/>
+  <node id="229" lat="49.48565" lon="8.46790"/>
+  <node id="230" lat="49.48575" lon="8.46790"/>
+  <node id="231" lat="49.48575" lon="8.46768"/>
+  <!-- Building B4: ~10m x 14m -->
+  <node id="232" lat="49.48565" lon="8.46800"/>
+  <node id="233" lat="49.48565" lon="8.46820"/>
+  <node id="234" lat="49.48575" lon="8.46820"/>
+  <node id="235" lat="49.48575" lon="8.46800"/>
+  <!-- Building B5: ~10m x 18m -->
+  <node id="236" lat="49.48565" lon="8.46825"/>
+  <node id="237" lat="49.48565" lon="8.46850"/>
+  <node id="238" lat="49.48575" lon="8.46850"/>
+  <node id="239" lat="49.48575" lon="8.46825"/>
+  <!-- Building B6: ~10m x 12m -->
+  <node id="240" lat="49.48565" lon="8.46855"/>
+  <node id="241" lat="49.48565" lon="8.46872"/>
+  <node id="242" lat="49.48575" lon="8.46872"/>
+  <node id="243" lat="49.48575" lon="8.46855"/>
 
-  <!-- Park area nodes (~80m x 100m) -->
-  <node id="310" lat="49.48740" lon="8.47180"/>
-  <node id="311" lat="49.48740" lon="8.47318"/>
-  <node id="312" lat="49.48812" lon="8.47318"/>
-  <node id="313" lat="49.48812" lon="8.47180"/>
+  <!-- == Block C: South side of Hauptstraße, between Kirchgasse & Querstraße == -->
+  <!-- Building C1: ~10m x 16m -->
+  <node id="250" lat="49.48530" lon="8.46520"/>
+  <node id="251" lat="49.48530" lon="8.46542"/>
+  <node id="252" lat="49.48540" lon="8.46542"/>
+  <node id="253" lat="49.48540" lon="8.46520"/>
+  <!-- Building C2: ~10m x 14m -->
+  <node id="254" lat="49.48530" lon="8.46548"/>
+  <node id="255" lat="49.48530" lon="8.46568"/>
+  <node id="256" lat="49.48540" lon="8.46568"/>
+  <node id="257" lat="49.48540" lon="8.46548"/>
+  <!-- Building C3: ~8m x 20m -->
+  <node id="258" lat="49.48530" lon="8.46575"/>
+  <node id="259" lat="49.48530" lon="8.46603"/>
+  <node id="260" lat="49.48537" lon="8.46603"/>
+  <node id="261" lat="49.48537" lon="8.46575"/>
+  <!-- Building C4: ~10m x 16m -->
+  <node id="262" lat="49.48530" lon="8.46610"/>
+  <node id="263" lat="49.48530" lon="8.46632"/>
+  <node id="264" lat="49.48540" lon="8.46632"/>
+  <node id="265" lat="49.48540" lon="8.46610"/>
+  <!-- Building C5: ~10m x 16m -->
+  <node id="266" lat="49.48530" lon="8.46638"/>
+  <node id="267" lat="49.48530" lon="8.46660"/>
+  <node id="268" lat="49.48540" lon="8.46660"/>
+  <node id="269" lat="49.48540" lon="8.46638"/>
 
-  <!-- === Roof type showcase buildings === -->
+  <!-- == Block D: South side of Hauptstraße, between Querstraße & Schulstraße == -->
+  <!-- Building D1: ~10m x 14m -->
+  <node id="270" lat="49.48430" lon="8.46720"/>
+  <node id="271" lat="49.48430" lon="8.46740"/>
+  <node id="272" lat="49.48440" lon="8.46740"/>
+  <node id="273" lat="49.48440" lon="8.46720"/>
+  <!-- Building D2: ~10m x 18m -->
+  <node id="274" lat="49.48430" lon="8.46748"/>
+  <node id="275" lat="49.48430" lon="8.46773"/>
+  <node id="276" lat="49.48440" lon="8.46773"/>
+  <node id="277" lat="49.48440" lon="8.46748"/>
+  <!-- Building D3: ~10m x 14m -->
+  <node id="278" lat="49.48430" lon="8.46780"/>
+  <node id="279" lat="49.48430" lon="8.46800"/>
+  <node id="280" lat="49.48440" lon="8.46800"/>
+  <node id="281" lat="49.48440" lon="8.46780"/>
+  <!-- Building D4: ~10m x 20m -->
+  <node id="282" lat="49.48430" lon="8.46808"/>
+  <node id="283" lat="49.48430" lon="8.46836"/>
+  <node id="284" lat="49.48440" lon="8.46836"/>
+  <node id="285" lat="49.48440" lon="8.46808"/>
+  <!-- Building D5: ~10m x 12m -->
+  <node id="286" lat="49.48430" lon="8.46844"/>
+  <node id="287" lat="49.48430" lon="8.46862"/>
+  <node id="288" lat="49.48440" lon="8.46862"/>
+  <node id="289" lat="49.48440" lon="8.46844"/>
+  <!-- Building D6: ~10m x 14m -->
+  <node id="290" lat="49.48430" lon="8.46870"/>
+  <node id="291" lat="49.48430" lon="8.46890"/>
+  <node id="292" lat="49.48440" lon="8.46890"/>
+  <node id="293" lat="49.48440" lon="8.46870"/>
 
-  <!-- Flat roof (row 1, col 1) ~8m x 12m -->
-  <node id="500" lat="49.48150" lon="8.46000"/>
-  <node id="501" lat="49.48150" lon="8.46017"/>
-  <node id="502" lat="49.48157" lon="8.46017"/>
-  <node id="503" lat="49.48157" lon="8.46000"/>
+  <!-- == Block E: Along Gartenstraße, north == -->
+  <!-- Building E1 -->
+  <node id="294" lat="49.48660" lon="8.46520"/>
+  <node id="295" lat="49.48660" lon="8.46545"/>
+  <node id="296" lat="49.48670" lon="8.46545"/>
+  <node id="297" lat="49.48670" lon="8.46520"/>
+  <!-- Building E2 -->
+  <node id="298" lat="49.48660" lon="8.46555"/>
+  <node id="299" lat="49.48660" lon="8.46580"/>
+  <node id="300" lat="49.48670" lon="8.46580"/>
+  <node id="301" lat="49.48670" lon="8.46555"/>
+  <!-- Building E3 -->
+  <node id="302" lat="49.48660" lon="8.46590"/>
+  <node id="303" lat="49.48660" lon="8.46610"/>
+  <node id="304" lat="49.48670" lon="8.46610"/>
+  <node id="305" lat="49.48670" lon="8.46590"/>
+  <!-- Building E4 -->
+  <node id="306" lat="49.48660" lon="8.46620"/>
+  <node id="307" lat="49.48660" lon="8.46650"/>
+  <node id="308" lat="49.48670" lon="8.46650"/>
+  <node id="309" lat="49.48670" lon="8.46620"/>
+  <!-- Building E5 -->
+  <node id="310" lat="49.48660" lon="8.46720"/>
+  <node id="311" lat="49.48660" lon="8.46750"/>
+  <node id="312" lat="49.48670" lon="8.46750"/>
+  <node id="313" lat="49.48670" lon="8.46720"/>
+  <!-- Building E6 -->
+  <node id="314" lat="49.48660" lon="8.46760"/>
+  <node id="315" lat="49.48660" lon="8.46790"/>
+  <node id="316" lat="49.48670" lon="8.46790"/>
+  <node id="317" lat="49.48670" lon="8.46760"/>
 
-  <!-- Gabled roof (row 1, col 2) ~8m x 12m -->
-  <node id="510" lat="49.48150" lon="8.46024"/>
-  <node id="511" lat="49.48150" lon="8.46041"/>
-  <node id="512" lat="49.48157" lon="8.46041"/>
-  <node id="513" lat="49.48157" lon="8.46024"/>
+  <!-- == Block F: Along Bahnhofstraße south side == -->
+  <!-- Building F1 -->
+  <node id="318" lat="49.48390" lon="8.46520"/>
+  <node id="319" lat="49.48390" lon="8.46545"/>
+  <node id="320" lat="49.48400" lon="8.46545"/>
+  <node id="321" lat="49.48400" lon="8.46520"/>
+  <!-- Building F2 -->
+  <node id="322" lat="49.48390" lon="8.46555"/>
+  <node id="323" lat="49.48390" lon="8.46575"/>
+  <node id="324" lat="49.48400" lon="8.46575"/>
+  <node id="325" lat="49.48400" lon="8.46555"/>
+  <!-- Building F3 -->
+  <node id="326" lat="49.48390" lon="8.46585"/>
+  <node id="327" lat="49.48390" lon="8.46610"/>
+  <node id="328" lat="49.48400" lon="8.46610"/>
+  <node id="329" lat="49.48400" lon="8.46585"/>
+  <!-- Building F4 -->
+  <node id="330" lat="49.48390" lon="8.46620"/>
+  <node id="331" lat="49.48390" lon="8.46650"/>
+  <node id="332" lat="49.48400" lon="8.46650"/>
+  <node id="333" lat="49.48400" lon="8.46620"/>
 
-  <!-- Hipped roof (row 1, col 3) ~8m x 12m -->
-  <node id="520" lat="49.48150" lon="8.46048"/>
-  <node id="521" lat="49.48150" lon="8.46065"/>
-  <node id="522" lat="49.48157" lon="8.46065"/>
-  <node id="523" lat="49.48157" lon="8.46048"/>
+  <!-- == Block G: More buildings between Schulstraße & Lindenallee, north == -->
+  <!-- Building G1 -->
+  <node id="334" lat="49.48660" lon="8.46920"/>
+  <node id="335" lat="49.48660" lon="8.46945"/>
+  <node id="336" lat="49.48670" lon="8.46945"/>
+  <node id="337" lat="49.48670" lon="8.46920"/>
+  <!-- Building G2 -->
+  <node id="338" lat="49.48660" lon="8.46955"/>
+  <node id="339" lat="49.48660" lon="8.46980"/>
+  <node id="340" lat="49.48670" lon="8.46980"/>
+  <node id="341" lat="49.48670" lon="8.46955"/>
 
-  <!-- Pyramidal roof (row 1, col 4) ~8m x 10m -->
-  <node id="530" lat="49.48150" lon="8.46072"/>
-  <node id="531" lat="49.48150" lon="8.46086"/>
-  <node id="532" lat="49.48157" lon="8.46086"/>
-  <node id="533" lat="49.48157" lon="8.46072"/>
+  <!-- == Block H: Ringstraße area == -->
+  <!-- Building H1 -->
+  <node id="342" lat="49.48360" lon="8.46720"/>
+  <node id="343" lat="49.48360" lon="8.46750"/>
+  <node id="344" lat="49.48372" lon="8.46750"/>
+  <node id="345" lat="49.48372" lon="8.46720"/>
+  <!-- Building H2 -->
+  <node id="346" lat="49.48360" lon="8.46760"/>
+  <node id="347" lat="49.48360" lon="8.46785"/>
+  <node id="348" lat="49.48372" lon="8.46785"/>
+  <node id="349" lat="49.48372" lon="8.46760"/>
+  <!-- Building H3 -->
+  <node id="350" lat="49.48360" lon="8.46800"/>
+  <node id="351" lat="49.48360" lon="8.46830"/>
+  <node id="352" lat="49.48372" lon="8.46830"/>
+  <node id="353" lat="49.48372" lon="8.46800"/>
+  <!-- Building H4 -->
+  <node id="354" lat="49.48360" lon="8.46840"/>
+  <node id="355" lat="49.48360" lon="8.46870"/>
+  <node id="356" lat="49.48372" lon="8.46870"/>
+  <node id="357" lat="49.48372" lon="8.46840"/>
 
-  <!-- Skillion roof (row 1, col 5) ~8m x 12m -->
-  <node id="540" lat="49.48150" lon="8.46093"/>
-  <node id="541" lat="49.48150" lon="8.46110"/>
-  <node id="542" lat="49.48157" lon="8.46110"/>
-  <node id="543" lat="49.48157" lon="8.46093"/>
+  <!-- Residential area (landuse) -->
+  <node id="360" lat="49.48380" lon="8.46710"/>
+  <node id="361" lat="49.48380" lon="8.46900"/>
+  <node id="362" lat="49.48420" lon="8.46900"/>
+  <node id="363" lat="49.48420" lon="8.46710"/>
 
-  <!-- Half-hipped roof (row 1, col 6) ~8m x 12m -->
-  <node id="550" lat="49.48150" lon="8.46117"/>
-  <node id="551" lat="49.48150" lon="8.46134"/>
-  <node id="552" lat="49.48157" lon="8.46134"/>
-  <node id="553" lat="49.48157" lon="8.46117"/>
-
-  <!-- Gambrel roof (row 1, col 7) ~8m x 12m -->
-  <node id="560" lat="49.48150" lon="8.46141"/>
-  <node id="561" lat="49.48150" lon="8.46158"/>
-  <node id="562" lat="49.48157" lon="8.46158"/>
-  <node id="563" lat="49.48157" lon="8.46141"/>
-
-  <!-- Mansard roof (row 2, col 1) ~8m x 12m -->
-  <node id="570" lat="49.48130" lon="8.46000"/>
-  <node id="571" lat="49.48130" lon="8.46017"/>
-  <node id="572" lat="49.48137" lon="8.46017"/>
-  <node id="573" lat="49.48137" lon="8.46000"/>
-
-  <!-- Round roof (row 2, col 2) ~8m x 12m -->
-  <node id="580" lat="49.48130" lon="8.46024"/>
-  <node id="581" lat="49.48130" lon="8.46041"/>
-  <node id="582" lat="49.48137" lon="8.46041"/>
-  <node id="583" lat="49.48137" lon="8.46024"/>
-
-  <!-- Dome roof (row 2, col 3) ~8m x 10m -->
-  <node id="590" lat="49.48130" lon="8.46048"/>
-  <node id="591" lat="49.48130" lon="8.46062"/>
-  <node id="592" lat="49.48137" lon="8.46062"/>
-  <node id="593" lat="49.48137" lon="8.46048"/>
-
-  <!-- Onion dome roof (row 2, col 4) ~8m x 10m -->
-  <node id="600" lat="49.48130" lon="8.46072"/>
-  <node id="601" lat="49.48130" lon="8.46086"/>
-  <node id="602" lat="49.48137" lon="8.46086"/>
-  <node id="603" lat="49.48137" lon="8.46072"/>
-
-  <!-- Saltbox roof (row 2, col 5) ~8m x 12m -->
-  <node id="610" lat="49.48130" lon="8.46093"/>
-  <node id="611" lat="49.48130" lon="8.46110"/>
-  <node id="612" lat="49.48137" lon="8.46110"/>
-  <node id="613" lat="49.48137" lon="8.46093"/>
-
-  <!-- Sawtooth roof (row 2, col 6) ~8m x 16m -->
-  <node id="620" lat="49.48130" lon="8.46117"/>
-  <node id="621" lat="49.48130" lon="8.46139"/>
-  <node id="622" lat="49.48137" lon="8.46139"/>
-  <node id="623" lat="49.48137" lon="8.46117"/>
-
-  <!-- === Motorway (4 lanes, S-curve SW to NE) === -->
-  <node id="700" lat="49.4805" lon="8.4600"/>
-  <node id="701" lat="49.4810" lon="8.4618"/>
-  <node id="702" lat="49.4818" lon="8.4635"/>
-  <node id="703" lat="49.4828" lon="8.4648"/>
-  <node id="704" lat="49.4838" lon="8.4655"/>
-  <node id="705" lat="49.4848" lon="8.4658"/>
-  <node id="706" lat="49.4858" lon="8.4660"/>
-  <node id="707" lat="49.4868" lon="8.4668"/>
-  <node id="708" lat="49.4876" lon="8.4682"/>
-  <node id="709" lat="49.4882" lon="8.4700"/>
-  <node id="710" lat="49.4886" lon="8.4720"/>
-  <node id="711" lat="49.4890" lon="8.4740"/>
-  <node id="712" lat="49.4895" lon="8.4750"/>
-
-  <!-- Trunk road 1 — approaches motorway from the south-west -->
-  <node id="720" lat="49.4800" lon="8.4610"/>
-  <node id="721" lat="49.4803" lon="8.4612"/>
-
-  <!-- Trunk road 2 — leads away from motorway to the north-east -->
-  <node id="730" lat="49.4898" lon="8.4748"/>
-  <node id="731" lat="49.4900" lon="8.4750"/>
-
-  <!-- Trunk road 3 — branches off mid-motorway heading north -->
-  <node id="740" lat="49.4858" lon="8.4660"/>
-  <node id="741" lat="49.4865" lon="8.4648"/>
-  <node id="742" lat="49.4872" lon="8.4638"/>
-  <node id="743" lat="49.4880" lon="8.4632"/>
-  <node id="744" lat="49.4890" lon="8.4628"/>
-  <node id="745" lat="49.4900" lon="8.4625"/>
-
-  <!-- Trunk road 4 — branches off mid-motorway heading south -->
-  <node id="750" lat="49.4828" lon="8.4648"/>
-  <node id="751" lat="49.4822" lon="8.4660"/>
-  <node id="752" lat="49.4815" lon="8.4670"/>
-  <node id="753" lat="49.4808" lon="8.4678"/>
-  <node id="754" lat="49.4800" lon="8.4685"/>
+  <!-- Park area -->
+  <node id="370" lat="49.48690" lon="8.47000"/>
+  <node id="371" lat="49.48690" lon="8.47120"/>
+  <node id="372" lat="49.48760" lon="8.47120"/>
+  <node id="373" lat="49.48760" lon="8.47000"/>
 
   <!-- Multipolygon building outer nodes (~20m x 30m industrial) -->
-  <node id="400" lat="49.48768" lon="8.46235"/>
-  <node id="401" lat="49.48768" lon="8.46276"/>
-  <node id="402" lat="49.48786" lon="8.46276"/>
-  <node id="403" lat="49.48786" lon="8.46235"/>
+  <node id="400" lat="49.48580" lon="8.46920"/>
+  <node id="401" lat="49.48580" lon="8.46960"/>
+  <node id="402" lat="49.48598" lon="8.46960"/>
+  <node id="403" lat="49.48598" lon="8.46920"/>
 
-  <!-- Main road (east-west, primary) -->
+  <!-- ============================================================ -->
+  <!-- ROOF TYPE SHOWCASE (compact cluster south-west area)         -->
+  <!-- ============================================================ -->
+
+  <!-- Flat roof (row 1, col 1) ~8m x 12m -->
+  <node id="500" lat="49.48340" lon="8.46420"/>
+  <node id="501" lat="49.48340" lon="8.46437"/>
+  <node id="502" lat="49.48347" lon="8.46437"/>
+  <node id="503" lat="49.48347" lon="8.46420"/>
+
+  <!-- Gabled roof (row 1, col 2) ~8m x 12m -->
+  <node id="510" lat="49.48340" lon="8.46444"/>
+  <node id="511" lat="49.48340" lon="8.46461"/>
+  <node id="512" lat="49.48347" lon="8.46461"/>
+  <node id="513" lat="49.48347" lon="8.46444"/>
+
+  <!-- Hipped roof (row 1, col 3) ~8m x 12m -->
+  <node id="520" lat="49.48340" lon="8.46468"/>
+  <node id="521" lat="49.48340" lon="8.46485"/>
+  <node id="522" lat="49.48347" lon="8.46485"/>
+  <node id="523" lat="49.48347" lon="8.46468"/>
+
+  <!-- Pyramidal roof (row 1, col 4) ~8m x 10m -->
+  <node id="530" lat="49.48340" lon="8.46492"/>
+  <node id="531" lat="49.48340" lon="8.46506"/>
+  <node id="532" lat="49.48347" lon="8.46506"/>
+  <node id="533" lat="49.48347" lon="8.46492"/>
+
+  <!-- Skillion roof (row 1, col 5) ~8m x 12m -->
+  <node id="540" lat="49.48340" lon="8.46513"/>
+  <node id="541" lat="49.48340" lon="8.46530"/>
+  <node id="542" lat="49.48347" lon="8.46530"/>
+  <node id="543" lat="49.48347" lon="8.46513"/>
+
+  <!-- Half-hipped roof (row 1, col 6) ~8m x 12m -->
+  <node id="550" lat="49.48340" lon="8.46537"/>
+  <node id="551" lat="49.48340" lon="8.46554"/>
+  <node id="552" lat="49.48347" lon="8.46554"/>
+  <node id="553" lat="49.48347" lon="8.46537"/>
+
+  <!-- Gambrel roof (row 1, col 7) ~8m x 12m -->
+  <node id="560" lat="49.48340" lon="8.46561"/>
+  <node id="561" lat="49.48340" lon="8.46578"/>
+  <node id="562" lat="49.48347" lon="8.46578"/>
+  <node id="563" lat="49.48347" lon="8.46561"/>
+
+  <!-- Mansard roof (row 2, col 1) ~8m x 12m -->
+  <node id="570" lat="49.48320" lon="8.46420"/>
+  <node id="571" lat="49.48320" lon="8.46437"/>
+  <node id="572" lat="49.48327" lon="8.46437"/>
+  <node id="573" lat="49.48327" lon="8.46420"/>
+
+  <!-- Round roof (row 2, col 2) ~8m x 12m -->
+  <node id="580" lat="49.48320" lon="8.46444"/>
+  <node id="581" lat="49.48320" lon="8.46461"/>
+  <node id="582" lat="49.48327" lon="8.46461"/>
+  <node id="583" lat="49.48327" lon="8.46444"/>
+
+  <!-- Dome roof (row 2, col 3) ~8m x 10m -->
+  <node id="590" lat="49.48320" lon="8.46468"/>
+  <node id="591" lat="49.48320" lon="8.46482"/>
+  <node id="592" lat="49.48327" lon="8.46482"/>
+  <node id="593" lat="49.48327" lon="8.46468"/>
+
+  <!-- Onion dome roof (row 2, col 4) ~8m x 10m -->
+  <node id="600" lat="49.48320" lon="8.46492"/>
+  <node id="601" lat="49.48320" lon="8.46506"/>
+  <node id="602" lat="49.48327" lon="8.46506"/>
+  <node id="603" lat="49.48327" lon="8.46492"/>
+
+  <!-- Saltbox roof (row 2, col 5) ~8m x 12m -->
+  <node id="610" lat="49.48320" lon="8.46513"/>
+  <node id="611" lat="49.48320" lon="8.46530"/>
+  <node id="612" lat="49.48327" lon="8.46530"/>
+  <node id="613" lat="49.48327" lon="8.46513"/>
+
+  <!-- Sawtooth roof (row 2, col 6) ~8m x 16m -->
+  <node id="620" lat="49.48320" lon="8.46537"/>
+  <node id="621" lat="49.48320" lon="8.46559"/>
+  <node id="622" lat="49.48327" lon="8.46559"/>
+  <node id="623" lat="49.48327" lon="8.46537"/>
+
+  <!-- ============================================================ -->
+  <!-- MOTORWAY (S-curve SW to NE, passing through south of town)   -->
+  <!-- ============================================================ -->
+  <node id="700" lat="49.4830" lon="8.4640"/>
+  <node id="701" lat="49.4832" lon="8.4648"/>
+  <node id="702" lat="49.4834" lon="8.4655"/>
+  <node id="703" lat="49.4836" lon="8.4662"/>
+  <node id="704" lat="49.4838" lon="8.4668"/>
+  <node id="705" lat="49.4840" lon="8.4674"/>
+  <node id="706" lat="49.4842" lon="8.4680"/>
+  <node id="707" lat="49.4844" lon="8.4687"/>
+  <node id="708" lat="49.4846" lon="8.4694"/>
+  <node id="709" lat="49.4848" lon="8.4700"/>
+  <node id="710" lat="49.4850" lon="8.4706"/>
+  <node id="711" lat="49.4852" lon="8.4713"/>
+  <node id="712" lat="49.4854" lon="8.4720"/>
+
+  <!-- Trunk road 1 — approaches motorway from the south-west -->
+  <node id="720" lat="49.4828" lon="8.4638"/>
+  <node id="721" lat="49.4829" lon="8.4639"/>
+
+  <!-- Trunk road 2 — leads away from motorway to the north-east -->
+  <node id="730" lat="49.4855" lon="8.4720"/>
+  <node id="731" lat="49.4856" lon="8.4720"/>
+
+  <!-- Trunk road 3 — branches off mid-motorway heading north -->
+  <node id="740" lat="49.4842" lon="8.4680"/>
+  <node id="741" lat="49.4848" lon="8.4674"/>
+  <node id="742" lat="49.4854" lon="8.4668"/>
+  <node id="743" lat="49.4860" lon="8.4664"/>
+  <node id="744" lat="49.4868" lon="8.4660"/>
+  <node id="745" lat="49.4875" lon="8.4658"/>
+
+  <!-- Trunk road 4 — branches off mid-motorway heading south -->
+  <node id="750" lat="49.4836" lon="8.4662"/>
+  <node id="751" lat="49.4834" lon="8.4668"/>
+  <node id="752" lat="49.4832" lon="8.4674"/>
+  <node id="753" lat="49.4830" lon="8.4680"/>
+  <node id="754" lat="49.4828" lon="8.4686"/>
+
+  <!-- ============================================================ -->
+  <!-- WAYS — Road network                                          -->
+  <!-- ============================================================ -->
+
+  <!-- Hauptstraße (E-W primary) -->
   <way id="1000">
     <nd ref="1"/>
     <nd ref="2"/>
     <nd ref="3"/>
     <nd ref="4"/>
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <nd ref="7"/>
+    <nd ref="8"/>
+    <nd ref="9"/>
     <tag k="highway" v="primary"/>
     <tag k="name" v="Hauptstraße"/>
     <tag k="lanes" v="2"/>
   </way>
 
-  <!-- Cross street (north-south, residential) -->
+  <!-- Bahnhofstraße (E-W secondary) -->
   <way id="1001">
-    <nd ref="10"/>
-    <nd ref="11"/>
-    <nd ref="12"/>
-    <nd ref="13"/>
-    <nd ref="14"/>
+    <nd ref="20"/>
+    <nd ref="21"/>
+    <nd ref="22"/>
+    <nd ref="23"/>
+    <nd ref="24"/>
+    <nd ref="25"/>
+    <nd ref="26"/>
+    <nd ref="27"/>
+    <nd ref="28"/>
+    <tag k="highway" v="secondary"/>
+    <tag k="name" v="Bahnhofstraße"/>
+    <tag k="lanes" v="2"/>
+  </way>
+
+  <!-- Gartenstraße (E-W residential) -->
+  <way id="1002">
+    <nd ref="30"/>
+    <nd ref="31"/>
+    <nd ref="32"/>
+    <nd ref="33"/>
+    <nd ref="34"/>
+    <nd ref="35"/>
+    <nd ref="36"/>
+    <nd ref="37"/>
+    <nd ref="38"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Gartenstraße"/>
+  </way>
+
+  <!-- Ringstraße (E-W, far south) -->
+  <way id="1003">
+    <nd ref="40"/>
+    <nd ref="41"/>
+    <nd ref="42"/>
+    <nd ref="43"/>
+    <nd ref="44"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Ringstraße"/>
+  </way>
+
+  <!-- Nordstraße (E-W, far north) -->
+  <way id="1004">
+    <nd ref="45"/>
+    <nd ref="46"/>
+    <nd ref="47"/>
+    <nd ref="48"/>
+    <nd ref="49"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Nordstraße"/>
+  </way>
+
+  <!-- Querstraße (N-S) -->
+  <way id="1010">
+    <nd ref="50"/>
+    <nd ref="51"/>
+    <nd ref="52"/>
+    <nd ref="4"/>
+    <nd ref="53"/>
+    <nd ref="23"/>
+    <nd ref="54"/>
+    <nd ref="55"/>
     <tag k="highway" v="residential"/>
     <tag k="name" v="Querstraße"/>
   </way>
 
-  <!-- Building 1 -->
+  <!-- Schulstraße (N-S) -->
+  <way id="1011">
+    <nd ref="60"/>
+    <nd ref="61"/>
+    <nd ref="62"/>
+    <nd ref="6"/>
+    <nd ref="63"/>
+    <nd ref="25"/>
+    <nd ref="64"/>
+    <nd ref="65"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Schulstraße"/>
+  </way>
+
+  <!-- Kirchgasse (N-S) -->
+  <way id="1012">
+    <nd ref="70"/>
+    <nd ref="71"/>
+    <nd ref="72"/>
+    <nd ref="2"/>
+    <nd ref="73"/>
+    <nd ref="21"/>
+    <nd ref="74"/>
+    <nd ref="75"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Kirchgasse"/>
+  </way>
+
+  <!-- Lindenallee (N-S) -->
+  <way id="1013">
+    <nd ref="80"/>
+    <nd ref="81"/>
+    <nd ref="82"/>
+    <nd ref="8"/>
+    <nd ref="83"/>
+    <nd ref="27"/>
+    <nd ref="84"/>
+    <nd ref="85"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Lindenallee"/>
+  </way>
+
+  <!-- ============================================================ -->
+  <!-- WAYS — Buildings                                             -->
+  <!-- ============================================================ -->
+
+  <!-- Block A buildings -->
   <way id="2000">
     <nd ref="200"/>
     <nd ref="201"/>
@@ -230,50 +770,372 @@
     <nd ref="200"/>
     <tag k="building" v="residential"/>
     <tag k="building:levels" v="3"/>
-    <tag k="name" v="Residential 3-Story"/>
   </way>
-
-  <!-- Building 2 -->
   <way id="2001">
+    <nd ref="204"/>
+    <nd ref="205"/>
+    <nd ref="206"/>
+    <nd ref="207"/>
+    <nd ref="204"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2002">
+    <nd ref="208"/>
+    <nd ref="209"/>
     <nd ref="210"/>
     <nd ref="211"/>
-    <nd ref="212"/>
-    <nd ref="213"/>
-    <nd ref="210"/>
+    <nd ref="208"/>
     <tag k="building" v="commercial"/>
     <tag k="building:levels" v="2"/>
-    <tag k="name" v="Commercial 2-Story"/>
+  </way>
+  <way id="2003">
+    <nd ref="212"/>
+    <nd ref="213"/>
+    <nd ref="214"/>
+    <nd ref="215"/>
+    <nd ref="212"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2004">
+    <nd ref="216"/>
+    <nd ref="217"/>
+    <nd ref="218"/>
+    <nd ref="219"/>
+    <nd ref="216"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="5"/>
   </way>
 
-  <!-- Building 3 (taller) -->
-  <way id="2002">
+  <!-- Block B buildings -->
+  <way id="2010">
     <nd ref="220"/>
     <nd ref="221"/>
     <nd ref="222"/>
     <nd ref="223"/>
     <nd ref="220"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2011">
+    <nd ref="224"/>
+    <nd ref="225"/>
+    <nd ref="226"/>
+    <nd ref="227"/>
+    <nd ref="224"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2012">
+    <nd ref="228"/>
+    <nd ref="229"/>
+    <nd ref="230"/>
+    <nd ref="231"/>
+    <nd ref="228"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2013">
+    <nd ref="232"/>
+    <nd ref="233"/>
+    <nd ref="234"/>
+    <nd ref="235"/>
+    <nd ref="232"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2014">
+    <nd ref="236"/>
+    <nd ref="237"/>
+    <nd ref="238"/>
+    <nd ref="239"/>
+    <nd ref="236"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2015">
+    <nd ref="240"/>
+    <nd ref="241"/>
+    <nd ref="242"/>
+    <nd ref="243"/>
+    <nd ref="240"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+
+  <!-- Block C buildings -->
+  <way id="2020">
+    <nd ref="250"/>
+    <nd ref="251"/>
+    <nd ref="252"/>
+    <nd ref="253"/>
+    <nd ref="250"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2021">
+    <nd ref="254"/>
+    <nd ref="255"/>
+    <nd ref="256"/>
+    <nd ref="257"/>
+    <nd ref="254"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2022">
+    <nd ref="258"/>
+    <nd ref="259"/>
+    <nd ref="260"/>
+    <nd ref="261"/>
+    <nd ref="258"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2023">
+    <nd ref="262"/>
+    <nd ref="263"/>
+    <nd ref="264"/>
+    <nd ref="265"/>
+    <nd ref="262"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2024">
+    <nd ref="266"/>
+    <nd ref="267"/>
+    <nd ref="268"/>
+    <nd ref="269"/>
+    <nd ref="266"/>
     <tag k="building" v="apartments"/>
     <tag k="building:levels" v="5"/>
-    <tag k="name" v="Apartments 5-Story"/>
   </way>
 
-  <!-- Residential landuse area -->
-  <way id="3000">
+  <!-- Block D buildings -->
+  <way id="2030">
+    <nd ref="270"/>
+    <nd ref="271"/>
+    <nd ref="272"/>
+    <nd ref="273"/>
+    <nd ref="270"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2031">
+    <nd ref="274"/>
+    <nd ref="275"/>
+    <nd ref="276"/>
+    <nd ref="277"/>
+    <nd ref="274"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2032">
+    <nd ref="278"/>
+    <nd ref="279"/>
+    <nd ref="280"/>
+    <nd ref="281"/>
+    <nd ref="278"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2033">
+    <nd ref="282"/>
+    <nd ref="283"/>
+    <nd ref="284"/>
+    <nd ref="285"/>
+    <nd ref="282"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2034">
+    <nd ref="286"/>
+    <nd ref="287"/>
+    <nd ref="288"/>
+    <nd ref="289"/>
+    <nd ref="286"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2035">
+    <nd ref="290"/>
+    <nd ref="291"/>
+    <nd ref="292"/>
+    <nd ref="293"/>
+    <nd ref="290"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- Block E buildings -->
+  <way id="2040">
+    <nd ref="294"/>
+    <nd ref="295"/>
+    <nd ref="296"/>
+    <nd ref="297"/>
+    <nd ref="294"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2041">
+    <nd ref="298"/>
+    <nd ref="299"/>
     <nd ref="300"/>
     <nd ref="301"/>
+    <nd ref="298"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2042">
     <nd ref="302"/>
     <nd ref="303"/>
-    <nd ref="300"/>
-    <tag k="landuse" v="residential"/>
+    <nd ref="304"/>
+    <nd ref="305"/>
+    <nd ref="302"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
   </way>
-
-  <!-- Park -->
-  <way id="3001">
+  <way id="2043">
+    <nd ref="306"/>
+    <nd ref="307"/>
+    <nd ref="308"/>
+    <nd ref="309"/>
+    <nd ref="306"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2044">
     <nd ref="310"/>
     <nd ref="311"/>
     <nd ref="312"/>
     <nd ref="313"/>
     <nd ref="310"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2045">
+    <nd ref="314"/>
+    <nd ref="315"/>
+    <nd ref="316"/>
+    <nd ref="317"/>
+    <nd ref="314"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+
+  <!-- Block F buildings -->
+  <way id="2050">
+    <nd ref="318"/>
+    <nd ref="319"/>
+    <nd ref="320"/>
+    <nd ref="321"/>
+    <nd ref="318"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2051">
+    <nd ref="322"/>
+    <nd ref="323"/>
+    <nd ref="324"/>
+    <nd ref="325"/>
+    <nd ref="322"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2052">
+    <nd ref="326"/>
+    <nd ref="327"/>
+    <nd ref="328"/>
+    <nd ref="329"/>
+    <nd ref="326"/>
+    <tag k="building" v="commercial"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2053">
+    <nd ref="330"/>
+    <nd ref="331"/>
+    <nd ref="332"/>
+    <nd ref="333"/>
+    <nd ref="330"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- Block G buildings -->
+  <way id="2060">
+    <nd ref="334"/>
+    <nd ref="335"/>
+    <nd ref="336"/>
+    <nd ref="337"/>
+    <nd ref="334"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2061">
+    <nd ref="338"/>
+    <nd ref="339"/>
+    <nd ref="340"/>
+    <nd ref="341"/>
+    <nd ref="338"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+
+  <!-- Block H buildings -->
+  <way id="2070">
+    <nd ref="342"/>
+    <nd ref="343"/>
+    <nd ref="344"/>
+    <nd ref="345"/>
+    <nd ref="342"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+  <way id="2071">
+    <nd ref="346"/>
+    <nd ref="347"/>
+    <nd ref="348"/>
+    <nd ref="349"/>
+    <nd ref="346"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="2072">
+    <nd ref="350"/>
+    <nd ref="351"/>
+    <nd ref="352"/>
+    <nd ref="353"/>
+    <nd ref="350"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="4"/>
+  </way>
+  <way id="2073">
+    <nd ref="354"/>
+    <nd ref="355"/>
+    <nd ref="356"/>
+    <nd ref="357"/>
+    <nd ref="354"/>
+    <tag k="building" v="residential"/>
+    <tag k="building:levels" v="2"/>
+  </way>
+
+  <!-- Residential landuse area -->
+  <way id="3000">
+    <nd ref="360"/>
+    <nd ref="361"/>
+    <nd ref="362"/>
+    <nd ref="363"/>
+    <nd ref="360"/>
+    <tag k="landuse" v="residential"/>
+  </way>
+
+  <!-- Park -->
+  <way id="3001">
+    <nd ref="370"/>
+    <nd ref="371"/>
+    <nd ref="372"/>
+    <nd ref="373"/>
+    <nd ref="370"/>
     <tag k="leisure" v="park"/>
     <tag k="name" v="Stadtpark"/>
   </way>
@@ -287,7 +1149,9 @@
     <nd ref="400"/>
   </way>
 
-  <!-- === Roof type showcase ways === -->
+  <!-- ============================================================ -->
+  <!-- WAYS — Roof type showcase                                    -->
+  <!-- ============================================================ -->
 
   <!-- Flat roof -->
   <way id="5100">
@@ -488,7 +1352,10 @@
     <tag k="name" v="Fabrikhalle"/>
   </relation>
 
-  <!-- === Motorway (4 lanes, sweeping S-curve SW to NE) === -->
+  <!-- ============================================================ -->
+  <!-- MOTORWAY + TRUNK ROADS                                       -->
+  <!-- ============================================================ -->
+
   <way id="6000">
     <nd ref="700"/>
     <nd ref="701"/>
