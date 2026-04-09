@@ -1,17 +1,8 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene format=3 uid="uid://ismyghiir7xr"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
-[ext_resource type="Script" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
-[ext_resource type="Script" path="res://scripts/car_controller.gd" id="3_car"]
-
-[sub_resource type="BoxMesh" id="BoxMesh_car"]
-size = Vector3(2.0, 1.0, 4.0)
-
-[sub_resource type="StandardMaterial3D" id="StdMat_car"]
-albedo_color = Color(0.8, 0.15, 0.1, 1)
-
-[sub_resource type="BoxShape3D" id="BoxShape_car"]
-size = Vector3(2.0, 1.0, 4.0)
+[ext_resource type="Script" uid="uid://dq5ns5ug81q20" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://cu7o55x3fvo1w" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
+[ext_resource type="Script" uid="uid://cr3dpxilqptpj" path="res://scripts/car_controller.gd" id="3_car"]
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 1
@@ -25,47 +16,52 @@ fog_light_color = Color(0.7, 0.75, 0.8, 1)
 fog_density = 0.002
 fog_aerial_perspective = 0.5
 
-[node name="Main" type="Node3D"]
+[sub_resource type="StandardMaterial3D" id="StdMat_car"]
+albedo_color = Color(0.8, 0.15, 0.1, 1)
+
+[sub_resource type="BoxMesh" id="BoxMesh_car"]
+size = Vector3(2, 1, 4)
+
+[sub_resource type="BoxShape3D" id="BoxShape_car"]
+size = Vector3(2, 1, 4)
+
+[node name="Main" type="Node3D" unique_id=923917518]
 script = ExtResource("1_main")
 
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1583928160]
 environment = SubResource("Environment_main")
 
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.866, -0.354, 0.354, 0.0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 50, 0)
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=382649534]
+transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 50, 0)
 shadow_enabled = true
 directional_shadow_max_distance = 500.0
 
-[node name="OSMTileManager" type="Node3D" parent="."]
+[node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
 script = ExtResource("2_tile")
-osm_file_path = "res://data/map.osm"
-tile_size = 200.0
-load_radius = 2
-unload_radius = 3
 
-[node name="Car" type="CharacterBody3D" parent="."]
+[node name="Car" type="CharacterBody3D" parent="." unique_id=1077184071]
 script = ExtResource("3_car")
 
-[node name="CarMesh" type="MeshInstance3D" parent="Car"]
+[node name="CarMesh" type="MeshInstance3D" parent="Car" unique_id=1236115454]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
-mesh = SubResource("BoxMesh_car")
 material_override = SubResource("StdMat_car")
+mesh = SubResource("BoxMesh_car")
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Car"]
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Car" unique_id=2096323148]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
 shape = SubResource("BoxShape_car")
 
-[node name="CameraPivot" type="Node3D" parent="Car"]
+[node name="CameraPivot" type="Node3D" parent="Car" unique_id=951089476]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
 
-[node name="Camera3D" type="Camera3D" parent="Car/CameraPivot"]
+[node name="Camera3D" type="Camera3D" parent="Car/CameraPivot" unique_id=674512223]
 transform = Transform3D(1, 0, 0, 0, 0.966, 0.259, 0, -0.259, 0.966, 0, 3, 8)
 fov = 70.0
 far = 2000.0
 
-[node name="HUD" type="CanvasLayer" parent="."]
+[node name="HUD" type="CanvasLayer" parent="." unique_id=153076246]
 
-[node name="SpeedLabel" type="Label" parent="HUD"]
+[node name="SpeedLabel" type="Label" parent="HUD" unique_id=1740309103]
 offset_left = 20.0
 offset_top = 20.0
 offset_right = 250.0
@@ -73,7 +69,7 @@ offset_bottom = 60.0
 theme_override_font_sizes/font_size = 28
 text = "0 km/h"
 
-[node name="InfoLabel" type="Label" parent="HUD"]
+[node name="InfoLabel" type="Label" parent="HUD" unique_id=281558808]
 offset_left = 20.0
 offset_top = 60.0
 offset_right = 500.0
