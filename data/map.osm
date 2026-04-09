@@ -155,6 +155,44 @@
   <node id="622" lat="49.48137" lon="8.46139"/>
   <node id="623" lat="49.48137" lon="8.46117"/>
 
+  <!-- === Motorway (4 lanes, S-curve SW to NE) === -->
+  <node id="700" lat="49.4805" lon="8.4600"/>
+  <node id="701" lat="49.4810" lon="8.4618"/>
+  <node id="702" lat="49.4818" lon="8.4635"/>
+  <node id="703" lat="49.4828" lon="8.4648"/>
+  <node id="704" lat="49.4838" lon="8.4655"/>
+  <node id="705" lat="49.4848" lon="8.4658"/>
+  <node id="706" lat="49.4858" lon="8.4660"/>
+  <node id="707" lat="49.4868" lon="8.4668"/>
+  <node id="708" lat="49.4876" lon="8.4682"/>
+  <node id="709" lat="49.4882" lon="8.4700"/>
+  <node id="710" lat="49.4886" lon="8.4720"/>
+  <node id="711" lat="49.4890" lon="8.4740"/>
+  <node id="712" lat="49.4895" lon="8.4750"/>
+
+  <!-- Trunk road 1 — approaches motorway from the south-west -->
+  <node id="720" lat="49.4800" lon="8.4610"/>
+  <node id="721" lat="49.4803" lon="8.4612"/>
+
+  <!-- Trunk road 2 — leads away from motorway to the north-east -->
+  <node id="730" lat="49.4898" lon="8.4748"/>
+  <node id="731" lat="49.4900" lon="8.4750"/>
+
+  <!-- Trunk road 3 — branches off mid-motorway heading north -->
+  <node id="740" lat="49.4858" lon="8.4660"/>
+  <node id="741" lat="49.4865" lon="8.4648"/>
+  <node id="742" lat="49.4872" lon="8.4638"/>
+  <node id="743" lat="49.4880" lon="8.4632"/>
+  <node id="744" lat="49.4890" lon="8.4628"/>
+  <node id="745" lat="49.4900" lon="8.4625"/>
+
+  <!-- Trunk road 4 — branches off mid-motorway heading south -->
+  <node id="750" lat="49.4828" lon="8.4648"/>
+  <node id="751" lat="49.4822" lon="8.4660"/>
+  <node id="752" lat="49.4815" lon="8.4670"/>
+  <node id="753" lat="49.4808" lon="8.4678"/>
+  <node id="754" lat="49.4800" lon="8.4685"/>
+
   <!-- Multipolygon building outer nodes (~20m x 30m industrial) -->
   <node id="400" lat="49.48768" lon="8.46235"/>
   <node id="401" lat="49.48768" lon="8.46276"/>
@@ -449,4 +487,76 @@
     <tag k="building:levels" v="2"/>
     <tag k="name" v="Fabrikhalle"/>
   </relation>
+
+  <!-- === Motorway (4 lanes, sweeping S-curve SW to NE) === -->
+  <way id="6000">
+    <nd ref="700"/>
+    <nd ref="701"/>
+    <nd ref="702"/>
+    <nd ref="703"/>
+    <nd ref="704"/>
+    <nd ref="705"/>
+    <nd ref="706"/>
+    <nd ref="707"/>
+    <nd ref="708"/>
+    <nd ref="709"/>
+    <nd ref="710"/>
+    <nd ref="711"/>
+    <nd ref="712"/>
+    <tag k="highway" v="motorway"/>
+    <tag k="name" v="A 656"/>
+    <tag k="lanes" v="4"/>
+    <tag k="maxspeed" v="130"/>
+    <tag k="ref" v="A 656"/>
+    <tag k="oneway" v="yes"/>
+  </way>
+
+  <!-- Trunk road 1 — SW approach into the motorway -->
+  <way id="6001">
+    <nd ref="720"/>
+    <nd ref="721"/>
+    <nd ref="700"/>
+    <tag k="highway" v="trunk"/>
+    <tag k="name" v="Südwestzubringer"/>
+    <tag k="lanes" v="2"/>
+    <tag k="maxspeed" v="100"/>
+  </way>
+
+  <!-- Trunk road 2 — NE exit from the motorway -->
+  <way id="6002">
+    <nd ref="712"/>
+    <nd ref="730"/>
+    <nd ref="731"/>
+    <tag k="highway" v="trunk"/>
+    <tag k="name" v="Nordostzubringer"/>
+    <tag k="lanes" v="2"/>
+    <tag k="maxspeed" v="100"/>
+  </way>
+
+  <!-- Trunk road 3 — branches north from mid-motorway -->
+  <way id="6003">
+    <nd ref="706"/>
+    <nd ref="741"/>
+    <nd ref="742"/>
+    <nd ref="743"/>
+    <nd ref="744"/>
+    <nd ref="745"/>
+    <tag k="highway" v="trunk"/>
+    <tag k="name" v="Nordzubringer"/>
+    <tag k="lanes" v="2"/>
+    <tag k="maxspeed" v="80"/>
+  </way>
+
+  <!-- Trunk road 4 — branches south from mid-motorway -->
+  <way id="6004">
+    <nd ref="703"/>
+    <nd ref="751"/>
+    <nd ref="752"/>
+    <nd ref="753"/>
+    <nd ref="754"/>
+    <tag k="highway" v="trunk"/>
+    <tag k="name" v="Südzubringer"/>
+    <tag k="lanes" v="2"/>
+    <tag k="maxspeed" v="80"/>
+  </way>
 </osm>
