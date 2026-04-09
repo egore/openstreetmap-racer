@@ -84,3 +84,76 @@ static func is_polygon_ccw(points: PackedVector3Array) -> bool:
 	for i: int in range(points.size() - 1):
 		signed_area += points[i].x * points[i + 1].z - points[i + 1].x * points[i].z
 	return signed_area < 0.0
+
+## Compute the centroid of a polygon in the XZ plane.
+static func polygon_centroid(points: PackedVector3Array) -> Vector3:
+	var cx := 0.0
+	var cz := 0.0
+	var count := points.size()
+	# Exclude the closing duplicate vertex if present
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	if count == 0:
+		return Vector3.ZERO
+	for i: int in range(count):
+		cx += points[i].x
+		cz += points[i].z
+	return Vector3(cx / count, 0.0, cz / count)
+
+## Return the AABB min/max in XZ plane as [min_x, max_x, min_z, max_z].
+static func polygon_bounds_xz(points: PackedVector3Array) -> Array[float]:
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for p: Vector3 in points:
+		min_x = min(min_x, p.x)
+		max_x = max(max_x, p.x)
+		min_z = min(min_z, p.z)
+		max_z = max(max_z, p.z)
+	return [min_x, max_x, min_z, max_z]
+
+## Find the direction along the longest edge of the polygon (XZ plane, normalized).
+static func polygon_longest_edge_dir(points: PackedVector3Array) -> Vector3:
+	var best_len := 0.0
+	var best_dir := Vector3(1, 0, 0)
+	for i: int in range(points.size() - 1):
+		var d := points[i + 1] - points[i]
+		d.y = 0.0
+		var l := d.length()
+		if l > best_len:
+			best_len = l
+			best_dir = d / l
+	return best_dir
+
+## Shrink (inset) a polygon in the XZ plane by a fixed distance.
+## Returns empty array if the polygon degenerates.
+static func shrink_polygon_xz(points: PackedVector3Array, amount: float) -> PackedVector3Array:
+	var pts2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		pts2d.append(Vector2(points[i].x, points[i].z))
+	var result := Geometry2D.offset_polygon(pts2d, -amount)
+	if result.size() == 0:
+		return PackedVector3Array()
+	var out: PackedVector3Array = []
+	for p2: Vector2 in result[0]:
+		out.append(Vector3(p2.x, 0.0, p2.y))
+	# Close the polygon
+	if out.size() > 0:
+		out.append(out[0])
+	return out
+
+## Project a 3D point onto a line defined by origin + direction in XZ, return signed distance.
+static func project_xz(point: Vector3, origin: Vector3, direction: Vector3) -> float:
+	return (point.x - origin.x) * direction.x + (point.z - origin.z) * direction.z
+
+## Lerp a point along the ridge axis: returns 0.0 at min projection, 1.0 at max projection.
+static func ridge_t(point: Vector3, origin: Vector3, direction: Vector3, min_proj: float, max_proj: float) -> float:
+	var proj := project_xz(point, origin, direction)
+	var span := max_proj - min_proj
+	if abs(span) < 0.001:
+		return 0.5
+	return clampf((proj - min_proj) / span, 0.0, 1.0)
