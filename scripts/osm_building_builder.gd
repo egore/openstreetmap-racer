@@ -418,7 +418,10 @@ func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float,
 			ridge_pt.y = ridge_y
 			var bl := Vector3(left.x, base_y, left.z)
 			var br := Vector3(right.x, base_y, right.z)
-			_add_tri(st, br, bl, ridge_pt)
+			if end_proj == min_proj:
+				_add_tri(st, br, bl, ridge_pt)
+			else:
+				_add_tri(st, bl, br, ridge_pt)
 
 # ─── Hipped roof ─────────────────────────────────────────────────────────────
 
@@ -510,7 +513,9 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 		for idx: int in range(0, indices.size(), 3):
 			_add_tri(st_roof, roof_points[indices[idx]], roof_points[indices[idx + 1]], roof_points[indices[idx + 2]])
 
-	# Wall extension quads: fill the gap between wall top (base_y) and roof on each edge
+	# Wall extension: fill the gap between wall top (base_y) and sloped roof on each edge.
+	# Side walls (parallel to ridge) get quads; end walls (perpendicular) get triangles.
+	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var st_wall := _new_st(wall_color)
 	for i: int in range(points.size() - 1):
 		var y0 := roof_points[i].y
@@ -520,7 +525,26 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 			var wall_br := Vector3(points[i + 1].x, base_y, points[i + 1].z)
 			var wall_tr := Vector3(points[i + 1].x, y1, points[i + 1].z)
 			var wall_tl := Vector3(points[i].x, y0, points[i].z)
-			_add_quad(st_wall, wall_bl, wall_br, wall_tr, wall_tl)
+
+			# Detect end walls (perpendicular to ridge) by checking edge direction
+			var edge_dir := (Vector3(points[i + 1].x, 0, points[i + 1].z) - Vector3(points[i].x, 0, points[i].z)).normalized()
+			var dot_ridge := absf(edge_dir.dot(ridge_dir))
+
+			if dot_ridge > 0.5:
+				# End wall (along ridge direction): triangle from base_y to sloped roof
+				# One corner is at base_y, the other at base_y + roof_h
+				if y0 <= base_y + 0.01:
+					# Left corner at base_y, right corner raised -> triangle bl, br, tr
+					_add_tri(st_wall, wall_br, wall_bl, wall_tr)
+				elif y1 <= base_y + 0.01:
+					# Right corner at base_y, left corner raised -> triangle bl, br, tl
+					_add_tri(st_wall, wall_bl, wall_br, wall_tl)
+				else:
+					# Both raised (shouldn't normally happen for end walls, but handle it)
+					_add_quad(st_wall, wall_br, wall_bl, wall_tl, wall_tr)
+			else:
+				# Side wall (perpendicular to ridge): standard quad
+				_add_quad(st_wall, wall_br, wall_bl, wall_tl, wall_tr)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st_roof, "Roof"))
@@ -543,42 +567,149 @@ func _roof_half_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 	var min_proj: float = rg["min_proj"]
 	var max_proj: float = rg["max_proj"]
 
-	var ridge_start: Vector3 = centroid + ridge_dir * (min_proj + inset)
-	ridge_start.y = ridge_y
-	var ridge_end: Vector3 = centroid + ridge_dir * (max_proj - inset)
-	ridge_end.y = ridge_y
+	# hip_y: the height where the gable wall ends and the hip triangle begins
+	var half_span := proj_span * 0.5
+	var hip_y := base_y + (ridge_y - base_y) * (1.0 - inset / maxf(half_span, 0.001))
+	hip_y = clampf(hip_y, base_y, ridge_y)
 
 	var st := _new_st(roof_color)
 	var st_gable := _new_st(wall_color)
 
-	var rs_proj: float = min_proj + inset
-	var re_proj: float = max_proj - inset
-
+	# Side edges (parallel to ridge): gabled-style slope quads from eave to ridge
 	for i: int in range(points.size() - 1):
-		var p0 := Vector3(points[i].x, base_y, points[i].z)
-		var p1 := Vector3(points[i + 1].x, base_y, points[i + 1].z)
-		var mid := (p0 + p1) / 2.0
-		var proj := PolygonUtils.project_xz(mid, centroid, ridge_dir)
+		var p0 := points[i]
+		var p1 := points[i + 1]
+		var eave0 := Vector3(p0.x, base_y, p0.z)
+		var eave1 := Vector3(p1.x, base_y, p1.z)
 
-		if proj <= rs_proj:
-			# Hip end triangle
-			_add_tri(st, p1, p0, ridge_start)
-		elif proj >= re_proj:
-			_add_tri(st, p1, p0, ridge_end)
-		else:
-			var t0 := clampf((PolygonUtils.project_xz(p0, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
-			var t1 := clampf((PolygonUtils.project_xz(p1, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
-			var r0: Vector3 = ridge_start.lerp(ridge_end, t0)
-			var r1: Vector3 = ridge_start.lerp(ridge_end, t1)
-			_add_quad(st, p1, p0, r0, r1)
+		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
+		var dot_ridge := absf(edge_dir.dot(ridge_dir))
 
-	# Gable walls below the hip portion
-	_add_gable_ends(st_gable, points, base_y, rg)
+		if dot_ridge > 0.5:
+			# Side edge: roof slope quad from eave to ridge (like gabled)
+			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
+			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
+			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var r0: Vector3 = rg["ridge_start"].lerp(rg["ridge_end"], t0)
+			var r1: Vector3 = rg["ridge_start"].lerp(rg["ridge_end"], t1)
+			_add_quad(st, eave1, eave0, r0, r1)
+
+	# Hip triangles at each end: small triangle from hip_y up to ridge
+	_add_half_hip_end_triangles(st, points, base_y, rg, inset, hip_y)
+
+	# Trapezoidal gable walls below the hip portion
+	_add_half_hipped_gable_ends(st_gable, points, base_y, rg, inset)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
 	result.append(_make_mesh(st_gable, "Gables"))
 	return result
+
+func _add_half_hip_end_triangles(st: SurfaceTool, points: PackedVector3Array,
+		base_y: float, rg: Dictionary, inset: float, hip_y: float) -> void:
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var ridge_y: float = rg["ridge_y"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
+	var half_span := proj_span * 0.5
+	var threshold := proj_span * 0.05
+
+	for end_proj: float in [min_proj, max_proj]:
+		# Collect vertices near this gable end
+		var gable_verts: Array[Vector3] = []
+		for i: int in range(points.size() - 1):
+			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
+			if absf(proj - end_proj) < threshold + 0.5:
+				gable_verts.append(points[i])
+
+		if gable_verts.size() >= 2:
+			var perp_sort_dir := perp_dir
+			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
+				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
+			var left := gable_verts[0]
+			var right := gable_verts[gable_verts.size() - 1]
+
+			# Mid-point at this gable end (XZ only)
+			var mid_xz := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
+
+			# Inset fraction for the trapezoid top
+			var frac := inset / maxf(half_span, 0.001)
+
+			# Top corners of the trapezoid at hip_y (narrowed by frac)
+			var tl := Vector3(
+				lerp(left.x, mid_xz.x, frac), hip_y, lerp(left.z, mid_xz.z, frac))
+			var tr := Vector3(
+				lerp(right.x, mid_xz.x, frac), hip_y, lerp(right.z, mid_xz.z, frac))
+
+			# Ridge point for this end
+			var ridge_pt: Vector3
+			if end_proj == min_proj:
+				ridge_pt = centroid + ridge_dir * (min_proj + inset)
+			else:
+				ridge_pt = centroid + ridge_dir * (max_proj - inset)
+			ridge_pt.y = ridge_y
+
+			# Small hip triangle: from trapezoid top edge (tl, tr) up to ridge
+			if end_proj == min_proj:
+				_add_tri(st, tr, tl, ridge_pt)
+			else:
+				_add_tri(st, tl, tr, ridge_pt)
+
+func _add_half_hipped_gable_ends(st: SurfaceTool, points: PackedVector3Array,
+		base_y: float, rg: Dictionary, inset: float) -> void:
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var ridge_y: float = rg["ridge_y"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
+	var threshold := proj_span * 0.05
+
+	# The hip transition height: the gable wall extends from base_y up to hip_y,
+	# then the hip triangle takes over from hip_y up to ridge_y.
+	# hip_y is where the inset ridge point sits projected down proportionally.
+	var half_span := proj_span * 0.5
+	var hip_y := base_y + (ridge_y - base_y) * (1.0 - inset / maxf(half_span, 0.001))
+	hip_y = clampf(hip_y, base_y, ridge_y)
+
+	for end_proj: float in [min_proj, max_proj]:
+		var gable_verts: Array[Vector3] = []
+		for i: int in range(points.size() - 1):
+			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
+			if absf(proj - end_proj) < threshold + 0.5:
+				gable_verts.append(points[i])
+
+		if gable_verts.size() >= 2:
+			var perp_sort_dir := perp_dir
+			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
+				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
+			var left := gable_verts[0]
+			var right := gable_verts[gable_verts.size() - 1]
+
+			# Full-width base corners
+			var bl := Vector3(left.x, base_y, left.z)
+			var br := Vector3(right.x, base_y, right.z)
+
+			# Narrower top corners at hip transition height
+			# The top edge is inset proportionally: at hip_y the gable narrows
+			# to match where the hip slope begins
+			var mid_xz := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
+			var frac := inset / maxf(half_span, 0.001)
+			var tl := Vector3(
+				lerp(left.x, mid_xz.x, frac), hip_y, lerp(left.z, mid_xz.z, frac))
+			var tr := Vector3(
+				lerp(right.x, mid_xz.x, frac), hip_y, lerp(right.z, mid_xz.z, frac))
+
+			# Draw trapezoid, flipping winding for opposite end
+			if end_proj == min_proj:
+				_add_quad(st, br, bl, tl, tr)
+			else:
+				_add_quad(st, bl, br, tr, tl)
 
 # ─── Gambrel roof ────────────────────────────────────────────────────────────
 
@@ -635,12 +766,60 @@ func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 			# Upper shallow slope: break to ridge
 			_add_quad(st, break1, break0, ridge0, ridge1)
 
-	_add_gable_ends(st_gable, points, base_y, rg)
+	_add_gambrel_gable_ends(st_gable, points, base_y, rg, break_frac, break_y)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
 	result.append(_make_mesh(st_gable, "Gables"))
 	return result
+
+func _add_gambrel_gable_ends(st: SurfaceTool, points: PackedVector3Array,
+		base_y: float, rg: Dictionary, break_frac: float, break_y: float) -> void:
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var ridge_y: float = rg["ridge_y"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
+	var threshold := proj_span * 0.05
+
+	for end_proj: float in [min_proj, max_proj]:
+		var gable_verts: Array[Vector3] = []
+		for i: int in range(points.size() - 1):
+			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
+			if absf(proj - end_proj) < threshold + 0.5:
+				gable_verts.append(points[i])
+
+		if gable_verts.size() >= 2:
+			var perp_sort_dir := perp_dir
+			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
+				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
+			var left := gable_verts[0]
+			var right := gable_verts[gable_verts.size() - 1]
+
+			# Bottom corners (full width at base_y)
+			var bl := Vector3(left.x, base_y, left.z)
+			var br := Vector3(right.x, base_y, right.z)
+
+			# Ridge peak (midpoint at ridge_y)
+			var ridge_pt := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
+			ridge_pt.y = ridge_y
+
+			# Break points: lerp from each eave corner toward ridge at break_frac
+			var break_l := Vector3(
+				lerp(left.x, ridge_pt.x, break_frac), break_y, lerp(left.z, ridge_pt.z, break_frac))
+			var break_r := Vector3(
+				lerp(right.x, ridge_pt.x, break_frac), break_y, lerp(right.z, ridge_pt.z, break_frac))
+
+			# Pentagon: bl, br, break_r, ridge_pt, break_l
+			# The two ends face opposite directions, so flip winding for max_proj end
+			if end_proj == min_proj:
+				_add_quad(st, br, bl, break_l, break_r)
+				_add_tri(st, break_r, break_l, ridge_pt)
+			else:
+				_add_quad(st, bl, br, break_r, break_l)
+				_add_tri(st, break_l, break_r, ridge_pt)
 
 # ─── Mansard roof ────────────────────────────────────────────────────────────
 
@@ -763,7 +942,9 @@ func _add_round_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: 
 	var perp_mid: float = (float(rg["min_perp"]) + float(rg["max_perp"])) / 2.0
 	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
 
-	for end_proj: float in [float(rg["min_proj"]), float(rg["max_proj"])]:
+	var min_proj_f: float = float(rg["min_proj"])
+	var max_proj_f: float = float(rg["max_proj"])
+	for end_proj: float in [min_proj_f, max_proj_f]:
 		var end_center: Vector3 = centroid + ridge_dir * end_proj
 		end_center.y = base_y
 
@@ -784,7 +965,10 @@ func _add_round_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: 
 				end_center.z + perp_dir.z * cos(angle1) * perp_span * 0.5
 			)
 			var vc := Vector3(end_center.x, base_y, end_center.z)
-			_add_tri(st, vc, v0, v1)
+			if end_proj == min_proj_f:
+				_add_tri(st, vc, v1, v0)
+			else:
+				_add_tri(st, vc, v0, v1)
 
 # ─── Dome roof ───────────────────────────────────────────────────────────────
 
@@ -812,7 +996,7 @@ func _roof_dome(points: PackedVector3Array, base_y: float, roof_h: float,
 			var v10 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi1, theta0)
 			var v11 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi1, theta1)
 
-			_add_quad(st, v00, v01, v11, v10)
+			_add_quad(st, v01, v00, v10, v11)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
@@ -942,51 +1126,138 @@ func _roof_sawtooth(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
 	# Sawtooth: repeated asymmetric ridges (like factory roofs)
 	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
 	var min_perp: float = rg["min_perp"]
 	var perp_span := absf(float(rg["max_perp"]) - min_perp)
 
 	var tooth_count := maxi(int(perp_span / 4.0), 2)  # one tooth every ~4 meters
 	var tooth_width := perp_span / tooth_count
 
-	# Compute the roof Y for each vertex based on sawtooth profile
-	var roof_points: PackedVector3Array = []
-	for p: Vector3 in points:
-		var perp := PolygonUtils.project_xz(p, centroid, perp_dir)
-		var y := _sawtooth_y(perp, min_perp, tooth_width, tooth_count, base_y, roof_h)
-		roof_points.append(Vector3(p.x, y, p.z))
-
-	# Roof surface: triangulated polygon at varying heights
 	var st_roof := _new_st(roof_color)
-	var indices := PolygonUtils.triangulate_xz(roof_points)
-	if indices.size() > 0:
-		for idx: int in range(0, indices.size(), 3):
-			_add_tri(st_roof, roof_points[indices[idx]], roof_points[indices[idx + 1]], roof_points[indices[idx + 2]])
-
-	# Wall faces: fill the gap between wall top (base_y) and roof on each edge
 	var st_wall := _new_st(wall_color)
-	for i: int in range(points.size() - 1):
-		var y0 := roof_points[i].y
-		var y1 := roof_points[i + 1].y
-		if y0 > base_y + 0.01 or y1 > base_y + 0.01:
-			var wall_bl := Vector3(points[i].x, base_y, points[i].z)
-			var wall_br := Vector3(points[i + 1].x, base_y, points[i + 1].z)
-			var wall_tr := Vector3(points[i + 1].x, y1, points[i + 1].z)
-			var wall_tl := Vector3(points[i].x, y0, points[i].z)
-			_add_quad(st_wall, wall_bl, wall_br, wall_tr, wall_tl)
+
+	# Build the roof as strips across the building for each tooth.
+	# Each tooth produces: a sloped ramp quad and a vertical drop quad.
+	_build_sawtooth_roof_surface(st_roof, st_wall, wall_color, points, base_y, roof_h, rg, min_perp, perp_span, tooth_count, tooth_width)
+
+	# End walls: draw sawtooth cross-section at each end (edges along ridge direction)
+	_add_sawtooth_end_walls(st_wall, points, base_y, roof_h, rg, min_perp, perp_span, tooth_count, tooth_width)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st_roof, "Roof"))
 	result.append(_make_mesh(st_wall, "SawtoothWalls"))
 	return result
 
-func _sawtooth_y(perp: float, min_perp: float, tooth_width: float, tooth_count: int,
-		base_y: float, roof_h: float) -> float:
-	var offset := perp - min_perp
-	var tooth_pos := fmod(offset, tooth_width)
-	if tooth_pos < 0:
-		tooth_pos += tooth_width
-	# Ramp up then drop: gradual slope up, vertical drop
-	var t := tooth_pos / tooth_width
-	return base_y + roof_h * t
+func _build_sawtooth_roof_surface(st_roof: SurfaceTool, st_wall: SurfaceTool,
+		wall_color: Color, points: PackedVector3Array, base_y: float, roof_h: float,
+		rg: Dictionary, min_perp: float, perp_span: float,
+		tooth_count: int, tooth_width: float) -> void:
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+
+	# For each tooth, build a sloped ramp quad and a vertical drop quad.
+	# The ramp spans from min_proj to max_proj (along the ridge) and from
+	# tooth_start to tooth_end (along the perp direction).
+	for tooth: int in range(tooth_count):
+		var ts_perp := min_perp + tooth * tooth_width
+		var te_perp := min_perp + (tooth + 1) * tooth_width
+
+		# Four corners of this tooth strip at the building footprint edges
+		# Near side (min_proj) and far side (max_proj), at tooth start and end
+		var near_start := centroid + ridge_dir * min_proj + perp_dir * ts_perp
+		var near_end := centroid + ridge_dir * min_proj + perp_dir * te_perp
+		var far_start := centroid + ridge_dir * max_proj + perp_dir * ts_perp
+		var far_end := centroid + ridge_dir * max_proj + perp_dir * te_perp
+
+		# Ramp: slopes from base_y at tooth start to base_y + roof_h at tooth end
+		var ramp_ns := Vector3(near_start.x, base_y, near_start.z)
+		var ramp_ne := Vector3(near_end.x, base_y + roof_h, near_end.z)
+		var ramp_fs := Vector3(far_start.x, base_y, far_start.z)
+		var ramp_fe := Vector3(far_end.x, base_y + roof_h, far_end.z)
+
+		# Sloped ramp quad (facing up)
+		_add_quad(st_roof, ramp_ns, ramp_fs, ramp_fe, ramp_ne)
+
+		# Vertical drop at tooth end (except for the last tooth at the building edge)
+		if tooth < tooth_count - 1:
+			# The drop goes from base_y + roof_h down to base_y at te_perp
+			var drop_near_top := Vector3(near_end.x, base_y + roof_h, near_end.z)
+			var drop_near_bot := Vector3(near_end.x, base_y, near_end.z)
+			var drop_far_top := Vector3(far_end.x, base_y + roof_h, far_end.z)
+			var drop_far_bot := Vector3(far_end.x, base_y, far_end.z)
+
+			# Vertical face (facing toward increasing perp = toward the next tooth)
+			_add_quad(st_wall, drop_near_top, drop_far_top, drop_far_bot, drop_near_bot)
+
+func _add_sawtooth_end_walls(st: SurfaceTool, points: PackedVector3Array,
+		base_y: float, roof_h: float, rg: Dictionary, min_perp: float,
+		perp_span: float, tooth_count: int, tooth_width: float) -> void:
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
+	var threshold := proj_span * 0.05
+
+	for end_proj: float in [min_proj, max_proj]:
+		# Find the two corner vertices at this end
+		var end_verts: Array[Vector3] = []
+		for i: int in range(points.size() - 1):
+			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
+			if absf(proj - end_proj) < threshold + 0.5:
+				end_verts.append(points[i])
+
+		if end_verts.size() < 2:
+			continue
+
+		# Sort by perpendicular position
+		var pd := perp_dir
+		end_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
+			return PolygonUtils.project_xz(a, centroid, pd) < PolygonUtils.project_xz(b, centroid, pd))
+		var left := end_verts[0]
+		var right := end_verts[end_verts.size() - 1]
+
+		# Walk along the edge from left to right, subdividing by sawtooth teeth.
+		# The edge runs along perp_dir from left to right.
+		var left_perp := PolygonUtils.project_xz(left, centroid, perp_dir)
+		var right_perp := PolygonUtils.project_xz(right, centroid, perp_dir)
+		var edge_start := Vector3(left.x, 0, left.z)
+		var edge_end := Vector3(right.x, 0, right.z)
+		var edge_len := right_perp - left_perp
+		if absf(edge_len) < 0.001:
+			continue
+
+		# For each tooth, compute the ramp and drop geometry on this end wall
+		for tooth: int in range(tooth_count):
+			# Perpendicular positions of tooth start and end
+			var tooth_start_perp := min_perp + tooth * tooth_width
+			var tooth_end_perp := min_perp + (tooth + 1) * tooth_width
+
+			# Clamp to the actual edge extent
+			var ts_perp := clampf(tooth_start_perp, left_perp, right_perp)
+			var te_perp := clampf(tooth_end_perp, left_perp, right_perp)
+			if te_perp - ts_perp < 0.001:
+				continue
+
+			# Interpolate XZ positions along the edge
+			var ts_frac := (ts_perp - left_perp) / edge_len
+			var te_frac := (te_perp - left_perp) / edge_len
+			var ts_xz := edge_start.lerp(edge_end, ts_frac)
+			var te_xz := edge_start.lerp(edge_end, te_frac)
+
+			# Bottom corners at base_y
+			var bl := Vector3(ts_xz.x, base_y, ts_xz.z)
+			var br := Vector3(te_xz.x, base_y, te_xz.z)
+
+			# Top of ramp: tooth end is at base_y + roof_h
+			var tr := Vector3(te_xz.x, base_y + roof_h, te_xz.z)
+
+			# Ramp triangle: from bottom-left, bottom-right, top-right
+			# (the ramp goes from base_y at tooth start up to base_y + roof_h at tooth end)
+			if end_proj == min_proj:
+				_add_tri(st, br, bl, tr)
+			else:
+				_add_tri(st, bl, br, tr)
