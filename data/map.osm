@@ -75,6 +75,86 @@
   <node id="312" lat="49.4885" lon="8.4740"/>
   <node id="313" lat="49.4885" lon="8.4710"/>
 
+  <!-- === Roof type showcase buildings === -->
+
+  <!-- Flat roof (row 1, col 1) -->
+  <node id="500" lat="49.4815" lon="8.4600"/>
+  <node id="501" lat="49.4815" lon="8.4612"/>
+  <node id="502" lat="49.4820" lon="8.4612"/>
+  <node id="503" lat="49.4820" lon="8.4600"/>
+
+  <!-- Gabled roof (row 1, col 2) -->
+  <node id="510" lat="49.4815" lon="8.4616"/>
+  <node id="511" lat="49.4815" lon="8.4628"/>
+  <node id="512" lat="49.4820" lon="8.4628"/>
+  <node id="513" lat="49.4820" lon="8.4616"/>
+
+  <!-- Hipped roof (row 1, col 3) -->
+  <node id="520" lat="49.4815" lon="8.4632"/>
+  <node id="521" lat="49.4815" lon="8.4644"/>
+  <node id="522" lat="49.4820" lon="8.4644"/>
+  <node id="523" lat="49.4820" lon="8.4632"/>
+
+  <!-- Pyramidal roof (row 1, col 4) -->
+  <node id="530" lat="49.4815" lon="8.4648"/>
+  <node id="531" lat="49.4815" lon="8.4658"/>
+  <node id="532" lat="49.4820" lon="8.4658"/>
+  <node id="533" lat="49.4820" lon="8.4648"/>
+
+  <!-- Skillion roof (row 1, col 5) -->
+  <node id="540" lat="49.4815" lon="8.4662"/>
+  <node id="541" lat="49.4815" lon="8.4674"/>
+  <node id="542" lat="49.4820" lon="8.4674"/>
+  <node id="543" lat="49.4820" lon="8.4662"/>
+
+  <!-- Half-hipped roof (row 1, col 6) -->
+  <node id="550" lat="49.4815" lon="8.4678"/>
+  <node id="551" lat="49.4815" lon="8.4690"/>
+  <node id="552" lat="49.4820" lon="8.4690"/>
+  <node id="553" lat="49.4820" lon="8.4678"/>
+
+  <!-- Gambrel roof (row 1, col 7) -->
+  <node id="560" lat="49.4815" lon="8.4694"/>
+  <node id="561" lat="49.4815" lon="8.4706"/>
+  <node id="562" lat="49.4820" lon="8.4706"/>
+  <node id="563" lat="49.4820" lon="8.4694"/>
+
+  <!-- Mansard roof (row 2, col 1) -->
+  <node id="570" lat="49.4808" lon="8.4600"/>
+  <node id="571" lat="49.4808" lon="8.4612"/>
+  <node id="572" lat="49.4813" lon="8.4612"/>
+  <node id="573" lat="49.4813" lon="8.4600"/>
+
+  <!-- Round roof (row 2, col 2) -->
+  <node id="580" lat="49.4808" lon="8.4616"/>
+  <node id="581" lat="49.4808" lon="8.4628"/>
+  <node id="582" lat="49.4813" lon="8.4628"/>
+  <node id="583" lat="49.4813" lon="8.4616"/>
+
+  <!-- Dome roof (row 2, col 3) -->
+  <node id="590" lat="49.4808" lon="8.4632"/>
+  <node id="591" lat="49.4808" lon="8.4642"/>
+  <node id="592" lat="49.4813" lon="8.4642"/>
+  <node id="593" lat="49.4813" lon="8.4632"/>
+
+  <!-- Onion dome roof (row 2, col 4) -->
+  <node id="600" lat="49.4808" lon="8.4648"/>
+  <node id="601" lat="49.4808" lon="8.4658"/>
+  <node id="602" lat="49.4813" lon="8.4658"/>
+  <node id="603" lat="49.4813" lon="8.4648"/>
+
+  <!-- Saltbox roof (row 2, col 5) -->
+  <node id="610" lat="49.4808" lon="8.4662"/>
+  <node id="611" lat="49.4808" lon="8.4674"/>
+  <node id="612" lat="49.4813" lon="8.4674"/>
+  <node id="613" lat="49.4813" lon="8.4662"/>
+
+  <!-- Sawtooth roof (row 2, col 6) -->
+  <node id="620" lat="49.4808" lon="8.4678"/>
+  <node id="621" lat="49.4808" lon="8.4694"/>
+  <node id="622" lat="49.4813" lon="8.4694"/>
+  <node id="623" lat="49.4813" lon="8.4678"/>
+
   <!-- Multipolygon building outer nodes -->
   <node id="400" lat="49.4875" lon="8.4620"/>
   <node id="401" lat="49.4875" lon="8.4635"/>
@@ -164,6 +244,198 @@
     <nd ref="402"/>
     <nd ref="403"/>
     <nd ref="400"/>
+  </way>
+
+  <!-- === Roof type showcase ways === -->
+
+  <!-- Flat roof -->
+  <way id="5100">
+    <nd ref="500"/>
+    <nd ref="501"/>
+    <nd ref="502"/>
+    <nd ref="503"/>
+    <nd ref="500"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="flat"/>
+    <tag k="name" v="Flat Roof"/>
+  </way>
+
+  <!-- Gabled roof -->
+  <way id="5110">
+    <nd ref="510"/>
+    <nd ref="511"/>
+    <nd ref="512"/>
+    <nd ref="513"/>
+    <nd ref="510"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="gabled"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="red"/>
+    <tag k="name" v="Gabled Roof"/>
+  </way>
+
+  <!-- Hipped roof -->
+  <way id="5120">
+    <nd ref="520"/>
+    <nd ref="521"/>
+    <nd ref="522"/>
+    <nd ref="523"/>
+    <nd ref="520"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="hipped"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Hipped Roof"/>
+  </way>
+
+  <!-- Pyramidal roof -->
+  <way id="5130">
+    <nd ref="530"/>
+    <nd ref="531"/>
+    <nd ref="532"/>
+    <nd ref="533"/>
+    <nd ref="530"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="pyramidal"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="grey"/>
+    <tag k="name" v="Pyramidal Roof"/>
+  </way>
+
+  <!-- Skillion roof -->
+  <way id="5140">
+    <nd ref="540"/>
+    <nd ref="541"/>
+    <nd ref="542"/>
+    <nd ref="543"/>
+    <nd ref="540"/>
+    <tag k="building" v="garage"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="skillion"/>
+    <tag k="roof:height" v="2"/>
+    <tag k="name" v="Skillion Roof"/>
+  </way>
+
+  <!-- Half-hipped roof -->
+  <way id="5150">
+    <nd ref="550"/>
+    <nd ref="551"/>
+    <nd ref="552"/>
+    <nd ref="553"/>
+    <nd ref="550"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="half-hipped"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="red"/>
+    <tag k="name" v="Half-Hipped Roof"/>
+  </way>
+
+  <!-- Gambrel roof -->
+  <way id="5160">
+    <nd ref="560"/>
+    <nd ref="561"/>
+    <nd ref="562"/>
+    <nd ref="563"/>
+    <nd ref="560"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="gambrel"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Gambrel Roof"/>
+  </way>
+
+  <!-- Mansard roof -->
+  <way id="5170">
+    <nd ref="570"/>
+    <nd ref="571"/>
+    <nd ref="572"/>
+    <nd ref="573"/>
+    <nd ref="570"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="3"/>
+    <tag k="roof:shape" v="mansard"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="roof:colour" v="grey"/>
+    <tag k="name" v="Mansard Roof"/>
+  </way>
+
+  <!-- Round roof -->
+  <way id="5180">
+    <nd ref="580"/>
+    <nd ref="581"/>
+    <nd ref="582"/>
+    <nd ref="583"/>
+    <nd ref="580"/>
+    <tag k="building" v="industrial"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="round"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="name" v="Round Roof"/>
+  </way>
+
+  <!-- Dome roof -->
+  <way id="5190">
+    <nd ref="590"/>
+    <nd ref="591"/>
+    <nd ref="592"/>
+    <nd ref="593"/>
+    <nd ref="590"/>
+    <tag k="building" v="church"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="dome"/>
+    <tag k="roof:height" v="5"/>
+    <tag k="roof:colour" v="white"/>
+    <tag k="name" v="Dome Roof"/>
+  </way>
+
+  <!-- Onion dome roof -->
+  <way id="5200">
+    <nd ref="600"/>
+    <nd ref="601"/>
+    <nd ref="602"/>
+    <nd ref="603"/>
+    <nd ref="600"/>
+    <tag k="building" v="church"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="onion"/>
+    <tag k="roof:height" v="6"/>
+    <tag k="roof:colour" v="green"/>
+    <tag k="name" v="Onion Dome Roof"/>
+  </way>
+
+  <!-- Saltbox roof -->
+  <way id="5210">
+    <nd ref="610"/>
+    <nd ref="611"/>
+    <nd ref="612"/>
+    <nd ref="613"/>
+    <nd ref="610"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="saltbox"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Saltbox Roof"/>
+  </way>
+
+  <!-- Sawtooth roof -->
+  <way id="5220">
+    <nd ref="620"/>
+    <nd ref="621"/>
+    <nd ref="622"/>
+    <nd ref="623"/>
+    <nd ref="620"/>
+    <tag k="building" v="industrial"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="sawtooth"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="name" v="Sawtooth Roof"/>
   </way>
 
   <!-- Relation: multipolygon building -->
