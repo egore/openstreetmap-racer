@@ -589,6 +589,89 @@
   <node id="623" lat="49.48327" lon="8.46537"/>
 
   <!-- ============================================================ -->
+  <!-- ROOF TYPE SHOWCASE — CCW winding (rows 3 & 4)                -->
+  <!-- Same shapes as rows 1 & 2 but with reversed node order       -->
+  <!-- ============================================================ -->
+
+  <!-- CCW Flat roof (row 3, col 1) -->
+  <node id="700500" lat="49.48300" lon="8.46420"/>
+  <node id="700501" lat="49.48300" lon="8.46437"/>
+  <node id="700502" lat="49.48307" lon="8.46437"/>
+  <node id="700503" lat="49.48307" lon="8.46420"/>
+
+  <!-- CCW Gabled roof (row 3, col 2) -->
+  <node id="700510" lat="49.48300" lon="8.46444"/>
+  <node id="700511" lat="49.48300" lon="8.46461"/>
+  <node id="700512" lat="49.48307" lon="8.46461"/>
+  <node id="700513" lat="49.48307" lon="8.46444"/>
+
+  <!-- CCW Hipped roof (row 3, col 3) -->
+  <node id="700520" lat="49.48300" lon="8.46468"/>
+  <node id="700521" lat="49.48300" lon="8.46485"/>
+  <node id="700522" lat="49.48307" lon="8.46485"/>
+  <node id="700523" lat="49.48307" lon="8.46468"/>
+
+  <!-- CCW Pyramidal roof (row 3, col 4) -->
+  <node id="700530" lat="49.48300" lon="8.46492"/>
+  <node id="700531" lat="49.48300" lon="8.46506"/>
+  <node id="700532" lat="49.48307" lon="8.46506"/>
+  <node id="700533" lat="49.48307" lon="8.46492"/>
+
+  <!-- CCW Skillion roof (row 3, col 5) -->
+  <node id="700540" lat="49.48300" lon="8.46513"/>
+  <node id="700541" lat="49.48300" lon="8.46530"/>
+  <node id="700542" lat="49.48307" lon="8.46530"/>
+  <node id="700543" lat="49.48307" lon="8.46513"/>
+
+  <!-- CCW Half-hipped roof (row 3, col 6) -->
+  <node id="700550" lat="49.48300" lon="8.46537"/>
+  <node id="700551" lat="49.48300" lon="8.46554"/>
+  <node id="700552" lat="49.48307" lon="8.46554"/>
+  <node id="700553" lat="49.48307" lon="8.46537"/>
+
+  <!-- CCW Gambrel roof (row 3, col 7) -->
+  <node id="700560" lat="49.48300" lon="8.46561"/>
+  <node id="700561" lat="49.48300" lon="8.46578"/>
+  <node id="700562" lat="49.48307" lon="8.46578"/>
+  <node id="700563" lat="49.48307" lon="8.46561"/>
+
+  <!-- CCW Mansard roof (row 4, col 1) -->
+  <node id="700570" lat="49.48280" lon="8.46420"/>
+  <node id="700571" lat="49.48280" lon="8.46437"/>
+  <node id="700572" lat="49.48287" lon="8.46437"/>
+  <node id="700573" lat="49.48287" lon="8.46420"/>
+
+  <!-- CCW Round roof (row 4, col 2) -->
+  <node id="700580" lat="49.48280" lon="8.46444"/>
+  <node id="700581" lat="49.48280" lon="8.46461"/>
+  <node id="700582" lat="49.48287" lon="8.46461"/>
+  <node id="700583" lat="49.48287" lon="8.46444"/>
+
+  <!-- CCW Dome roof (row 4, col 3) -->
+  <node id="700590" lat="49.48280" lon="8.46468"/>
+  <node id="700591" lat="49.48280" lon="8.46482"/>
+  <node id="700592" lat="49.48287" lon="8.46482"/>
+  <node id="700593" lat="49.48287" lon="8.46468"/>
+
+  <!-- CCW Onion dome roof (row 4, col 4) -->
+  <node id="700600" lat="49.48280" lon="8.46492"/>
+  <node id="700601" lat="49.48280" lon="8.46506"/>
+  <node id="700602" lat="49.48287" lon="8.46506"/>
+  <node id="700603" lat="49.48287" lon="8.46492"/>
+
+  <!-- CCW Saltbox roof (row 4, col 5) -->
+  <node id="700610" lat="49.48280" lon="8.46513"/>
+  <node id="700611" lat="49.48280" lon="8.46530"/>
+  <node id="700612" lat="49.48287" lon="8.46530"/>
+  <node id="700613" lat="49.48287" lon="8.46513"/>
+
+  <!-- CCW Sawtooth roof (row 4, col 6) -->
+  <node id="700620" lat="49.48280" lon="8.46537"/>
+  <node id="700621" lat="49.48280" lon="8.46559"/>
+  <node id="700622" lat="49.48287" lon="8.46559"/>
+  <node id="700623" lat="49.48287" lon="8.46537"/>
+
+  <!-- ============================================================ -->
   <!-- MOTORWAY (S-curve SW to NE, passing through south of town)   -->
   <!-- ============================================================ -->
   <node id="700" lat="49.4830" lon="8.4640"/>
@@ -1163,7 +1246,7 @@
     <tag k="building" v="house"/>
     <tag k="building:levels" v="2"/>
     <tag k="roof:shape" v="flat"/>
-    <tag k="name" v="Flat Roof"/>
+    <tag k="name" v="Flat Roof (CW)"/>
   </way>
 
   <!-- Gabled roof -->
@@ -1178,7 +1261,7 @@
     <tag k="roof:shape" v="gabled"/>
     <tag k="roof:height" v="4"/>
     <tag k="roof:colour" v="red"/>
-    <tag k="name" v="Gabled Roof"/>
+    <tag k="name" v="Gabled Roof (CW)"/>
   </way>
 
   <!-- Hipped roof -->
@@ -1193,7 +1276,7 @@
     <tag k="roof:shape" v="hipped"/>
     <tag k="roof:height" v="3.5"/>
     <tag k="roof:colour" v="brown"/>
-    <tag k="name" v="Hipped Roof"/>
+    <tag k="name" v="Hipped Roof (CW)"/>
   </way>
 
   <!-- Pyramidal roof -->
@@ -1208,7 +1291,7 @@
     <tag k="roof:shape" v="pyramidal"/>
     <tag k="roof:height" v="4"/>
     <tag k="roof:colour" v="grey"/>
-    <tag k="name" v="Pyramidal Roof"/>
+    <tag k="name" v="Pyramidal Roof (CW)"/>
   </way>
 
   <!-- Skillion roof -->
@@ -1222,7 +1305,7 @@
     <tag k="building:levels" v="1"/>
     <tag k="roof:shape" v="skillion"/>
     <tag k="roof:height" v="2"/>
-    <tag k="name" v="Skillion Roof"/>
+    <tag k="name" v="Skillion Roof (CW)"/>
   </way>
 
   <!-- Half-hipped roof -->
@@ -1237,7 +1320,7 @@
     <tag k="roof:shape" v="half-hipped"/>
     <tag k="roof:height" v="3.5"/>
     <tag k="roof:colour" v="red"/>
-    <tag k="name" v="Half-Hipped Roof"/>
+    <tag k="name" v="Half-Hipped Roof (CW)"/>
   </way>
 
   <!-- Gambrel roof -->
@@ -1252,7 +1335,7 @@
     <tag k="roof:shape" v="gambrel"/>
     <tag k="roof:height" v="4"/>
     <tag k="roof:colour" v="brown"/>
-    <tag k="name" v="Gambrel Roof"/>
+    <tag k="name" v="Gambrel Roof (CW)"/>
   </way>
 
   <!-- Mansard roof -->
@@ -1267,7 +1350,7 @@
     <tag k="roof:shape" v="mansard"/>
     <tag k="roof:height" v="3"/>
     <tag k="roof:colour" v="grey"/>
-    <tag k="name" v="Mansard Roof"/>
+    <tag k="name" v="Mansard Roof (CW)"/>
   </way>
 
   <!-- Round roof -->
@@ -1281,7 +1364,7 @@
     <tag k="building:levels" v="1"/>
     <tag k="roof:shape" v="round"/>
     <tag k="roof:height" v="3"/>
-    <tag k="name" v="Round Roof"/>
+    <tag k="name" v="Round Roof (CW)"/>
   </way>
 
   <!-- Dome roof -->
@@ -1296,7 +1379,7 @@
     <tag k="roof:shape" v="dome"/>
     <tag k="roof:height" v="5"/>
     <tag k="roof:colour" v="white"/>
-    <tag k="name" v="Dome Roof"/>
+    <tag k="name" v="Dome Roof (CW)"/>
   </way>
 
   <!-- Onion dome roof -->
@@ -1311,7 +1394,7 @@
     <tag k="roof:shape" v="onion"/>
     <tag k="roof:height" v="6"/>
     <tag k="roof:colour" v="green"/>
-    <tag k="name" v="Onion Dome Roof"/>
+    <tag k="name" v="Onion Dome Roof (CW)"/>
   </way>
 
   <!-- Saltbox roof -->
@@ -1326,7 +1409,7 @@
     <tag k="roof:shape" v="saltbox"/>
     <tag k="roof:height" v="3.5"/>
     <tag k="roof:colour" v="brown"/>
-    <tag k="name" v="Saltbox Roof"/>
+    <tag k="name" v="Saltbox Roof (CW)"/>
   </way>
 
   <!-- Sawtooth roof -->
@@ -1340,7 +1423,202 @@
     <tag k="building:levels" v="1"/>
     <tag k="roof:shape" v="sawtooth"/>
     <tag k="roof:height" v="3"/>
-    <tag k="name" v="Sawtooth Roof"/>
+    <tag k="name" v="Sawtooth Roof (CW)"/>
+  </way>
+
+  <!-- ============================================================ -->
+  <!-- WAYS — Roof type showcase CCW winding (rows 3 & 4)           -->
+  <!-- Node order reversed: SW→NW→NE→SE (opposite of rows 1 & 2)   -->
+  <!-- ============================================================ -->
+
+  <!-- CCW Flat roof -->
+  <way id="5300">
+    <nd ref="700500"/>
+    <nd ref="700503"/>
+    <nd ref="700502"/>
+    <nd ref="700501"/>
+    <nd ref="700500"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="flat"/>
+    <tag k="name" v="Flat Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Gabled roof -->
+  <way id="5310">
+    <nd ref="700510"/>
+    <nd ref="700513"/>
+    <nd ref="700512"/>
+    <nd ref="700511"/>
+    <nd ref="700510"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="gabled"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="red"/>
+    <tag k="name" v="Gabled Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Hipped roof -->
+  <way id="5320">
+    <nd ref="700520"/>
+    <nd ref="700523"/>
+    <nd ref="700522"/>
+    <nd ref="700521"/>
+    <nd ref="700520"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="hipped"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Hipped Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Pyramidal roof -->
+  <way id="5330">
+    <nd ref="700530"/>
+    <nd ref="700533"/>
+    <nd ref="700532"/>
+    <nd ref="700531"/>
+    <nd ref="700530"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="pyramidal"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="grey"/>
+    <tag k="name" v="Pyramidal Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Skillion roof -->
+  <way id="5340">
+    <nd ref="700540"/>
+    <nd ref="700543"/>
+    <nd ref="700542"/>
+    <nd ref="700541"/>
+    <nd ref="700540"/>
+    <tag k="building" v="garage"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="skillion"/>
+    <tag k="roof:height" v="2"/>
+    <tag k="name" v="Skillion Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Half-hipped roof -->
+  <way id="5350">
+    <nd ref="700550"/>
+    <nd ref="700553"/>
+    <nd ref="700552"/>
+    <nd ref="700551"/>
+    <nd ref="700550"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="half-hipped"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="red"/>
+    <tag k="name" v="Half-Hipped Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Gambrel roof -->
+  <way id="5360">
+    <nd ref="700560"/>
+    <nd ref="700563"/>
+    <nd ref="700562"/>
+    <nd ref="700561"/>
+    <nd ref="700560"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="gambrel"/>
+    <tag k="roof:height" v="4"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Gambrel Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Mansard roof -->
+  <way id="5370">
+    <nd ref="700570"/>
+    <nd ref="700573"/>
+    <nd ref="700572"/>
+    <nd ref="700571"/>
+    <nd ref="700570"/>
+    <tag k="building" v="apartments"/>
+    <tag k="building:levels" v="3"/>
+    <tag k="roof:shape" v="mansard"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="roof:colour" v="grey"/>
+    <tag k="name" v="Mansard Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Round roof -->
+  <way id="5380">
+    <nd ref="700580"/>
+    <nd ref="700583"/>
+    <nd ref="700582"/>
+    <nd ref="700581"/>
+    <nd ref="700580"/>
+    <tag k="building" v="industrial"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="round"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="name" v="Round Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Dome roof -->
+  <way id="5390">
+    <nd ref="700590"/>
+    <nd ref="700593"/>
+    <nd ref="700592"/>
+    <nd ref="700591"/>
+    <nd ref="700590"/>
+    <tag k="building" v="church"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="dome"/>
+    <tag k="roof:height" v="5"/>
+    <tag k="roof:colour" v="white"/>
+    <tag k="name" v="Dome Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Onion dome roof -->
+  <way id="5400">
+    <nd ref="700600"/>
+    <nd ref="700603"/>
+    <nd ref="700602"/>
+    <nd ref="700601"/>
+    <nd ref="700600"/>
+    <tag k="building" v="church"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="onion"/>
+    <tag k="roof:height" v="6"/>
+    <tag k="roof:colour" v="green"/>
+    <tag k="name" v="Onion Dome Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Saltbox roof -->
+  <way id="5410">
+    <nd ref="700610"/>
+    <nd ref="700613"/>
+    <nd ref="700612"/>
+    <nd ref="700611"/>
+    <nd ref="700610"/>
+    <tag k="building" v="house"/>
+    <tag k="building:levels" v="2"/>
+    <tag k="roof:shape" v="saltbox"/>
+    <tag k="roof:height" v="3.5"/>
+    <tag k="roof:colour" v="brown"/>
+    <tag k="name" v="Saltbox Roof (CCW)"/>
+  </way>
+
+  <!-- CCW Sawtooth roof -->
+  <way id="5420">
+    <nd ref="700620"/>
+    <nd ref="700623"/>
+    <nd ref="700622"/>
+    <nd ref="700621"/>
+    <nd ref="700620"/>
+    <tag k="building" v="industrial"/>
+    <tag k="building:levels" v="1"/>
+    <tag k="roof:shape" v="sawtooth"/>
+    <tag k="roof:height" v="3"/>
+    <tag k="name" v="Sawtooth Roof (CCW)"/>
   </way>
 
   <!-- Relation: multipolygon building -->

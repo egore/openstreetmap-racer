@@ -379,7 +379,7 @@ func _roof_gabled(points: PackedVector3Array, base_y: float, roof_h: float,
 
 		if dot_ridge > 0.5:
 			# Side edge: create roof slope quad from eave to ridge
-			_add_quad(st_roof, eave0, eave1, ridge1, ridge0)
+			_add_quad(st_roof, eave1, eave0, ridge0, ridge1)
 
 	# Gable triangles at the two ends
 	_add_gable_ends(st_gable, points, base_y, rg)
@@ -418,7 +418,7 @@ func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float,
 			ridge_pt.y = ridge_y
 			var bl := Vector3(left.x, base_y, left.z)
 			var br := Vector3(right.x, base_y, right.z)
-			_add_tri(st, bl, br, ridge_pt)
+			_add_tri(st, br, bl, ridge_pt)
 
 # ─── Hipped roof ─────────────────────────────────────────────────────────────
 
@@ -454,16 +454,16 @@ func _roof_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 		var proj := PolygonUtils.project_xz(mid, centroid, ridge_dir)
 
 		if proj <= rs_proj:
-			_add_tri(st, p0, p1, ridge_start)
+			_add_tri(st, p1, p0, ridge_start)
 		elif proj >= re_proj:
-			_add_tri(st, p0, p1, ridge_end)
+			_add_tri(st, p1, p0, ridge_end)
 		else:
 			# Side face: quad from edge to ridge segment
 			var t0 := clampf((PolygonUtils.project_xz(p0, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
 			var t1 := clampf((PolygonUtils.project_xz(p1, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
 			var r0: Vector3 = ridge_start.lerp(ridge_end, t0)
 			var r1: Vector3 = ridge_start.lerp(ridge_end, t1)
-			_add_quad(st, p0, p1, r1, r0)
+			_add_quad(st, p1, p0, r0, r1)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
@@ -480,7 +480,7 @@ func _roof_pyramidal(points: PackedVector3Array, base_y: float, roof_h: float,
 	for i: int in range(points.size() - 1):
 		var p0 := Vector3(points[i].x, base_y, points[i].z)
 		var p1 := Vector3(points[i + 1].x, base_y, points[i + 1].z)
-		_add_tri(st, p0, p1, apex)
+		_add_tri(st, p1, p0, apex)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
@@ -562,15 +562,15 @@ func _roof_half_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 
 		if proj <= rs_proj:
 			# Hip end triangle
-			_add_tri(st, p0, p1, ridge_start)
+			_add_tri(st, p1, p0, ridge_start)
 		elif proj >= re_proj:
-			_add_tri(st, p0, p1, ridge_end)
+			_add_tri(st, p1, p0, ridge_end)
 		else:
 			var t0 := clampf((PolygonUtils.project_xz(p0, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
 			var t1 := clampf((PolygonUtils.project_xz(p1, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
 			var r0: Vector3 = ridge_start.lerp(ridge_end, t0)
 			var r1: Vector3 = ridge_start.lerp(ridge_end, t1)
-			_add_quad(st, p0, p1, r1, r0)
+			_add_quad(st, p1, p0, r0, r1)
 
 	# Gable walls below the hip portion
 	_add_gable_ends(st_gable, points, base_y, rg)
@@ -631,9 +631,9 @@ func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 			break1.y = break_y
 
 			# Lower steep slope: eave to break
-			_add_quad(st, eave0, eave1, break1, break0)
+			_add_quad(st, eave1, eave0, break0, break1)
 			# Upper shallow slope: break to ridge
-			_add_quad(st, break0, break1, ridge1, ridge0)
+			_add_quad(st, break1, break0, ridge0, ridge1)
 
 	_add_gable_ends(st_gable, points, base_y, rg)
 
@@ -667,7 +667,7 @@ func _roof_mansard(points: PackedVector3Array, base_y: float, roof_h: float,
 			var tp0 := Vector3(t0.x, top_y, t0.z)
 			var tp1 := Vector3(t1.x, top_y, t1.z)
 
-			_add_quad(st, p0, p1, tp1, tp0)
+			_add_quad(st, p1, p0, tp0, tp1)
 
 		# Flat top
 		var top_mi := PolygonUtils.build_flat_polygon_mesh(top_points, roof_color, top_y)
@@ -927,7 +927,7 @@ func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 			var ridge0: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t0)
 			var ridge1: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t1)
 
-			_add_quad(st, eave0, eave1, ridge1, ridge0)
+			_add_quad(st, eave1, eave0, ridge0, ridge1)
 
 	_add_gable_ends(st_gable, points, base_y, rg)
 
