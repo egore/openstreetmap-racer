@@ -77,6 +77,11 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	for node: Node3D in roof_nodes:
 		root.add_child(node)
 
+	# Add floating label if building has a name tag
+	if tags.has("name") and tags["name"] != "":
+		var label := _create_building_label(tags["name"], points, height)
+		root.add_child(label)
+
 	return root
 
 func _get_building_height(tags: Dictionary) -> float:
@@ -136,6 +141,21 @@ func _parse_color(c: String) -> Color:
 	if named_colors.has(c):
 		return named_colors[c]
 	return Color.BLACK
+
+func _create_building_label(text: String, points: PackedVector3Array, height: float) -> Label3D:
+	var label := Label3D.new()
+	label.name = "Label"
+	label.text = text
+	label.pixel_size = 0.01
+	label.font_size = 32
+	label.outline_size = 8
+	label.modulate = Color.WHITE
+	label.outline_modulate = Color(0.1, 0.1, 0.1, 0.8)
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	var centroid := PolygonUtils.polygon_centroid(points)
+	label.position = Vector3(centroid.x, BUILDING_Y + height + 1.0, centroid.z)
+	return label
 
 func _is_polygon_ccw(points: PackedVector3Array) -> bool:
 	return PolygonUtils.is_polygon_ccw(points)

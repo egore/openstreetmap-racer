@@ -45,121 +45,121 @@
     <tag k="highway" v="bus_stop"/>
   </node>
 
-  <!-- Building corner nodes -->
-  <node id="200" lat="49.4855" lon="8.4690"/>
-  <node id="201" lat="49.4855" lon="8.4700"/>
-  <node id="202" lat="49.4860" lon="8.4700"/>
-  <node id="203" lat="49.4860" lon="8.4690"/>
+  <!-- Building corner nodes (~10m x 12m residential) -->
+  <node id="200" lat="49.48571" lon="8.46918"/>
+  <node id="201" lat="49.48571" lon="8.46935"/>
+  <node id="202" lat="49.48580" lon="8.46935"/>
+  <node id="203" lat="49.48580" lon="8.46918"/>
 
-  <!-- Second building -->
-  <node id="210" lat="49.4840" lon="8.4630"/>
-  <node id="211" lat="49.4840" lon="8.4645"/>
-  <node id="212" lat="49.4845" lon="8.4645"/>
-  <node id="213" lat="49.4845" lon="8.4630"/>
+  <!-- Second building (~15m x 20m commercial) -->
+  <node id="210" lat="49.48393" lon="8.46330"/>
+  <node id="211" lat="49.48393" lon="8.46358"/>
+  <node id="212" lat="49.48407" lon="8.46358"/>
+  <node id="213" lat="49.48407" lon="8.46330"/>
 
-  <!-- Third building (taller) -->
-  <node id="220" lat="49.4862" lon="8.4640"/>
-  <node id="221" lat="49.4862" lon="8.4655"/>
-  <node id="222" lat="49.4868" lon="8.4655"/>
-  <node id="223" lat="49.4868" lon="8.4640"/>
+  <!-- Third building (taller, ~18m x 22m apartments) -->
+  <node id="220" lat="49.48642" lon="8.46440"/>
+  <node id="221" lat="49.48642" lon="8.46470"/>
+  <node id="222" lat="49.48658" lon="8.46470"/>
+  <node id="223" lat="49.48658" lon="8.46440"/>
 
-  <!-- Residential area nodes -->
-  <node id="300" lat="49.4835" lon="8.4690"/>
-  <node id="301" lat="49.4835" lon="8.4730"/>
-  <node id="302" lat="49.4845" lon="8.4730"/>
-  <node id="303" lat="49.4845" lon="8.4690"/>
+  <!-- Residential area nodes (~60m x 80m landuse zone) -->
+  <node id="300" lat="49.48373" lon="8.46940"/>
+  <node id="301" lat="49.48373" lon="8.47050"/>
+  <node id="302" lat="49.48427" lon="8.47050"/>
+  <node id="303" lat="49.48427" lon="8.46940"/>
 
-  <!-- Park area nodes -->
-  <node id="310" lat="49.4870" lon="8.4710"/>
-  <node id="311" lat="49.4870" lon="8.4740"/>
-  <node id="312" lat="49.4885" lon="8.4740"/>
-  <node id="313" lat="49.4885" lon="8.4710"/>
+  <!-- Park area nodes (~80m x 100m) -->
+  <node id="310" lat="49.48740" lon="8.47180"/>
+  <node id="311" lat="49.48740" lon="8.47318"/>
+  <node id="312" lat="49.48812" lon="8.47318"/>
+  <node id="313" lat="49.48812" lon="8.47180"/>
 
   <!-- === Roof type showcase buildings === -->
 
-  <!-- Flat roof (row 1, col 1) -->
-  <node id="500" lat="49.4815" lon="8.4600"/>
-  <node id="501" lat="49.4815" lon="8.4612"/>
-  <node id="502" lat="49.4820" lon="8.4612"/>
-  <node id="503" lat="49.4820" lon="8.4600"/>
+  <!-- Flat roof (row 1, col 1) ~8m x 12m -->
+  <node id="500" lat="49.48150" lon="8.46000"/>
+  <node id="501" lat="49.48150" lon="8.46017"/>
+  <node id="502" lat="49.48157" lon="8.46017"/>
+  <node id="503" lat="49.48157" lon="8.46000"/>
 
-  <!-- Gabled roof (row 1, col 2) -->
-  <node id="510" lat="49.4815" lon="8.4616"/>
-  <node id="511" lat="49.4815" lon="8.4628"/>
-  <node id="512" lat="49.4820" lon="8.4628"/>
-  <node id="513" lat="49.4820" lon="8.4616"/>
+  <!-- Gabled roof (row 1, col 2) ~8m x 12m -->
+  <node id="510" lat="49.48150" lon="8.46024"/>
+  <node id="511" lat="49.48150" lon="8.46041"/>
+  <node id="512" lat="49.48157" lon="8.46041"/>
+  <node id="513" lat="49.48157" lon="8.46024"/>
 
-  <!-- Hipped roof (row 1, col 3) -->
-  <node id="520" lat="49.4815" lon="8.4632"/>
-  <node id="521" lat="49.4815" lon="8.4644"/>
-  <node id="522" lat="49.4820" lon="8.4644"/>
-  <node id="523" lat="49.4820" lon="8.4632"/>
+  <!-- Hipped roof (row 1, col 3) ~8m x 12m -->
+  <node id="520" lat="49.48150" lon="8.46048"/>
+  <node id="521" lat="49.48150" lon="8.46065"/>
+  <node id="522" lat="49.48157" lon="8.46065"/>
+  <node id="523" lat="49.48157" lon="8.46048"/>
 
-  <!-- Pyramidal roof (row 1, col 4) -->
-  <node id="530" lat="49.4815" lon="8.4648"/>
-  <node id="531" lat="49.4815" lon="8.4658"/>
-  <node id="532" lat="49.4820" lon="8.4658"/>
-  <node id="533" lat="49.4820" lon="8.4648"/>
+  <!-- Pyramidal roof (row 1, col 4) ~8m x 10m -->
+  <node id="530" lat="49.48150" lon="8.46072"/>
+  <node id="531" lat="49.48150" lon="8.46086"/>
+  <node id="532" lat="49.48157" lon="8.46086"/>
+  <node id="533" lat="49.48157" lon="8.46072"/>
 
-  <!-- Skillion roof (row 1, col 5) -->
-  <node id="540" lat="49.4815" lon="8.4662"/>
-  <node id="541" lat="49.4815" lon="8.4674"/>
-  <node id="542" lat="49.4820" lon="8.4674"/>
-  <node id="543" lat="49.4820" lon="8.4662"/>
+  <!-- Skillion roof (row 1, col 5) ~8m x 12m -->
+  <node id="540" lat="49.48150" lon="8.46093"/>
+  <node id="541" lat="49.48150" lon="8.46110"/>
+  <node id="542" lat="49.48157" lon="8.46110"/>
+  <node id="543" lat="49.48157" lon="8.46093"/>
 
-  <!-- Half-hipped roof (row 1, col 6) -->
-  <node id="550" lat="49.4815" lon="8.4678"/>
-  <node id="551" lat="49.4815" lon="8.4690"/>
-  <node id="552" lat="49.4820" lon="8.4690"/>
-  <node id="553" lat="49.4820" lon="8.4678"/>
+  <!-- Half-hipped roof (row 1, col 6) ~8m x 12m -->
+  <node id="550" lat="49.48150" lon="8.46117"/>
+  <node id="551" lat="49.48150" lon="8.46134"/>
+  <node id="552" lat="49.48157" lon="8.46134"/>
+  <node id="553" lat="49.48157" lon="8.46117"/>
 
-  <!-- Gambrel roof (row 1, col 7) -->
-  <node id="560" lat="49.4815" lon="8.4694"/>
-  <node id="561" lat="49.4815" lon="8.4706"/>
-  <node id="562" lat="49.4820" lon="8.4706"/>
-  <node id="563" lat="49.4820" lon="8.4694"/>
+  <!-- Gambrel roof (row 1, col 7) ~8m x 12m -->
+  <node id="560" lat="49.48150" lon="8.46141"/>
+  <node id="561" lat="49.48150" lon="8.46158"/>
+  <node id="562" lat="49.48157" lon="8.46158"/>
+  <node id="563" lat="49.48157" lon="8.46141"/>
 
-  <!-- Mansard roof (row 2, col 1) -->
-  <node id="570" lat="49.4808" lon="8.4600"/>
-  <node id="571" lat="49.4808" lon="8.4612"/>
-  <node id="572" lat="49.4813" lon="8.4612"/>
-  <node id="573" lat="49.4813" lon="8.4600"/>
+  <!-- Mansard roof (row 2, col 1) ~8m x 12m -->
+  <node id="570" lat="49.48130" lon="8.46000"/>
+  <node id="571" lat="49.48130" lon="8.46017"/>
+  <node id="572" lat="49.48137" lon="8.46017"/>
+  <node id="573" lat="49.48137" lon="8.46000"/>
 
-  <!-- Round roof (row 2, col 2) -->
-  <node id="580" lat="49.4808" lon="8.4616"/>
-  <node id="581" lat="49.4808" lon="8.4628"/>
-  <node id="582" lat="49.4813" lon="8.4628"/>
-  <node id="583" lat="49.4813" lon="8.4616"/>
+  <!-- Round roof (row 2, col 2) ~8m x 12m -->
+  <node id="580" lat="49.48130" lon="8.46024"/>
+  <node id="581" lat="49.48130" lon="8.46041"/>
+  <node id="582" lat="49.48137" lon="8.46041"/>
+  <node id="583" lat="49.48137" lon="8.46024"/>
 
-  <!-- Dome roof (row 2, col 3) -->
-  <node id="590" lat="49.4808" lon="8.4632"/>
-  <node id="591" lat="49.4808" lon="8.4642"/>
-  <node id="592" lat="49.4813" lon="8.4642"/>
-  <node id="593" lat="49.4813" lon="8.4632"/>
+  <!-- Dome roof (row 2, col 3) ~8m x 10m -->
+  <node id="590" lat="49.48130" lon="8.46048"/>
+  <node id="591" lat="49.48130" lon="8.46062"/>
+  <node id="592" lat="49.48137" lon="8.46062"/>
+  <node id="593" lat="49.48137" lon="8.46048"/>
 
-  <!-- Onion dome roof (row 2, col 4) -->
-  <node id="600" lat="49.4808" lon="8.4648"/>
-  <node id="601" lat="49.4808" lon="8.4658"/>
-  <node id="602" lat="49.4813" lon="8.4658"/>
-  <node id="603" lat="49.4813" lon="8.4648"/>
+  <!-- Onion dome roof (row 2, col 4) ~8m x 10m -->
+  <node id="600" lat="49.48130" lon="8.46072"/>
+  <node id="601" lat="49.48130" lon="8.46086"/>
+  <node id="602" lat="49.48137" lon="8.46086"/>
+  <node id="603" lat="49.48137" lon="8.46072"/>
 
-  <!-- Saltbox roof (row 2, col 5) -->
-  <node id="610" lat="49.4808" lon="8.4662"/>
-  <node id="611" lat="49.4808" lon="8.4674"/>
-  <node id="612" lat="49.4813" lon="8.4674"/>
-  <node id="613" lat="49.4813" lon="8.4662"/>
+  <!-- Saltbox roof (row 2, col 5) ~8m x 12m -->
+  <node id="610" lat="49.48130" lon="8.46093"/>
+  <node id="611" lat="49.48130" lon="8.46110"/>
+  <node id="612" lat="49.48137" lon="8.46110"/>
+  <node id="613" lat="49.48137" lon="8.46093"/>
 
-  <!-- Sawtooth roof (row 2, col 6) -->
-  <node id="620" lat="49.4808" lon="8.4678"/>
-  <node id="621" lat="49.4808" lon="8.4694"/>
-  <node id="622" lat="49.4813" lon="8.4694"/>
-  <node id="623" lat="49.4813" lon="8.4678"/>
+  <!-- Sawtooth roof (row 2, col 6) ~8m x 16m -->
+  <node id="620" lat="49.48130" lon="8.46117"/>
+  <node id="621" lat="49.48130" lon="8.46139"/>
+  <node id="622" lat="49.48137" lon="8.46139"/>
+  <node id="623" lat="49.48137" lon="8.46117"/>
 
-  <!-- Multipolygon building outer nodes -->
-  <node id="400" lat="49.4875" lon="8.4620"/>
-  <node id="401" lat="49.4875" lon="8.4635"/>
-  <node id="402" lat="49.4880" lon="8.4635"/>
-  <node id="403" lat="49.4880" lon="8.4620"/>
+  <!-- Multipolygon building outer nodes (~20m x 30m industrial) -->
+  <node id="400" lat="49.48768" lon="8.46235"/>
+  <node id="401" lat="49.48768" lon="8.46276"/>
+  <node id="402" lat="49.48786" lon="8.46276"/>
+  <node id="403" lat="49.48786" lon="8.46235"/>
 
   <!-- Main road (east-west, primary) -->
   <way id="1000">
@@ -192,6 +192,7 @@
     <nd ref="200"/>
     <tag k="building" v="residential"/>
     <tag k="building:levels" v="3"/>
+    <tag k="name" v="Residential 3-Story"/>
   </way>
 
   <!-- Building 2 -->
@@ -203,6 +204,7 @@
     <nd ref="210"/>
     <tag k="building" v="commercial"/>
     <tag k="building:levels" v="2"/>
+    <tag k="name" v="Commercial 2-Story"/>
   </way>
 
   <!-- Building 3 (taller) -->
@@ -214,6 +216,7 @@
     <nd ref="220"/>
     <tag k="building" v="apartments"/>
     <tag k="building:levels" v="5"/>
+    <tag k="name" v="Apartments 5-Story"/>
   </way>
 
   <!-- Residential landuse area -->
