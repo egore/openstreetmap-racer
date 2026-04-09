@@ -12,7 +12,7 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 3. **Road Builder** (`scripts/osm_road_builder.gd`) — Generates ribbon meshes for roads from OSM ways tagged with `highway=*`. Width and color vary by road type (motorway, primary, residential, footway, etc.).
 
-4. **Building Builder** (`scripts/osm_building_builder.gd`) — Extrudes 3D buildings from OSM way outlines tagged with `building=*`. Height is determined from `height`, `building:levels` tags, or a default.
+4. **Building Builder** (`scripts/osm_building_builder.gd`) — Extrudes 3D buildings from OSM way outlines tagged with `building=*`. Height is determined from `height`, `building:levels` tags, or a default. Supports `roof:shape` with 12 roof types (flat, gabled, hipped, pyramidal, skillion, half-hipped, gambrel, mansard, round, dome, onion, saltbox, sawtooth) plus `roof:height`, `roof:colour`, `roof:levels`, and `roof:orientation` tags.
 
 5. **Asset Placer** (`scripts/osm_asset_placer.gd`) — Places colored placeholder boxes for point features (nodes with tags): traffic lights (green box), trees (green box), benches (brown box), street lamps (yellow pole), bus stops (blue box), etc. **Edit the `ASSET_DEFS` dictionary to add more asset types.**
 
@@ -93,24 +93,3 @@ For larger maps, consider:
 - Streaming from **`.osm.pbf`** files with a custom C++ GDExtension
 
 The current `.osm` file approach works well for areas up to ~10 km².
-
-## Project Structure
-
-```
-openstreetmap-racer/
-├── project.godot
-├── README.md
-├── data/
-│   └── map.osm              # Place your OSM export here
-├── scenes/
-│   └── main.tscn             # Main game scene
-└── scripts/
-    ├── main.gd               # Main scene logic
-    ├── car_controller.gd     # WASD car driving
-    ├── osm_parser.gd         # .osm XML parser
-    ├── osm_tile_manager.gd   # Dynamic tile loading
-    ├── osm_road_builder.gd   # Road mesh generation
-    ├── osm_building_builder.gd # Building extrusion
-    ├── osm_asset_placer.gd   # Placeholder asset placement
-    └── osm_relation_builder.gd # Relation handling
-```
