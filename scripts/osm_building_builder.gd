@@ -47,6 +47,10 @@ func build_building_from_polygon(points: PackedVector3Array, tags: Dictionary, i
 	return _build_building_mesh(points, tags, id)
 
 func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int) -> Node3D:
+	# Normalize winding to CCW so all wall/roof code can assume consistent vertex order
+	if not _is_polygon_ccw(points):
+		points = _reverse_polygon(points)
+
 	var height := _get_building_height(tags)
 	var roof_shape := _get_roof_shape(tags)
 	var roof_height := _get_roof_height(tags, roof_shape)
@@ -136,15 +140,26 @@ func _parse_color(c: String) -> Color:
 func _is_polygon_ccw(points: PackedVector3Array) -> bool:
 	return PolygonUtils.is_polygon_ccw(points)
 
+## Reverse polygon vertex order while keeping the closing duplicate vertex at the end.
+func _reverse_polygon(points: PackedVector3Array) -> PackedVector3Array:
+	var count := points.size()
+	var closed := count > 1 and points[0].distance_to(points[count - 1]) < 0.01
+	var inner_count := count - 1 if closed else count
+	var result: PackedVector3Array = []
+	for i: int in range(inner_count - 1, -1, -1):
+		result.append(points[i])
+	if closed:
+		result.append(result[0])
+	return result
+
 func _build_walls(points: PackedVector3Array, height: float, color: Color) -> MeshInstance3D:
+	# Points are always CCW (normalized in _build_building_mesh)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	st.set_material(mat)
-
-	var ccw := _is_polygon_ccw(points)
 
 	for i: int in range(points.size() - 1):
 		var p0 := points[i]
@@ -155,44 +170,23 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 		var tr := Vector3(p1.x, BUILDING_Y + height, p1.z)
 		var tl := Vector3(p0.x, BUILDING_Y + height, p0.z)
 
-		# Compute wall normal (flip based on winding)
 		var wall_dir := (br - bl).normalized()
-		var normal: Vector3
-		if ccw:
-			normal = Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
-		else:
-			normal = Vector3(-wall_dir.z, 0.0, wall_dir.x).normalized()
+		var normal := Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
 
-		if ccw:
-			# CCW polygon: bl -> tr -> br, bl -> tl -> tr
-			st.set_normal(normal)
-			st.add_vertex(bl)
-			st.set_normal(normal)
-			st.add_vertex(tr)
-			st.set_normal(normal)
-			st.add_vertex(br)
+		# CCW polygon: bl -> tr -> br, bl -> tl -> tr
+		st.set_normal(normal)
+		st.add_vertex(bl)
+		st.set_normal(normal)
+		st.add_vertex(tr)
+		st.set_normal(normal)
+		st.add_vertex(br)
 
-			st.set_normal(normal)
-			st.add_vertex(bl)
-			st.set_normal(normal)
-			st.add_vertex(tl)
-			st.set_normal(normal)
-			st.add_vertex(tr)
-		else:
-			# CW polygon: bl -> br -> tr, bl -> tr -> tl
-			st.set_normal(normal)
-			st.add_vertex(bl)
-			st.set_normal(normal)
-			st.add_vertex(br)
-			st.set_normal(normal)
-			st.add_vertex(tr)
-
-			st.set_normal(normal)
-			st.add_vertex(bl)
-			st.set_normal(normal)
-			st.add_vertex(tr)
-			st.set_normal(normal)
-			st.add_vertex(tl)
+		st.set_normal(normal)
+		st.add_vertex(bl)
+		st.set_normal(normal)
+		st.add_vertex(tl)
+		st.set_normal(normal)
+		st.add_vertex(tr)
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Walls"
@@ -317,25 +311,6 @@ func _compute_ridge_geometry(points: PackedVector3Array, base_y: float, roof_h: 
 		"base_y": base_y,
 	}
 
-## For each polygon edge vertex, compute its roof height based on distance from ridge.
-## Returns an array of Y values at the roof surface for each point.
-func _compute_vertex_roof_y(points: PackedVector3Array, rg: Dictionary) -> PackedFloat64Array:
-	var result: PackedFloat64Array = []
-	var min_perp: float = rg["min_perp"]
-	var max_perp: float = rg["max_perp"]
-	var centroid: Vector3 = rg["centroid"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var ridge_y: float = rg["ridge_y"]
-	var base_y_val: float = rg["base_y"]
-	var perp_span := maxf(abs(max_perp - min_perp), 0.001)
-	var half_span := perp_span / 2.0
-	for p: Vector3 in points:
-		var perp := PolygonUtils.project_xz(p, centroid, perp_dir)
-		var dist_from_center := absf(perp - (min_perp + max_perp) / 2.0)
-		var t := clampf(dist_from_center / half_span, 0.0, 1.0)
-		result.append(lerpf(ridge_y, base_y_val, t))
-	return result
-
 # ─── Flat roof ────────────────────────────────────────────────────────────────
 
 func _roof_flat(points: PackedVector3Array, base_y: float, color: Color) -> Array[Node3D]:
@@ -350,20 +325,41 @@ func _roof_flat(points: PackedVector3Array, base_y: float, color: Color) -> Arra
 func _roof_gabled(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
 	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
-	var roof_ys := _compute_vertex_roof_y(points, rg)
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var ridge_start: Vector3 = rg["ridge_start"]
+	var ridge_end: Vector3 = rg["ridge_end"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
 
 	var st_roof := _new_st(roof_color)
 	var st_gable := _new_st(wall_color)
 
-	# Roof surface: for each edge of the polygon, create a quad from base_y to roof height
+	# For each polygon edge, project it onto the ridge to form a roof slope quad.
+	# Skip edges that are roughly perpendicular to the ridge (gable ends).
 	for i: int in range(points.size() - 1):
 		var p0 := points[i]
 		var p1 := points[i + 1]
-		var bl := Vector3(p0.x, base_y, p0.z)
-		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, roof_ys[i + 1], p1.z)
-		var tl := Vector3(p0.x, roof_ys[i], p0.z)
-		_add_quad(st_roof, bl, br, tr, tl)
+		var eave0 := Vector3(p0.x, base_y, p0.z)
+		var eave1 := Vector3(p1.x, base_y, p1.z)
+
+		# Project each eave vertex along perp_dir onto the ridge line
+		var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
+		var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
+		var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+		var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+		var ridge0: Vector3 = ridge_start.lerp(ridge_end, t0)
+		var ridge1: Vector3 = ridge_start.lerp(ridge_end, t1)
+
+		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
+		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
+		var dot_ridge := absf(edge_dir.dot(ridge_dir))
+
+		if dot_ridge > 0.5:
+			# Side edge: create roof slope quad from eave to ridge
+			_add_quad(st_roof, eave0, eave1, ridge1, ridge0)
 
 	# Gable triangles at the two ends
 	_add_gable_ends(st_gable, points, base_y, rg)
@@ -403,7 +399,6 @@ func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float,
 			var bl := Vector3(left.x, base_y, left.z)
 			var br := Vector3(right.x, base_y, right.z)
 			_add_tri(st, bl, br, ridge_pt)
-			_add_tri(st, br, bl, ridge_pt)
 
 # ─── Hipped roof ─────────────────────────────────────────────────────────────
 
@@ -481,34 +476,30 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 	var min_perp: float = rg["min_perp"]
 	var perp_span := absf(float(rg["max_perp"]) - min_perp)
 
-	# Skillion: one side is high, the other is at base_y
+	# Compute the roof Y for each vertex based on perpendicular position
+	var roof_points: PackedVector3Array = []
+	for p: Vector3 in points:
+		var perp := PolygonUtils.project_xz(p, centroid, perp_dir)
+		var t := clampf((perp - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
+		roof_points.append(Vector3(p.x, base_y + roof_h * t, p.z))
+
+	# Roof surface: triangulated sloped polygon
 	var st_roof := _new_st(roof_color)
+	var indices := PolygonUtils.triangulate_xz(roof_points)
+	if indices.size() > 0:
+		for idx: int in range(0, indices.size(), 3):
+			_add_tri(st_roof, roof_points[indices[idx]], roof_points[indices[idx + 1]], roof_points[indices[idx + 2]])
+
+	# Wall extension quads: fill the gap between wall top (base_y) and roof on each edge
 	var st_wall := _new_st(wall_color)
-
 	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-		# Height based on perpendicular position: 0 on one side, roof_h on the other
-		var perp0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
-		var perp1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
-		var t0 := clampf((perp0 - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
-		var t1 := clampf((perp1 - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
-		var y0 := base_y + roof_h * t0
-		var y1 := base_y + roof_h * t1
-
-		# Roof surface
-		var bl := Vector3(p0.x, base_y, p0.z)
-		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, y1, p1.z)
-		var tl := Vector3(p0.x, y0, p0.z)
-		_add_quad(st_roof, bl, br, tr, tl)
-
-		# Wall extension triangles on sides where roof rises above wall height
+		var y0 := roof_points[i].y
+		var y1 := roof_points[i + 1].y
 		if y0 > base_y + 0.01 or y1 > base_y + 0.01:
-			var wall_bl := Vector3(p0.x, base_y, p0.z)
-			var wall_br := Vector3(p1.x, base_y, p1.z)
-			var wall_tr := Vector3(p1.x, y1, p1.z)
-			var wall_tl := Vector3(p0.x, y0, p0.z)
+			var wall_bl := Vector3(points[i].x, base_y, points[i].z)
+			var wall_br := Vector3(points[i + 1].x, base_y, points[i + 1].z)
+			var wall_tr := Vector3(points[i + 1].x, y1, points[i + 1].z)
+			var wall_tl := Vector3(points[i].x, y0, points[i].z)
 			_add_quad(st_wall, wall_bl, wall_br, wall_tr, wall_tl)
 
 	var result: Array[Node3D] = []
@@ -575,13 +566,20 @@ func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
 	# Gambrel: two slopes on each side - steep lower, shallow upper
 	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
+	var ridge_start: Vector3 = rg["ridge_start"]
+	var ridge_end: Vector3 = rg["ridge_end"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
 	var min_perp: float = rg["min_perp"]
 	var max_perp: float = rg["max_perp"]
-	var perp_mid: float = (min_perp + max_perp) / 2.0
-
-	var break_frac := 0.5  # break point at 50% of the way from eave to ridge
+	var perp_span := absf(max_perp - min_perp)
+	var half_perp := perp_span / 2.0
+	var break_frac := 0.5  # break point at 50% from eave to ridge
+	var break_y := base_y + roof_h * 0.65  # Y at the break point
 
 	var st := _new_st(roof_color)
 	var st_gable := _new_st(wall_color)
@@ -590,18 +588,32 @@ func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 		var p0 := points[i]
 		var p1 := points[i + 1]
 
-		var perp0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
-		var perp1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
+		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
+		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
+		var dot_ridge := absf(edge_dir.dot(ridge_dir))
 
-		# Compute roof Y for each vertex using gambrel profile
-		var y0 := _gambrel_y(perp0, perp_mid, min_perp, max_perp, base_y, roof_h, break_frac)
-		var y1 := _gambrel_y(perp1, perp_mid, min_perp, max_perp, base_y, roof_h, break_frac)
+		if dot_ridge > 0.5:
+			var eave0 := Vector3(p0.x, base_y, p0.z)
+			var eave1 := Vector3(p1.x, base_y, p1.z)
 
-		var bl := Vector3(p0.x, base_y, p0.z)
-		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, y1, p1.z)
-		var tl := Vector3(p0.x, y0, p0.z)
-		_add_quad(st, bl, br, tr, tl)
+			# Project eave points onto ridge line
+			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
+			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
+			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var ridge0: Vector3 = ridge_start.lerp(ridge_end, t0)
+			var ridge1: Vector3 = ridge_start.lerp(ridge_end, t1)
+
+			# Break point: midway between eave and ridge (in XZ)
+			var break0 := eave0.lerp(ridge0, break_frac)
+			break0.y = break_y
+			var break1 := eave1.lerp(ridge1, break_frac)
+			break1.y = break_y
+
+			# Lower steep slope: eave to break
+			_add_quad(st, eave0, eave1, break1, break0)
+			# Upper shallow slope: break to ridge
+			_add_quad(st, break0, break1, ridge1, ridge0)
 
 	_add_gable_ends(st_gable, points, base_y, rg)
 
@@ -609,21 +621,6 @@ func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 	result.append(_make_mesh(st, "Roof"))
 	result.append(_make_mesh(st_gable, "Gables"))
 	return result
-
-func _gambrel_y(perp: float, perp_mid: float, min_perp: float, max_perp: float,
-		base_y: float, roof_h: float, break_frac: float) -> float:
-	var half_span := absf(max_perp - min_perp) / 2.0
-	if half_span < 0.001:
-		return base_y + roof_h
-	var dist := absf(perp - perp_mid)
-	var t := clampf(dist / half_span, 0.0, 1.0)  # 0 at ridge, 1 at eave
-	if t < break_frac:
-		# Upper shallow slope
-		return base_y + roof_h - (t / break_frac) * roof_h * 0.35
-	else:
-		# Lower steep slope
-		var lower_t := (t - break_frac) / (1.0 - break_frac)
-		return base_y + roof_h * 0.65 - lower_t * roof_h * 0.65
 
 # ─── Mansard roof ────────────────────────────────────────────────────────────
 
@@ -684,13 +681,20 @@ func _roof_round(points: PackedVector3Array, base_y: float, roof_h: float,
 	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
 	var perp_mid: float = (float(rg["min_perp"]) + float(rg["max_perp"])) / 2.0
 
+	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var st := _new_st(roof_color)
 	var segments := 8  # number of arc segments
 
-	# For each polygon edge pair, create an arched cross-section
+	# For each polygon edge pair, create an arched cross-section (only for side edges)
 	for i: int in range(points.size() - 1):
 		var p0 := points[i]
 		var p1 := points[i + 1]
+
+		# Only generate arc for side edges (parallel to ridge)
+		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
+		var dot_ridge := absf(edge_dir.dot(ridge_dir))
+		if dot_ridge < 0.5:
+			continue
 
 		# Generate arc vertices for each of the two base points
 		for seg: int in range(segments):
@@ -761,7 +765,6 @@ func _add_round_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: 
 			)
 			var vc := Vector3(end_center.x, base_y, end_center.z)
 			_add_tri(st, vc, v0, v1)
-			_add_tri(st, vc, v1, v0)
 
 # ─── Dome roof ───────────────────────────────────────────────────────────────
 
@@ -861,15 +864,25 @@ func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
 	# Saltbox: asymmetric gable - ridge is off-center, one slope longer than the other
 	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
+	var ridge_start: Vector3 = rg["ridge_start"]
+	var ridge_end: Vector3 = rg["ridge_end"]
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
 	var min_perp: float = rg["min_perp"]
 	var max_perp: float = rg["max_perp"]
 	var perp_span := absf(max_perp - min_perp)
 	var perp_mid: float = (min_perp + max_perp) / 2.0
 
-	# Ridge offset: 1/3 from one side
-	var ridge_perp: float = perp_mid + perp_span * 0.17  # offset toward max_perp side
+	# Ridge offset: 1/3 from one side (offset toward max_perp side)
+	var ridge_perp_offset := perp_span * 0.17
+	# Shift the ridge line in the perp direction
+	var ridge_offset_vec := perp_dir * ridge_perp_offset
+	var offset_ridge_start := ridge_start + ridge_offset_vec
+	var offset_ridge_end := ridge_end + ridge_offset_vec
 
 	var st := _new_st(roof_color)
 	var st_gable := _new_st(wall_color)
@@ -878,14 +891,23 @@ func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 		var p0 := points[i]
 		var p1 := points[i + 1]
 
-		var y0 := _saltbox_y(p0, centroid, perp_dir, min_perp, max_perp, ridge_perp, base_y, roof_h)
-		var y1 := _saltbox_y(p1, centroid, perp_dir, min_perp, max_perp, ridge_perp, base_y, roof_h)
+		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
+		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
+		var dot_ridge := absf(edge_dir.dot(ridge_dir))
 
-		var bl := Vector3(p0.x, base_y, p0.z)
-		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, y1, p1.z)
-		var tl := Vector3(p0.x, y0, p0.z)
-		_add_quad(st, bl, br, tr, tl)
+		if dot_ridge > 0.5:
+			var eave0 := Vector3(p0.x, base_y, p0.z)
+			var eave1 := Vector3(p1.x, base_y, p1.z)
+
+			# Project eave points onto the offset ridge line
+			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
+			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
+			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
+			var ridge0: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t0)
+			var ridge1: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t1)
+
+			_add_quad(st, eave0, eave1, ridge1, ridge0)
 
 	_add_gable_ends(st_gable, points, base_y, rg)
 
@@ -893,23 +915,6 @@ func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 	result.append(_make_mesh(st, "Roof"))
 	result.append(_make_mesh(st_gable, "Gables"))
 	return result
-
-func _saltbox_y(point: Vector3, centroid: Vector3, perp_dir: Vector3,
-		min_perp: float, max_perp: float, ridge_perp: float,
-		base_y: float, roof_h: float) -> float:
-	var perp := PolygonUtils.project_xz(point, centroid, perp_dir)
-	if perp <= ridge_perp:
-		var span := absf(ridge_perp - min_perp)
-		if span < 0.001:
-			return base_y + roof_h
-		var t := clampf((ridge_perp - perp) / span, 0.0, 1.0)
-		return base_y + roof_h * (1.0 - t)
-	else:
-		var span := absf(max_perp - ridge_perp)
-		if span < 0.001:
-			return base_y + roof_h
-		var t := clampf((perp - ridge_perp) / span, 0.0, 1.0)
-		return base_y + roof_h * (1.0 - t)
 
 # ─── Sawtooth roof ───────────────────────────────────────────────────────────
 
@@ -925,26 +930,35 @@ func _roof_sawtooth(points: PackedVector3Array, base_y: float, roof_h: float,
 	var tooth_count := maxi(int(perp_span / 4.0), 2)  # one tooth every ~4 meters
 	var tooth_width := perp_span / tooth_count
 
+	# Compute the roof Y for each vertex based on sawtooth profile
+	var roof_points: PackedVector3Array = []
+	for p: Vector3 in points:
+		var perp := PolygonUtils.project_xz(p, centroid, perp_dir)
+		var y := _sawtooth_y(perp, min_perp, tooth_width, tooth_count, base_y, roof_h)
+		roof_points.append(Vector3(p.x, y, p.z))
+
+	# Roof surface: triangulated polygon at varying heights
 	var st_roof := _new_st(roof_color)
+	var indices := PolygonUtils.triangulate_xz(roof_points)
+	if indices.size() > 0:
+		for idx: int in range(0, indices.size(), 3):
+			_add_tri(st_roof, roof_points[indices[idx]], roof_points[indices[idx + 1]], roof_points[indices[idx + 2]])
 
+	# Wall faces: fill the gap between wall top (base_y) and roof on each edge
+	var st_wall := _new_st(wall_color)
 	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-
-		var perp0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
-		var perp1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
-
-		var y0 := _sawtooth_y(perp0, min_perp, tooth_width, tooth_count, base_y, roof_h)
-		var y1 := _sawtooth_y(perp1, min_perp, tooth_width, tooth_count, base_y, roof_h)
-
-		var bl := Vector3(p0.x, base_y, p0.z)
-		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, y1, p1.z)
-		var tl := Vector3(p0.x, y0, p0.z)
-		_add_quad(st_roof, bl, br, tr, tl)
+		var y0 := roof_points[i].y
+		var y1 := roof_points[i + 1].y
+		if y0 > base_y + 0.01 or y1 > base_y + 0.01:
+			var wall_bl := Vector3(points[i].x, base_y, points[i].z)
+			var wall_br := Vector3(points[i + 1].x, base_y, points[i + 1].z)
+			var wall_tr := Vector3(points[i + 1].x, y1, points[i + 1].z)
+			var wall_tl := Vector3(points[i].x, y0, points[i].z)
+			_add_quad(st_wall, wall_bl, wall_br, wall_tr, wall_tl)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st_roof, "Roof"))
+	result.append(_make_mesh(st_wall, "SawtoothWalls"))
 	return result
 
 func _sawtooth_y(perp: float, min_perp: float, tooth_width: float, tooth_count: int,
