@@ -1,3 +1,6 @@
 /.godot
 *.uid
 *.blend1
+
+# Documentation used as inspiration
+/references
