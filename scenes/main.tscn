@@ -18,7 +18,7 @@ fog_density = 0.002
 fog_aerial_perspective = 0.5
 
 [sub_resource type="BoxShape3D" id="BoxShape_car"]
-size = Vector3(2, 1, 4)
+size = Vector3(1.8, 0.9, 4.1)
 
 [node name="Main" type="Node3D" unique_id=923917518]
 script = ExtResource("1_main")
@@ -34,18 +34,34 @@ directional_shadow_max_distance = 500.0
 [node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
 script = ExtResource("2_tile")
 
-[node name="Car" type="CharacterBody3D" parent="." unique_id=1077184071]
+[node name="Car" type="VehicleBody3D" parent="." unique_id=1077184071]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
 script = ExtResource("3_car")
+mass = 1200.0
+continuous_cd = true
+physics_material_override = null
 
 [node name="CarMesh" parent="Car" unique_id=1017002161 instance=ExtResource("4_jyhfs")]
-transform = Transform3D(-0.59999996, 0, 5.2453665e-08, 0, 0.59999996, 0, -5.2453665e-08, 0, -0.59999996, 0, 0.5864136, 0)
+transform = Transform3D(0.59999996, 0, 0, 0, 0.59999996, 0, 0, 0, 0.59999996, 0, 0.5864136, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Car" unique_id=2096323148]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
 shape = SubResource("BoxShape_car")
 
+[node name="FrontLeftWheel" type="VehicleWheel3D" parent="Car"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.9, 0.55, 1.45)
+
+[node name="FrontRightWheel" type="VehicleWheel3D" parent="Car"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.9, 0.55, 1.45)
+
+[node name="RearLeftWheel" type="VehicleWheel3D" parent="Car"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.9, 0.55, -1.45)
+
+[node name="RearRightWheel" type="VehicleWheel3D" parent="Car"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.9, 0.55, -1.45)
+
 [node name="CameraPivot" type="Node3D" parent="Car" unique_id=951089476]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
+transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 2, 0)
 
 [node name="Camera3D" type="Camera3D" parent="Car/CameraPivot" unique_id=674512223]
 transform = Transform3D(1, 0, 0, 0, 0.966, 0.259, 0, -0.259, 0.966, 0, 3, 8)

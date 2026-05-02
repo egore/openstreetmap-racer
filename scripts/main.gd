@@ -3,7 +3,7 @@ extends Node3D
 ## Main scene script. Sets up the OSM world and manages high-level game state.
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
-@onready var car: CarController = $Car
+@onready var car: VehicleBody3D = $Car
 @onready var speed_label: Label = $HUD/SpeedLabel
 @onready var info_label: Label = $HUD/InfoLabel
 
