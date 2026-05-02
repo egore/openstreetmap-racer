@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://dq5ns5ug81q20" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="Script" uid="uid://cu7o55x3fvo1w" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
 [ext_resource type="Script" uid="uid://cr3dpxilqptpj" path="res://scripts/car_controller.gd" id="3_car"]
+[ext_resource type="PackedScene" uid="uid://b00lb7g7x54e1" path="res://scenes/models/car.blend" id="4_jyhfs"]
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 1
@@ -15,12 +16,6 @@ fog_enabled = true
 fog_light_color = Color(0.7, 0.75, 0.8, 1)
 fog_density = 0.002
 fog_aerial_perspective = 0.5
-
-[sub_resource type="StandardMaterial3D" id="StdMat_car"]
-albedo_color = Color(0.8, 0.15, 0.1, 1)
-
-[sub_resource type="BoxMesh" id="BoxMesh_car"]
-size = Vector3(2, 1, 4)
 
 [sub_resource type="BoxShape3D" id="BoxShape_car"]
 size = Vector3(2, 1, 4)
@@ -42,10 +37,8 @@ script = ExtResource("2_tile")
 [node name="Car" type="CharacterBody3D" parent="." unique_id=1077184071]
 script = ExtResource("3_car")
 
-[node name="CarMesh" type="MeshInstance3D" parent="Car" unique_id=1236115454]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
-material_override = SubResource("StdMat_car")
-mesh = SubResource("BoxMesh_car")
+[node name="CarMesh" parent="Car" unique_id=1017002161 instance=ExtResource("4_jyhfs")]
+transform = Transform3D(-0.59999996, 0, 5.2453665e-08, 0, 0.59999996, 0, -5.2453665e-08, 0, -0.59999996, 0, 0.5864136, 0)
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Car" unique_id=2096323148]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)

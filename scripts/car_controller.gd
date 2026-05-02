@@ -16,7 +16,7 @@ var _steer_angle: float = 0.0
 
 @onready var camera_pivot: Node3D = $CameraPivot
 @onready var camera: Camera3D = $CameraPivot/Camera3D
-@onready var car_mesh: MeshInstance3D = $CarMesh
+@onready var car_mesh: Node3D = $CarMesh
 
 func _ready() -> void:
 	# Start slightly above ground
