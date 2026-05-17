@@ -29,17 +29,9 @@ var _wheel_mesh_rotations: Dictionary[StringName, Basis] = {}
 
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
-	center_of_mass = Vector3(0.0, -0.95, 0.0)
-	_align_wheels_to_meshes()
+	center_of_mass = Vector3(0.0, 0.35, 0.0)
 	_cache_wheel_mesh_rotations()
 	_setup_wheels()
-
-
-func _align_wheels_to_meshes() -> void:
-	front_left_wheel.position = front_left_wheel_mesh.position
-	front_right_wheel.position = front_right_wheel_mesh.position
-	rear_left_wheel.position = rear_left_wheel_mesh.position
-	rear_right_wheel.position = rear_right_wheel_mesh.position
 
 
 func _cache_wheel_mesh_rotations() -> void:
@@ -51,15 +43,15 @@ func _cache_wheel_mesh_rotations() -> void:
 
 func _setup_wheels() -> void:
 	for wheel in [front_left_wheel, front_right_wheel, rear_left_wheel, rear_right_wheel]:
-		wheel.wheel_radius = 0.38
-		wheel.wheel_rest_length = 0.14
-		wheel.suspension_travel = 0.12
-		wheel.suspension_stiffness = 70.0
-		wheel.damping_compression = 0.55
-		wheel.damping_relaxation = 0.9
-		wheel.wheel_friction_slip = 2.2
-		wheel.suspension_max_force = 18000.0
-		wheel.wheel_roll_influence = 1.0
+		wheel.wheel_radius = 0.315
+		wheel.wheel_rest_length = 0.2
+		wheel.suspension_travel = 0.2
+		wheel.suspension_stiffness = 40.0
+		wheel.damping_compression = 1.2
+		wheel.damping_relaxation = 2.3
+		wheel.wheel_friction_slip = 2.8
+		wheel.suspension_max_force = 12000.0
+		wheel.wheel_roll_influence = 0.3
 
 	front_left_wheel.use_as_steering = true
 	front_right_wheel.use_as_steering = true
