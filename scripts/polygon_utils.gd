@@ -21,6 +21,11 @@ const AREA_COLORS := {
 		"park": Color(0.35, 0.7, 0.3),
 		"pitch": Color(0.3, 0.65, 0.25),
 	},
+	"amenity": {
+		"parking": Color(0.55, 0.55, 0.55),           # asphalt grey for surface lots
+		"bicycle_parking": Color(0.5, 0.5, 0.55),
+		"motorcycle_parking": Color(0.5, 0.5, 0.55),
+	},
 }
 
 const DEFAULT_AREA_COLOR := Color(0.3, 0.6, 0.3)

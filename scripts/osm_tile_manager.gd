@@ -161,10 +161,19 @@ func _load_tile(tkey: Vector2i) -> void:
 			var barrier_node := _asset_placer.place_way_asset(way, _osm_data)
 			if barrier_node != null:
 				tile_root.add_child(barrier_node)
+		elif _is_parking(way):
+			var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+			var color := PolygonUtils.get_area_color(way.tags)
+			var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.015)
+			if mesh_instance != null:
+				mesh_instance.name = "Parking_%d" % way.id
+				tile_root.add_child(mesh_instance)
 		elif _is_area(way):
 			var mesh_instance := _build_area(way)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
+		else:
+			print_debug("Skipping way with tags", way.tags)
 
 	# Process standalone nodes (traffic lights, trees, etc.)
 	for node: OSMParser.OSMNode in bucket["nodes"]:
@@ -227,6 +236,9 @@ func _is_building(way: OSMParser.OSMWay) -> bool:
 
 func _is_barrier_way(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("barrier")
+
+func _is_parking(way: OSMParser.OSMWay) -> bool:
+	return way.tags.get("amenity", "") == "parking"
 
 func _is_area(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure") or (way.tags.has("amenity") and way.tags.has("area"))
