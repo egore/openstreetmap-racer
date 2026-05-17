@@ -1,9 +1,10 @@
 [gd_scene format=3 uid="uid://ismyghiir7xr"]
 
-[ext_resource type="Script" uid="uid://dq5ns5ug81q20" path="res://scripts/main.gd" id="1_main"]
-[ext_resource type="Script" uid="uid://cu7o55x3fvo1w" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
-[ext_resource type="Script" uid="uid://cr3dpxilqptpj" path="res://scripts/car_controller.gd" id="3_car"]
-[ext_resource type="PackedScene" uid="uid://b00lb7g7x54e1" path="res://scenes/models/car.blend" id="4_jyhfs"]
+[ext_resource type="Script" uid="uid://bmi3hy6idhvw7" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://7keje0ccjo55" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
+[ext_resource type="Script" uid="uid://bh3w0a8jfro5n" path="res://scripts/car_controller.gd" id="3_car"]
+[ext_resource type="PackedScene" uid="uid://napy0x6ewlh2" path="res://scenes/models/car.blend" id="4_jyhfs"]
+[ext_resource type="Script" uid="uid://dryhfw53b8v1j" path="res://scripts/minimap.gd" id="5_minimap"]
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 1
@@ -85,3 +86,21 @@ offset_right = 500.0
 offset_bottom = 90.0
 theme_override_font_sizes/font_size = 16
 text = "Loading..."
+
+[node name="Minimap" type="Control" parent="HUD" unique_id=150620465]
+layout_mode = 3
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -220.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("5_minimap")
+car_node_path = NodePath("../../Car")
+tile_manager_node_path = NodePath("../../OSMTileManager")
