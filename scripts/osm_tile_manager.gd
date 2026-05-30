@@ -210,6 +210,16 @@ func _unload_tile(tkey: Vector2i) -> void:
 	_loaded_tiles.erase(tkey)
 	tile_unloaded.emit(tkey)
 
+
+## Number of tiles currently kept in memory (including empty placeholders).
+func get_loaded_tile_count() -> int:
+	return _loaded_tiles.size()
+
+
+## Returns the parsed OSM data, or null if it has not loaded yet.
+func get_osm_data() -> OSMParser.OSMData:
+	return _osm_data
+
 func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
 	var ground_body := StaticBody3D.new()
 	ground_body.name = "Ground"

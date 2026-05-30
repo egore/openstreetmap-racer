@@ -57,10 +57,18 @@ func _notification(what: int) -> void:
 func _resolve_nodes() -> void:
 	if car_node_path:
 		_car = get_node_or_null(car_node_path) as VehicleBody3D
-	if tile_manager_node_path:
+	if tile_manager_node_path and _tile_manager == null:
 		_tile_manager = get_node_or_null(tile_manager_node_path) as OSMTileManager
-	if _tile_manager:
-		_osm_data = _tile_manager._osm_data
+		if _tile_manager:
+			# Pull data if it's already available, otherwise wait for the signal.
+			_osm_data = _tile_manager.get_osm_data()
+			if _osm_data == null and not _tile_manager.data_loaded.is_connected(_on_data_loaded):
+				_tile_manager.data_loaded.connect(_on_data_loaded)
+
+
+func _on_data_loaded(osm_data: OSMParser.OSMData) -> void:
+	_osm_data = osm_data
+	_cached_road_segments.clear()  # force a rebuild on the next frame
 
 
 func _process(_delta: float) -> void:
