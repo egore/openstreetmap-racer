@@ -15,6 +15,13 @@ signal speed_changed(speed_kmh: float)
 @export var max_steer_angle: float = 0.32
 @export var min_steer_angle: float = 0.05
 
+## Locks the rear wheels when the handbrake (Space) is held. Much stronger than the
+## regular brake so the rear axle stops rotating and breaks traction.
+@export var handbrake_force_value: float = 200.0
+## Rear-tyre grip while the handbrake is held. The lower this is relative to the normal
+## wheel_friction_slip (2.0), the easier the back end steps out into a drift.
+@export var handbrake_rear_friction: float = 0.6
+
 ## How aggressively the car resists rolling onto its side. 0 disables the assist.
 @export var anti_roll_strength: float = 9000.0
 ## Roll angle (radians) past which the assist torque kicks in.
@@ -34,6 +41,12 @@ signal speed_changed(speed_kmh: float)
 @onready var rear_right_wheel_mesh: Node3D = $CarMesh/Wheel_Rear_Left
 
 var _wheel_mesh_rotations: Dictionary[StringName, Basis] = {}
+
+## Rear-tyre grip when the handbrake is not held, captured from _setup_wheels so the
+## drift grip can be restored to whatever the wheels were originally tuned to.
+var _rear_grip_normal: float = 2.0
+## Tracks the current rear-grip state so we only write to the wheels on a change.
+var _rear_grip_lowered: bool = false
 
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
@@ -82,10 +95,24 @@ func _setup_wheels() -> void:
 	rear_left_wheel.use_as_traction = true
 	rear_right_wheel.use_as_traction = true
 
+	# Remember the rear grip so the handbrake can drop it for a drift and restore it.
+	_rear_grip_normal = rear_left_wheel.wheel_friction_slip
+
+
+func _set_rear_friction(lowered: bool) -> void:
+	if lowered == _rear_grip_lowered:
+		return
+	_rear_grip_lowered = lowered
+	var grip := handbrake_rear_friction if lowered else _rear_grip_normal
+	rear_left_wheel.wheel_friction_slip = grip
+	rear_right_wheel.wheel_friction_slip = grip
+
 func _physics_process(_delta: float) -> void:
 	var forward_input := Input.get_action_strength("move_forward")
 	var reverse_input := Input.get_action_strength("move_backward")
 	var steer_input := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
+	var handbrake_input := Input.get_action_strength("handbrake")
+	var handbrake_active := handbrake_input > 0.0
 	var forward_speed := linear_velocity.dot(global_transform.basis.z)
 	var speed_ratio: float = clamp(abs(forward_speed) / max_speed, 0.0, 1.0)
 	var steer_limit: float = lerp(max_steer_angle, min_steer_angle, speed_ratio)
@@ -106,12 +133,22 @@ func _physics_process(_delta: float) -> void:
 	if forward_speed > max_speed and engine_force > 0.0:
 		engine_force = 0.0
 
+	# Handbrake: lock the rear axle and break its grip so the back end can slide.
+	# Cut engine force so the player can't power through the locked wheels, and apply
+	# a strong brake to the rear only — the unbraked front wheels stay free to steer,
+	# which is what lets the car rotate into a drift.
+	var rear_brake := brake_force
+	if handbrake_active:
+		engine_force = 0.0
+		rear_brake = handbrake_force_value * handbrake_input
+	_set_rear_friction(handbrake_active)
+
 	front_left_wheel.steering = steer_input * steer_limit
 	front_right_wheel.steering = steer_input * steer_limit
 	rear_left_wheel.engine_force = engine_force
 	rear_right_wheel.engine_force = engine_force
-	rear_left_wheel.brake = brake_force
-	rear_right_wheel.brake = brake_force
+	rear_left_wheel.brake = rear_brake
+	rear_right_wheel.brake = rear_brake
 	front_left_wheel.brake = brake_force * 0.35
 	front_right_wheel.brake = brake_force * 0.35
 	_apply_anti_roll(_delta)
