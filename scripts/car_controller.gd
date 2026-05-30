@@ -3,6 +3,9 @@ extends VehicleBody3D
 
 ## VehicleBody3D-based car controller with simple arcade tuning.
 
+## Emitted every physics frame with the current speed in km/h (mainly for the HUD).
+signal speed_changed(speed_kmh: float)
+
 @export var max_speed: float = 55.0
 @export var reverse_max_speed: float = 18.0
 @export var engine_force_value: float = 3200.0
@@ -98,7 +101,7 @@ func _physics_process(_delta: float) -> void:
 	_sync_wheel_meshes()
 	_update_camera_pivot(_delta)
 
-	_update_hud()
+	_broadcast_speed()
 
 
 func _sync_wheel_meshes() -> void:
@@ -122,8 +125,6 @@ func _update_camera_pivot(delta: float) -> void:
 	var target_basis := Basis.looking_at(flat_forward, Vector3.UP)
 	camera_pivot.global_basis = camera_pivot.global_basis.slerp(target_basis, clamp(delta * 6.0, 0.0, 1.0))
 
-func _update_hud() -> void:
+func _broadcast_speed() -> void:
 	var speed_kmh: float = linear_velocity.length() * 3.6
-	var hud := get_node_or_null("/root/Main/HUD/SpeedLabel")
-	if hud and hud is Label:
-		(hud as Label).text = "%d km/h" % int(speed_kmh)
+	speed_changed.emit(speed_kmh)

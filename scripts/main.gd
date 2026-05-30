@@ -11,6 +11,9 @@ func _ready() -> void:
 	# Capture mouse for camera control
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
+	# Dependency injection: the car broadcasts its speed, the HUD reacts.
+	car.speed_changed.connect(_on_car_speed_changed)
+
 	# React to tile streaming instead of polling a private field every frame.
 	tile_manager.tile_loaded.connect(_on_tiles_changed)
 	tile_manager.tile_unloaded.connect(_on_tiles_changed)
@@ -29,6 +32,9 @@ func _process(_delta: float) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+func _on_car_speed_changed(speed_kmh: float) -> void:
+	speed_label.text = "%d km/h" % int(speed_kmh)
 
 func _on_tiles_changed(_tile_key: Vector2i) -> void:
 	_update_info_label()
