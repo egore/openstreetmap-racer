@@ -1,9 +1,11 @@
 extends Node3D
 
 ## Main scene script. Sets up the OSM world and manages high-level game state.
+## Acts as the composition root: it wires the car and tile manager to the HUD
+## via signals instead of having those nodes reach across the tree themselves.
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
-@onready var car: VehicleBody3D = $Car
+@onready var car: CarController = $Car
 @onready var speed_label: Label = $HUD/SpeedLabel
 @onready var info_label: Label = $HUD/InfoLabel
 
