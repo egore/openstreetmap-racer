@@ -7,6 +7,7 @@ extends Node3D
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
 @onready var speed_label: Label = $HUD/SpeedLabel
+@onready var gear_label: Label = $HUD/GearLabel
 @onready var info_label: Label = $HUD/InfoLabel
 @onready var pause_menu: CanvasLayer = $PauseMenu
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/ResumeButton
@@ -19,8 +20,9 @@ func _ready() -> void:
 	# Capture mouse for camera control
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
-	# Dependency injection: the car broadcasts its speed, the HUD reacts.
+	# Dependency injection: the car broadcasts its speed and gear, the HUD reacts.
 	car.speed_changed.connect(_on_car_speed_changed)
+	car.gear_changed.connect(_on_car_gear_changed)
 
 	# React to tile streaming instead of polling a private field every frame.
 	tile_manager.tile_loaded.connect(_on_tiles_changed)
@@ -56,6 +58,9 @@ func _on_quit_pressed() -> void:
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
 	speed_label.text = "%d km/h" % int(speed_kmh)
+
+func _on_car_gear_changed(gear: int) -> void:
+	gear_label.text = Transmission.gear_label(gear)
 
 func _on_tiles_changed(_tile_key: Vector2i) -> void:
 	_update_info_label()

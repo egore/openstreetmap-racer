@@ -6,6 +6,10 @@ extends VehicleBody3D
 ## Emitted every physics frame with the current speed in km/h (mainly for the HUD).
 signal speed_changed(speed_kmh: float)
 
+## Emitted only when the active gear changes (e.g. -1 reverse, 0 neutral, 1..6).
+## The HUD listens to this so it can show the current gear without polling.
+signal gear_changed(gear: int)
+
 @export var max_speed: float = 55.0
 @export var reverse_max_speed: float = 18.0
 @export var engine_force_value: float = 3200.0
@@ -48,6 +52,14 @@ var _rear_grip_normal: float = 2.0
 ## Tracks the current rear-grip state so we only write to the wheels on a change.
 var _rear_grip_lowered: bool = false
 
+## Gearbox helper. Maps the car's speed onto a gear for the HUD (and, later, for
+## engine-sound pitch). Purely cosmetic right now — the gear does not feed back
+## into engine_force — but it lives here so the sound system has a single, stable
+## source of "what gear are we in" once audio is wired up.
+var _transmission := Transmission.new()
+## Last gear we emitted, so gear_changed only fires on an actual shift.
+var _current_gear: int = Transmission.GEAR_NEUTRAL
+
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	# Drop the centre of mass well below the wheel mounts (wheels sit at ~Y 0.32).
@@ -58,6 +70,9 @@ func _ready() -> void:
 	inertia = Vector3(2200.0, 1400.0, 900.0)
 	_cache_wheel_mesh_rotations()
 	_setup_wheels()
+	# Pre-compute the gear speed bands from this car's top speed so the very first
+	# gear lookup is cheap and the HUD can show a gear immediately.
+	_transmission.build_for_max_speed(max_speed * 3.6)
 
 
 func _cache_wheel_mesh_rotations() -> void:
@@ -156,6 +171,7 @@ func _physics_process(_delta: float) -> void:
 	_update_camera_pivot(_delta)
 
 	_broadcast_speed()
+	_update_gear(forward_speed)
 
 
 func _apply_anti_roll(_delta: float) -> void:
@@ -208,3 +224,13 @@ func _update_camera_pivot(delta: float) -> void:
 func _broadcast_speed() -> void:
 	var speed_kmh: float = linear_velocity.length() * 3.6
 	speed_changed.emit(speed_kmh)
+
+
+## Resolves the current gear from the signed forward speed and emits gear_changed
+## only on a real shift. forward_speed is in m/s (the car's native unit); the
+## transmission works in km/h, so both it and max_speed are converted with *3.6.
+func _update_gear(forward_speed: float) -> void:
+	var gear := _transmission.gear_for_speed(forward_speed * 3.6, max_speed * 3.6)
+	if gear != _current_gear:
+		_current_gear = gear
+		gear_changed.emit(gear)
