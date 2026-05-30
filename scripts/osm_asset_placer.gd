@@ -59,6 +59,88 @@ const ASSET_DEFS := {
 	},
 }
 
+## Place a whole tile's worth of point assets at once.
+##
+## Placeholder-box assets that share the same definition (same mesh size +
+## colour) are merged into a single MultiMeshInstance3D, collapsing what used
+## to be one MeshInstance3D + material per node into one draw call per asset
+## type. Scene-based assets (trees, bollards, ...) and their labels keep the
+## per-instance path since they are full imported sub-scenes.
+##
+## Returns a single container Node3D holding all placed assets for the tile,
+## or null if nothing was placed.
+func place_assets_batched(nodes: Array) -> Node3D:
+	if nodes.is_empty():
+		return null
+
+	var root := Node3D.new()
+	root.name = "Assets"
+
+	# Group placeholder-box nodes by a key derived from their definition so
+	# identical assets land in the same MultiMesh.
+	var box_groups: Dictionary = {}  # group_key -> { def, transforms: Array[Transform3D] }
+
+	for node: OSMParser.OSMNode in nodes:
+		var def := _find_asset_def(node.tags)
+		if def.is_empty():
+			continue
+
+		if def.has("scene"):
+			# Scene assets are not trivially batchable; keep the existing path.
+			var placed := place_asset(node)
+			if placed != null:
+				root.add_child(placed)
+			continue
+
+		var key := _box_group_key(def)
+		if not box_groups.has(key):
+			box_groups[key] = { "def": def, "transforms": [] as Array[Transform3D] }
+		var y_offset: float = def["y_offset"]
+		var xform := Transform3D(Basis.IDENTITY, node.local_pos + Vector3(0.0, y_offset, 0.0))
+		box_groups[key]["transforms"].append(xform)
+
+	for key: String in box_groups:
+		var group: Dictionary = box_groups[key]
+		var mmi := _build_box_multimesh(group["def"], group["transforms"])
+		if mmi != null:
+			root.add_child(mmi)
+
+	if root.get_child_count() == 0:
+		root.free()
+		return null
+	return root
+
+
+func _box_group_key(def: Dictionary) -> String:
+	var size: Vector3 = def["size"]
+	var color: Color = def["color"]
+	return "%s|%s" % [size, color]
+
+
+func _build_box_multimesh(def: Dictionary, transforms: Array) -> MultiMeshInstance3D:
+	if transforms.is_empty():
+		return null
+
+	var box := BoxMesh.new()
+	box.size = def["size"]
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = def["color"]
+	box.material = mat
+
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.mesh = box
+	multimesh.instance_count = transforms.size()
+	for i: int in range(transforms.size()):
+		multimesh.set_instance_transform(i, transforms[i])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "%s_x%d" % [def["label"].replace(" ", ""), transforms.size()]
+	mmi.multimesh = multimesh
+	return mmi
+
+
 func place_asset(node: OSMParser.OSMNode) -> Node3D:
 	var def := _find_asset_def(node.tags)
 	if def.is_empty():

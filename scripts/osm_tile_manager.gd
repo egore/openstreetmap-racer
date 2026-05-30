@@ -184,11 +184,12 @@ func _load_tile(tkey: Vector2i) -> void:
 		else:
 			print_debug("Skipping way with tags", way.tags)
 
-	# Process standalone nodes (traffic lights, trees, etc.)
-	for node: OSMParser.OSMNode in bucket["nodes"]:
-		var placeholder := _asset_placer.place_asset(node)
-		if placeholder != null:
-			tile_root.add_child(placeholder)
+	# Process standalone nodes (traffic lights, trees, etc.).
+	# Placeholder-box assets are merged into MultiMeshInstance3D batches inside
+	# the placer; scene assets are still instanced individually.
+	var assets_root := _asset_placer.place_assets_batched(bucket["nodes"])
+	if assets_root != null:
+		tile_root.add_child(assets_root)
 
 	# Process relations (multipolygon buildings, etc.)
 	var processed_rel_ids := {}
