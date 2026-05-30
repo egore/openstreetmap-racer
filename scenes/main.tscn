@@ -103,3 +103,42 @@ mouse_filter = 2
 script = ExtResource("5_minimap")
 car_node_path = NodePath("../../Car")
 tile_manager_node_path = NodePath("../../OSMTileManager")
+
+[node name="PauseMenu" type="CanvasLayer" parent="." unique_id=300100001]
+process_mode = 3
+layer = 10
+visible = false
+
+[node name="Dimmer" type="ColorRect" parent="PauseMenu" unique_id=300100002]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.5)
+
+[node name="CenterContainer" type="CenterContainer" parent="PauseMenu" unique_id=300100003]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="VBoxContainer" parent="PauseMenu/CenterContainer" unique_id=300100004]
+custom_minimum_size = Vector2(280, 0)
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="PauseMenu/CenterContainer/Panel" unique_id=300100005]
+theme_override_font_sizes/font_size = 40
+text = "Paused"
+horizontal_alignment = 1
+
+[node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100006]
+custom_minimum_size = Vector2(0, 48)
+theme_override_font_sizes/font_size = 22
+text = "Resume"
+
+[node name="QuitButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100007]
+custom_minimum_size = Vector2(0, 48)
+theme_override_font_sizes/font_size = 22
+text = "Quit"
