@@ -3,6 +3,13 @@ extends Node3D
 
 ## Manages a grid of tiles around the camera. Loads/unloads tiles dynamically.
 
+## Emitted once the OSM file has been parsed and the spatial index is ready.
+signal data_loaded(osm_data: OSMParser.OSMData)
+## Emitted whenever a tile's geometry has been instanced into the scene.
+signal tile_loaded(tile_key: Vector2i)
+## Emitted whenever a tile is freed.
+signal tile_unloaded(tile_key: Vector2i)
+
 @export var osm_file_path: String = "res://data/map.osm"
 @export var tile_size: float = 200.0  # meters per tile edge
 @export var load_radius: int = 2      # tiles in each direction to keep loaded
@@ -34,6 +41,7 @@ func _load_osm_data() -> void:
 		return
 	_build_spatial_index()
 	print("OSMTileManager: Spatial index built, ready for tile loading")
+	data_loaded.emit(_osm_data)
 
 func _build_spatial_index() -> void:
 	_spatial_index.clear()
@@ -132,6 +140,7 @@ func _load_tile(tkey: Vector2i) -> void:
 	if not _spatial_index.has(tkey):
 		# Empty tile, still mark as loaded so we don't retry
 		_loaded_tiles[tkey] = null
+		tile_loaded.emit(tkey)
 		return
 
 	var bucket: Dictionary = _spatial_index[tkey]
@@ -192,12 +201,14 @@ func _load_tile(tkey: Vector2i) -> void:
 			tile_root.add_child(rel_node)
 
 	_loaded_tiles[tkey] = tile_root
+	tile_loaded.emit(tkey)
 
 func _unload_tile(tkey: Vector2i) -> void:
 	var tile_node: Node3D = _loaded_tiles[tkey]
 	if tile_node != null:
 		tile_node.queue_free()
 	_loaded_tiles.erase(tkey)
+	tile_unloaded.emit(tkey)
 
 func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
 	var ground_body := StaticBody3D.new()
