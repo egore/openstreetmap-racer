@@ -73,7 +73,7 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	var roof_shape := _get_roof_shape(tags)
 	var roof_height := _get_roof_height(tags, roof_shape)
 	var roof_color := _get_roof_color(tags)
-	var building_type: String = tags.get("building", "yes")
+	var building_type: String = tags.get("building", tags.get("building:part", "yes"))
 	var wall_color: Color = BUILDING_COLORS.get(building_type, DEFAULT_BUILDING_COLOR)
 	if tags.has("building:colour"):
 		var parsed := _parse_color(tags["building:colour"].strip_edges().to_lower())

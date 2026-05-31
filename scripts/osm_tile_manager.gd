@@ -151,6 +151,30 @@ func _load_tile(tkey: Vector2i) -> void:
 	# Build ground plane for the tile
 	_build_ground(tile_root, tkey)
 
+	# Collect building:part ways and determine which building outlines to suppress
+	var building_part_ways: Array[OSMParser.OSMWay] = []
+	var suppressed_building_ids: Dictionary = {}  # building way IDs to skip 3D rendering
+
+	for way: OSMParser.OSMWay in bucket["ways"]:
+		if _is_building_part(way):
+			building_part_ways.append(way)
+
+	if building_part_ways.size() > 0:
+		# For each building:part, find the parent building=* outline that contains it
+		for part: OSMParser.OSMWay in building_part_ways:
+			var part_points := PolygonUtils.way_to_points(part.node_ids, _osm_data.nodes)
+			if part_points.size() < 3:
+				continue
+			var part_centroid := PolygonUtils.polygon_centroid(part_points)
+			for way: OSMParser.OSMWay in bucket["ways"]:
+				if not way.tags.has("building") or way.tags.has("building:part"):
+					continue
+				var bld_points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+				if bld_points.size() < 3:
+					continue
+				if _point_in_polygon_xz(part_centroid, bld_points):
+					suppressed_building_ids[way.id] = true
+
 	# Process ways (roads, buildings from ways, etc.)
 	var processed_way_ids := {}
 	for way: OSMParser.OSMWay in bucket["ways"]:
@@ -163,9 +187,10 @@ func _load_tile(tkey: Vector2i) -> void:
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
 		elif _is_building(way):
-			var mesh_instance := _building_builder.build_building_from_way(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
+			if not suppressed_building_ids.has(way.id):
+				var mesh_instance := _building_builder.build_building_from_way(way, _osm_data)
+				if mesh_instance != null:
+					tile_root.add_child(mesh_instance)
 		elif _is_barrier_way(way):
 			var barrier_node := _asset_placer.place_way_asset(way, _osm_data)
 			if barrier_node != null:
@@ -183,6 +208,15 @@ func _load_tile(tkey: Vector2i) -> void:
 				tile_root.add_child(mesh_instance)
 		else:
 			print_debug("Skipping way with tags", way.tags)
+
+	# Render building:part ways as 3D buildings
+	for part: OSMParser.OSMWay in building_part_ways:
+		if processed_way_ids.has(part.id):
+			continue
+		processed_way_ids[part.id] = true
+		var mesh_instance := _building_builder.build_building_from_way(part, _osm_data)
+		if mesh_instance != null:
+			tile_root.add_child(mesh_instance)
 
 	# Process standalone nodes (traffic lights, trees, etc.).
 	# Placeholder-box assets are merged into MultiMeshInstance3D batches inside
@@ -256,6 +290,9 @@ func _is_road(way: OSMParser.OSMWay) -> bool:
 func _is_building(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("building")
 
+func _is_building_part(way: OSMParser.OSMWay) -> bool:
+	return way.tags.has("building:part")
+
 func _is_barrier_way(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("barrier")
 
@@ -264,6 +301,19 @@ func _is_parking(way: OSMParser.OSMWay) -> bool:
 
 func _is_area(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure") or (way.tags.has("amenity") and way.tags.has("area"))
+
+func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
+	var inside := false
+	var n := polygon.size()
+	var j := n - 1
+	for i: int in range(n):
+		var pi := polygon[i]
+		var pj := polygon[j]
+		if ((pi.z > point.z) != (pj.z > point.z)) and \
+				(point.x < (pj.x - pi.x) * (point.z - pi.z) / (pj.z - pi.z) + pi.x):
+			inside = not inside
+		j = i
+	return inside
 
 func _build_area(way: OSMParser.OSMWay) -> MeshInstance3D:
 	# Simple colored flat polygon for land use areas
