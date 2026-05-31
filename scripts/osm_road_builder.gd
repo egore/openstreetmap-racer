@@ -64,11 +64,17 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	var width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
 	var color: Color = ROAD_COLORS.get(highway_type, DEFAULT_COLOR)
 
-	# Check for lanes tag to override width
+	# Check for lanes tag to adjust width based on lane count
 	if way.tags.has("lanes"):
 		var lanes: int = way.tags["lanes"].to_int()
 		if lanes > 0:
 			width = lanes * 3.5
+
+	# Explicit width tag takes highest precedence (width excluding sidewalk)
+	if way.tags.has("width"):
+		var explicit_width: float = way.tags["width"].to_float()
+		if explicit_width > 0.0:
+			width = explicit_width
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Road_%d" % way.id
