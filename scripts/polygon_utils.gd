@@ -90,6 +90,75 @@ static func is_polygon_ccw(points: PackedVector3Array) -> bool:
 		signed_area += points[i].x * points[i + 1].z - points[i + 1].x * points[i].z
 	return signed_area < 0.0
 
+## Reverse a polygon's vertex order while preserving the closing duplicate vertex
+## at the end (if the input was closed). Used to flip winding direction.
+static func reverse_polygon(points: PackedVector3Array) -> PackedVector3Array:
+	var count := points.size()
+	var closed := count > 1 and points[0].distance_to(points[count - 1]) < 0.01
+	var inner_count := count - 1 if closed else count
+	var result: PackedVector3Array = []
+	for i: int in range(inner_count - 1, -1, -1):
+		result.append(points[i])
+	if closed and result.size() > 0:
+		result.append(result[0])
+	return result
+
+## Return the polygon wound counter-clockwise. OSM ways are authored CW or CCW
+## arbitrarily; downstream geometry that depends on a consistent vertex order
+## (outward wall normals, etc.) should normalize through this single entry point.
+static func normalize_to_ccw(points: PackedVector3Array) -> PackedVector3Array:
+	if is_polygon_ccw(points):
+		return points
+	return reverse_polygon(points)
+
+## Shading normal used by add_tri for triangle (a, b, c): (b - a) x (c - a).
+## NOTE: This is the OPPOSITE sign of Godot's winding-front / culling normal
+## (Plane(a, b, c).normal). Call sites in the building builder choose their
+## vertex winding to make this convention point outward, so it is preserved here.
+static func tri_shading_normal(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
+	return (b - a).cross(c - a)
+
+## Emit a triangle (a -> b -> c) to a SurfaceTool with an auto-computed shading
+## normal (see tri_shading_normal). Degenerate triangles fall back to UP.
+static func add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	var normal := tri_shading_normal(a, b, c)
+	if normal.length_squared() < 0.000001:
+		normal = Vector3.UP
+	else:
+		normal = normal.normalized()
+	st.set_normal(normal)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.add_vertex(c)
+
+## Emit a quad (a, b, c, d in order) to a SurfaceTool so that its visible front
+## face (per backface culling) points along desired_normal, regardless of the
+## input vertex winding. The shading normal is set explicitly to desired_normal
+## so lighting and culling agree. This is the winding-agnostic path for geometry
+## built from OSM ways whose CW/CCW direction is not known in advance.
+static func add_quad_facing(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, desired_normal: Vector3) -> void:
+	# Culling uses the winding-front normal Plane(a, b, c).normal == -tri_shading_normal.
+	# Pick the winding whose front face points along desired_normal.
+	var front_normal := -tri_shading_normal(a, b, c)
+	if front_normal.dot(desired_normal) >= 0.0:
+		_add_tri_with_normal(st, a, b, c, desired_normal)
+		_add_tri_with_normal(st, a, c, d, desired_normal)
+	else:
+		_add_tri_with_normal(st, a, c, b, desired_normal)
+		_add_tri_with_normal(st, a, d, c, desired_normal)
+
+## Emit a triangle with an explicit shading normal (used by add_quad_facing so
+## the lit normal matches the requested facing direction rather than the winding).
+static func _add_tri_with_normal(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, normal: Vector3) -> void:
+	st.set_normal(normal)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.add_vertex(c)
+
 ## Compute the centroid of a polygon in the XZ plane.
 static func polygon_centroid(points: PackedVector3Array) -> Vector3:
 	var cx := 0.0

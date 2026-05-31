@@ -259,21 +259,4 @@ func _add_sidewalk_segment(st: SurfaceTool, edge_start: Vector3, edge_end: Vecto
 		_add_quad_facing(st, inner_end_bottom, outer_end_bottom, outer_end_top, inner_end_top, cap_normal)
 
 func _add_quad_facing(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, desired_normal: Vector3) -> void:
-	# Compute the actual face normal from the winding order
-	var face_normal := (b - a).cross(c - a)
-	# If the winding produces a normal opposite to desired, flip the quad
-	if face_normal.dot(desired_normal) < 0.0:
-		_add_tri(st, a, b, c)
-		_add_tri(st, a, c, d)
-	else:
-		_add_tri(st, a, c, b)
-		_add_tri(st, a, d, c)
-
-func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var normal := Plane(a, b, c).normal
-	st.set_normal(normal)
-	st.add_vertex(a)
-	st.set_normal(normal)
-	st.add_vertex(b)
-	st.set_normal(normal)
-	st.add_vertex(c)
+	PolygonUtils.add_quad_facing(st, a, b, c, d, desired_normal)

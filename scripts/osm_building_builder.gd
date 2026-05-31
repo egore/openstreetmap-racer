@@ -86,8 +86,7 @@ func build_building_from_polygon(points: PackedVector3Array, tags: Dictionary, i
 
 func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int) -> Node3D:
 	# Normalize winding to CCW so all wall/roof code can assume consistent vertex order
-	if not _is_polygon_ccw(points):
-		points = _reverse_polygon(points)
+	points = PolygonUtils.normalize_to_ccw(points)
 
 	var height := _get_building_height(tags)
 	var min_height := _get_min_height(tags)
@@ -275,21 +274,6 @@ func _create_building_label(text: String, points: PackedVector3Array, height: fl
 	label.position = Vector3(centroid.x, BUILDING_Y + height + 1.0, centroid.z)
 	return label
 
-func _is_polygon_ccw(points: PackedVector3Array) -> bool:
-	return PolygonUtils.is_polygon_ccw(points)
-
-## Reverse polygon vertex order while keeping the closing duplicate vertex at the end.
-func _reverse_polygon(points: PackedVector3Array) -> PackedVector3Array:
-	var count := points.size()
-	var closed := count > 1 and points[0].distance_to(points[count - 1]) < 0.01
-	var inner_count := count - 1 if closed else count
-	var result: PackedVector3Array = []
-	for i: int in range(inner_count - 1, -1, -1):
-		result.append(points[i])
-	if closed:
-		result.append(result[0])
-	return result
-
 func _build_walls(points: PackedVector3Array, height: float, color: Color, base_y: float = 0.0) -> MeshInstance3D:
 	# Points are always CCW (normalized in _build_building_mesh)
 	var st := SurfaceTool.new()
@@ -385,15 +369,7 @@ func _get_perp_dir(ridge_dir: Vector3) -> Vector3:
 # ─── Helper: add a triangle to SurfaceTool with auto-computed normal ─────────
 
 func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
-	var normal := (b - a).cross(c - a).normalized()
-	if normal.length_squared() < 0.001:
-		normal = Vector3.UP
-	st.set_normal(normal)
-	st.add_vertex(a)
-	st.set_normal(normal)
-	st.add_vertex(b)
-	st.set_normal(normal)
-	st.add_vertex(c)
+	PolygonUtils.add_tri(st, a, b, c)
 
 func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
 	_add_tri(st, a, b, c)

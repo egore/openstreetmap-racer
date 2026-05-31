@@ -203,6 +203,10 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	# Thin linear features (fences/walls) should stay visible from both sides.
+	# Geometry is now single-winding (one set of faces), so disable backface
+	# culling on the material instead of emitting duplicate flipped triangles.
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	st.set_material(mat)
 
 	var half_w := width / 2.0
@@ -225,116 +229,27 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 		var tl1 := Vector3(bl1.x, height, bl1.z)
 		var tr1 := Vector3(br1.x, height, br1.z)
 
-		# Top face
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tl0)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tr1)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tr0)
-
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tl0)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tl1)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(tr1)
-
-		# Left face (both windings so it's visible from either side)
+		# A linear OSM way (fence/wall) has no inherent CW/CCW orientation, so
+		# each face is emitted via add_quad_facing with an explicit desired
+		# normal. This keeps the winding handling consistent with the rest of
+		# the codebase and avoids the previous double-sided geometry.
 		var left_normal := -right.normalized()
-		st.set_normal(left_normal)
-		st.add_vertex(bl0)
-		st.set_normal(left_normal)
-		st.add_vertex(tl0)
-		st.set_normal(left_normal)
-		st.add_vertex(tl1)
-
-		st.set_normal(left_normal)
-		st.add_vertex(bl0)
-		st.set_normal(left_normal)
-		st.add_vertex(tl1)
-		st.set_normal(left_normal)
-		st.add_vertex(bl1)
-
-		var left_normal_inv := -left_normal
-		st.set_normal(left_normal_inv)
-		st.add_vertex(bl0)
-		st.set_normal(left_normal_inv)
-		st.add_vertex(tl1)
-		st.set_normal(left_normal_inv)
-		st.add_vertex(tl0)
-
-		st.set_normal(left_normal_inv)
-		st.add_vertex(bl0)
-		st.set_normal(left_normal_inv)
-		st.add_vertex(bl1)
-		st.set_normal(left_normal_inv)
-		st.add_vertex(tl1)
-
-		# Right face (both windings so it's visible from either side)
 		var right_normal := right.normalized()
-		st.set_normal(right_normal)
-		st.add_vertex(br0)
-		st.set_normal(right_normal)
-		st.add_vertex(tr1)
-		st.set_normal(right_normal)
-		st.add_vertex(tr0)
 
-		st.set_normal(right_normal)
-		st.add_vertex(br0)
-		st.set_normal(right_normal)
-		st.add_vertex(br1)
-		st.set_normal(right_normal)
-		st.add_vertex(tr1)
+		# Top face — faces up
+		PolygonUtils.add_quad_facing(st, tl0, tr0, tr1, tl1, Vector3.UP)
+		# Left face — faces left (-right)
+		PolygonUtils.add_quad_facing(st, bl0, tl0, tl1, bl1, left_normal)
+		# Right face — faces right
+		PolygonUtils.add_quad_facing(st, br0, tr0, tr1, br1, right_normal)
 
-		var right_normal_inv := -right_normal
-		st.set_normal(right_normal_inv)
-		st.add_vertex(br0)
-		st.set_normal(right_normal_inv)
-		st.add_vertex(tr0)
-		st.set_normal(right_normal_inv)
-		st.add_vertex(tr1)
-
-		st.set_normal(right_normal_inv)
-		st.add_vertex(br0)
-		st.set_normal(right_normal_inv)
-		st.add_vertex(tr1)
-		st.set_normal(right_normal_inv)
-		st.add_vertex(br1)
-
-		# Start cap (first segment only)
+		# Start cap (first segment only) — faces back along the way
 		if i == 0:
-			var cap_normal := -forward
-			st.set_normal(cap_normal)
-			st.add_vertex(bl0)
-			st.set_normal(cap_normal)
-			st.add_vertex(tr0)
-			st.set_normal(cap_normal)
-			st.add_vertex(br0)
+			PolygonUtils.add_quad_facing(st, bl0, br0, tr0, tl0, -forward)
 
-			st.set_normal(cap_normal)
-			st.add_vertex(bl0)
-			st.set_normal(cap_normal)
-			st.add_vertex(tl0)
-			st.set_normal(cap_normal)
-			st.add_vertex(tr0)
-
-		# End cap (last segment only)
+		# End cap (last segment only) — faces forward along the way
 		if i == points.size() - 2:
-			var cap_normal := forward
-			st.set_normal(cap_normal)
-			st.add_vertex(bl1)
-			st.set_normal(cap_normal)
-			st.add_vertex(br1)
-			st.set_normal(cap_normal)
-			st.add_vertex(tr1)
-
-			st.set_normal(cap_normal)
-			st.add_vertex(bl1)
-			st.set_normal(cap_normal)
-			st.add_vertex(tr1)
-			st.set_normal(cap_normal)
-			st.add_vertex(tl1)
+			PolygonUtils.add_quad_facing(st, bl1, br1, tr1, tl1, forward)
 
 	mesh_instance.mesh = st.commit()
 	root.add_child(mesh_instance)

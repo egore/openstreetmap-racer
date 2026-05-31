@@ -59,6 +59,28 @@ https://overpass-api.de/api/map?bbox=8.46,49.48,8.48,49.49
 - **A / D** — Steer left / right
 - **Escape** — Toggle mouse capture
 
+## Testing
+
+Headless GDScript unit tests live in `tests/`. They require no external test
+framework — each suite is a `SceneTree` script that exits with a non-zero code
+on failure, making it CI-friendly.
+
+Run the whole suite:
+
+```sh
+tests/run_tests.sh
+```
+
+Or run a single suite directly (set `GODOT` if `godot` isn't on your `PATH`):
+
+```sh
+godot --headless --path . --script res://tests/test_polygon_utils.gd
+```
+
+`test_polygon_utils.gd` pins the winding-order logic in `PolygonUtils` — the
+CW/CCW normalization OSM data depends on — so refactors can't silently invert
+faces or break orientation handling.
+
 ## Customization
 
 ### Adding New Placeholder Assets
