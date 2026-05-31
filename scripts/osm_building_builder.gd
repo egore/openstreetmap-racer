@@ -4,6 +4,8 @@ extends RefCounted
 ## Builds 3D building meshes from OSM ways and relations tagged with "building".
 ## Supports roof:shape values: flat, gabled, hipped, pyramidal, skillion,
 ## half-hipped, gambrel, mansard, round, dome, onion, saltbox, sawtooth.
+## Supports roof:direction (compass bearing 0-360) which takes priority over
+## roof:orientation for specifying ridge direction.
 
 const DEFAULT_HEIGHT := 8.0       # meters if no height/levels tag
 const FLOOR_HEIGHT := 3.0         # meters per floor
@@ -107,6 +109,9 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		if MATERIAL_COLORS.has(mat_name):
 			wall_color = MATERIAL_COLORS[mat_name]
 	var roof_orientation: String = tags.get("roof:orientation", "along")
+	var roof_direction: float = -1.0
+	if tags.has("roof:direction"):
+		roof_direction = tags["roof:direction"].to_float()
 
 	# For non-flat roofs, the wall height is total height minus roof height minus min_height
 	var wall_height := height - min_height
@@ -123,7 +128,7 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		root.add_child(wall_mesh)
 
 	# Build roof based on shape (roof sits on top of the walls)
-	var roof_nodes := _build_roof_shape(points, min_height + wall_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation)
+	var roof_nodes := _build_roof_shape(points, min_height + wall_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
 	for node: Node3D in roof_nodes:
 		root.add_child(node)
 
@@ -291,39 +296,46 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color, base_
 # ─── Roof shape dispatch ─────────────────────────────────────────────────────
 
 func _build_roof_shape(points: PackedVector3Array, wall_h: float, roof_h: float,
-		roof_color: Color, wall_color: Color, shape: String, orientation: String) -> Array[Node3D]:
+		roof_color: Color, wall_color: Color, shape: String, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
 	var base_y := BUILDING_Y + wall_h
 	match shape:
 		"gabled":
-			return _roof_gabled(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_gabled(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		"hipped":
-			return _roof_hipped(points, base_y, roof_h, roof_color, orientation)
+			return _roof_hipped(points, base_y, roof_h, roof_color, orientation, roof_direction)
 		"pyramidal":
 			return _roof_pyramidal(points, base_y, roof_h, roof_color)
 		"skillion":
-			return _roof_skillion(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_skillion(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		"half-hipped":
-			return _roof_half_hipped(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_half_hipped(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		"gambrel":
-			return _roof_gambrel(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_gambrel(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		"mansard":
 			return _roof_mansard(points, base_y, roof_h, roof_color, orientation)
 		"round":
-			return _roof_round(points, base_y, roof_h, roof_color, orientation)
+			return _roof_round(points, base_y, roof_h, roof_color, orientation, roof_direction)
 		"dome":
 			return _roof_dome(points, base_y, roof_h, roof_color)
 		"onion":
 			return _roof_onion(points, base_y, roof_h, roof_color)
 		"saltbox":
-			return _roof_saltbox(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_saltbox(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		"sawtooth":
-			return _roof_sawtooth(points, base_y, roof_h, roof_color, wall_color, orientation)
+			return _roof_sawtooth(points, base_y, roof_h, roof_color, wall_color, orientation, roof_direction)
 		_:
 			return _roof_flat(points, base_y, roof_color)
 
 # ─── Helper: get ridge axis direction based on orientation tag ────────────────
 
-func _get_ridge_dir(points: PackedVector3Array, orientation: String) -> Vector3:
+func _get_ridge_dir(points: PackedVector3Array, orientation: String, roof_direction: float = -1.0) -> Vector3:
+	if roof_direction >= 0.0:
+		var d_rad := deg_to_rad(roof_direction)
+		# roof:direction is the compass bearing the roof faces (perpendicular to ridge).
+		# Compass: 0=north(-Z), 90=east(+X), 180=south(+Z), 270=west(-X).
+		# Ridge is perpendicular to the facing direction, rotated 90° CW in XZ.
+		return Vector3(cos(d_rad), 0.0, sin(d_rad)).normalized()
 	var longest := PolygonUtils.polygon_longest_edge_dir(points)
 	if orientation == "across":
 		return Vector3(-longest.z, 0.0, longest.x)
@@ -368,8 +380,8 @@ func _new_st(color: Color) -> SurfaceTool:
 ## Returns { eave_pts: PackedVector3Array at base_y, ridge_start: Vector3, ridge_end: Vector3,
 ##   ridge_dir, perp_dir, min_proj, max_proj, min_perp, max_perp }
 func _compute_ridge_geometry(points: PackedVector3Array, base_y: float, roof_h: float,
-		orientation: String) -> Dictionary:
-	var ridge_dir := _get_ridge_dir(points, orientation)
+		orientation: String, roof_direction: float = -1.0) -> Dictionary:
+	var ridge_dir := _get_ridge_dir(points, orientation, roof_direction)
 	var perp_dir := _get_perp_dir(ridge_dir)
 	var centroid := PolygonUtils.polygon_centroid(points)
 
@@ -418,8 +430,9 @@ func _roof_flat(points: PackedVector3Array, base_y: float, color: Color) -> Arra
 # ─── Gabled roof ─────────────────────────────────────────────────────────────
 
 func _roof_gabled(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
@@ -501,8 +514,9 @@ func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float,
 # ─── Hipped roof ─────────────────────────────────────────────────────────────
 
 func _roof_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, orientation: String) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+		roof_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 
 	# Inset the ridge so hip ends slope inward
 	var proj_span: float = float(rg["max_proj"]) - float(rg["min_proj"])
@@ -567,8 +581,9 @@ func _roof_pyramidal(points: PackedVector3Array, base_y: float, roof_h: float,
 # ─── Skillion roof (mono-pitch) ──────────────────────────────────────────────
 
 func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
 	var min_perp: float = rg["min_perp"]
@@ -629,8 +644,9 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 # ─── Half-hipped roof ────────────────────────────────────────────────────────
 
 func _roof_half_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 
 	var proj_span: float = float(rg["max_proj"]) - float(rg["min_proj"])
 	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
@@ -789,9 +805,10 @@ func _add_half_hipped_gable_ends(st: SurfaceTool, points: PackedVector3Array,
 # ─── Gambrel roof ────────────────────────────────────────────────────────────
 
 func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
 	# Gambrel: two slopes on each side - steep lower, shallow upper
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
@@ -948,8 +965,9 @@ func _find_closest_xz(ref: Vector3, candidates: PackedVector3Array) -> Vector3:
 # ─── Round roof ──────────────────────────────────────────────────────────────
 
 func _roof_round(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, orientation: String) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+		roof_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
 	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
@@ -1140,9 +1158,10 @@ func _onion_vertex(center: Vector3, rx: float, rz: float, h: float, base_y: floa
 # ─── Saltbox roof ────────────────────────────────────────────────────────────
 
 func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
 	# Saltbox: asymmetric gable - ridge is off-center, one slope longer than the other
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var ridge_dir: Vector3 = rg["ridge_dir"]
 	var perp_dir: Vector3 = rg["perp_dir"]
 	var centroid: Vector3 = rg["centroid"]
@@ -1198,9 +1217,10 @@ func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 # ─── Sawtooth roof ───────────────────────────────────────────────────────────
 
 func _roof_sawtooth(points: PackedVector3Array, base_y: float, roof_h: float,
-		roof_color: Color, wall_color: Color, orientation: String) -> Array[Node3D]:
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float = -1.0) -> Array[Node3D]:
 	# Sawtooth: repeated asymmetric ridges (like factory roofs)
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation)
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
 	var min_perp: float = rg["min_perp"]
 	var perp_span := absf(float(rg["max_perp"]) - min_perp)
 
