@@ -346,6 +346,12 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 		return true
 	if way.tags.get("amenity", "") == "bus_station":
 		return true
+	# Underground waterways (culverts/negative layer) are intentionally not drawn
+	# on the surface; suppress their skip noise.
+	if way.tags.has("waterway"):
+		if way.tags.get("tunnel", "") != "" or way.tags.has("culvert") \
+				or way.tags.get("layer", "0").to_int() < 0:
+			return true
 	return false
 
 func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
