@@ -100,7 +100,12 @@ func _get_building_height(tags: Dictionary) -> float:
 	if tags.has("building:levels"):
 		var levels: int = tags["building:levels"].to_int()
 		if levels > 0:
-			return levels * FLOOR_HEIGHT
+			# building:levels counts only facade floors (excluding roof levels).
+			# To get total height we must also add roof levels.
+			var roof_levels: int = 0
+			if tags.has("roof:levels"):
+				roof_levels = tags["roof:levels"].to_int()
+			return (levels + roof_levels) * FLOOR_HEIGHT
 	return DEFAULT_HEIGHT
 
 func _get_roof_shape(tags: Dictionary) -> String:
