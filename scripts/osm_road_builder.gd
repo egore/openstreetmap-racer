@@ -183,6 +183,96 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	mesh_instance.mesh = mesh
 	return mesh_instance
 
+const WATERWAY_WIDTHS := {
+	"river": 12.0,
+	"canal": 8.0,
+	"stream": 2.0,
+	"ditch": 1.0,
+	"drain": 1.0,
+}
+const WATERWAY_DEFAULT_WIDTH := 2.0
+const WATERWAY_COLOR := Color(0.2, 0.4, 0.8)
+const WATERWAY_Y := 0.01  # just above ground, below roads
+
+## Builds a flat blue ribbon mesh for a waterway (river, stream, canal, ...).
+## Returns null for degenerate ways. Callers should skip underground waterways
+## (tunnel=culvert, etc.) before invoking this.
+func build_waterway(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInstance3D:
+	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+	if points.size() < 2:
+		return null
+
+	var waterway_type: String = way.tags.get("waterway", "stream")
+	var width: float = WATERWAY_WIDTHS.get(waterway_type, WATERWAY_DEFAULT_WIDTH)
+	if way.tags.has("width"):
+		var explicit_width: float = way.tags["width"].to_float()
+		if explicit_width > 0.0:
+			width = explicit_width
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "Waterway_%d" % way.id
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = WATERWAY_COLOR
+	st.set_material(mat)
+
+	var edges := _build_ribbon_edges(points, width / 2.0, WATERWAY_Y)
+	var left_edge: Array = edges["left"]
+	var right_edge: Array = edges["right"]
+
+	for i: int in range(points.size() - 1):
+		var v0: Vector3 = left_edge[i]
+		var v1: Vector3 = right_edge[i]
+		var v2: Vector3 = right_edge[i + 1]
+		var v3: Vector3 = left_edge[i + 1]
+		st.set_normal(Vector3.UP); st.add_vertex(v0)
+		st.set_normal(Vector3.UP); st.add_vertex(v2)
+		st.set_normal(Vector3.UP); st.add_vertex(v1)
+		st.set_normal(Vector3.UP); st.add_vertex(v0)
+		st.set_normal(Vector3.UP); st.add_vertex(v3)
+		st.set_normal(Vector3.UP); st.add_vertex(v2)
+
+	mesh_instance.mesh = st.commit()
+	return mesh_instance
+
+## Compute miter-joined left/right edge vertices for a polyline ribbon.
+## Returns { "left": Array[Vector3], "right": Array[Vector3] }.
+func _build_ribbon_edges(points: PackedVector3Array, half_w: float, y: float) -> Dictionary:
+	var miter_limit := 2.0
+	var n_pts := points.size()
+	var left_edge: Array = []
+	var right_edge: Array = []
+	for i: int in range(n_pts):
+		var pt := points[i]
+		var offset: Vector3
+		if i == 0:
+			var fwd := (points[1] - points[0]).normalized()
+			offset = Vector3(-fwd.z, 0.0, fwd.x).normalized() * half_w
+		elif i == n_pts - 1:
+			var fwd := (points[i] - points[i - 1]).normalized()
+			offset = Vector3(-fwd.z, 0.0, fwd.x).normalized() * half_w
+		else:
+			var fwd_prev := (points[i] - points[i - 1]).normalized()
+			var fwd_next := (points[i + 1] - points[i]).normalized()
+			var lat_prev := Vector3(-fwd_prev.z, 0.0, fwd_prev.x).normalized()
+			var lat_next := Vector3(-fwd_next.z, 0.0, fwd_next.x).normalized()
+			var miter_dir := (lat_prev + lat_next)
+			if miter_dir.length_squared() < 0.0001:
+				miter_dir = lat_prev
+			else:
+				miter_dir = miter_dir.normalized()
+			var d := miter_dir.dot(lat_prev)
+			var miter_len := half_w
+			if absf(d) > 0.0001:
+				miter_len = half_w / d
+			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
+			offset = miter_dir * miter_len
+		left_edge.append(Vector3(pt.x - offset.x, y, pt.z - offset.z))
+		right_edge.append(Vector3(pt.x + offset.x, y, pt.z + offset.z))
+	return { "left": left_edge, "right": right_edge }
+
 func _get_sidewalk_sides(tags: Dictionary) -> Dictionary:
 	var left := false
 	var right := false

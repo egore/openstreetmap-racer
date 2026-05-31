@@ -25,6 +25,21 @@ const AREA_COLORS := {
 		"parking": Color(0.55, 0.55, 0.55),           # asphalt grey for surface lots
 		"bicycle_parking": Color(0.5, 0.5, 0.55),
 		"motorcycle_parking": Color(0.5, 0.5, 0.55),
+		"school": Color(0.85, 0.78, 0.6),             # warm tan campus ground
+		"university": Color(0.82, 0.75, 0.6),
+		"kindergarten": Color(0.9, 0.82, 0.6),
+		"fire_station": Color(0.7, 0.4, 0.35),        # muted brick red
+		"hospital": Color(0.85, 0.7, 0.7),
+		"college": Color(0.82, 0.75, 0.6),
+	},
+	"shop": {
+		"supermarket": Color(0.7, 0.6, 0.7),
+	},
+	"power": {
+		"generator": Color(0.45, 0.45, 0.5),
+	},
+	"area:highway": {
+		"traffic_island": Color(0.6, 0.6, 0.58),
 	},
 }
 

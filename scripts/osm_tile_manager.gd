@@ -186,6 +186,10 @@ func _load_tile(tkey: Vector2i) -> void:
 			var mesh_instance := _road_builder.build_road(way, _osm_data)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
+		elif _is_waterway(way):
+			var mesh_instance := _road_builder.build_waterway(way, _osm_data)
+			if mesh_instance != null:
+				tile_root.add_child(mesh_instance)
 		elif _is_building(way):
 			if not suppressed_building_ids.has(way.id):
 				var mesh_instance := _building_builder.build_building_from_way(way, _osm_data)
@@ -206,7 +210,7 @@ func _load_tile(tkey: Vector2i) -> void:
 			var mesh_instance := _build_area(way)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
-		else:
+		elif not _is_ignorable_way(way):
 			print_debug("Skipping way with tags", way.tags)
 
 	# Render building:part ways as 3D buildings
@@ -299,8 +303,50 @@ func _is_barrier_way(way: OSMParser.OSMWay) -> bool:
 func _is_parking(way: OSMParser.OSMWay) -> bool:
 	return way.tags.get("amenity", "") == "parking"
 
+## Linear water feature. Underground waterways (culverts/tunnels) are ignored so
+## they do not paint blue ribbons across the surface.
+func _is_waterway(way: OSMParser.OSMWay) -> bool:
+	if not way.tags.has("waterway"):
+		return false
+	if way.tags.get("tunnel", "") != "" or way.tags.has("culvert"):
+		return false
+	if way.tags.get("layer", "0").to_int() < 0:
+		return false
+	return true
+
+## A way is closed when its first and last node ids match (an enclosed ring).
+func _is_closed_way(way: OSMParser.OSMWay) -> bool:
+	return way.node_ids.size() >= 4 and way.node_ids[0] == way.node_ids[-1]
+
 func _is_area(way: OSMParser.OSMWay) -> bool:
-	return way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure") or (way.tags.has("amenity") and way.tags.has("area"))
+	if way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure"):
+		return true
+	# Closed amenity/shop/power/area:highway rings render as flat colored ground.
+	if not _is_closed_way(way):
+		return false
+	return way.tags.has("amenity") or way.tags.has("shop") \
+		or way.tags.has("power") or way.tags.has("area:highway")
+
+## Ways we deliberately do not render: untagged ring members consumed by their
+## parent relation, explicitly removed features, and abstract man_made outlines
+## that carry no usable surface geometry. Returning true suppresses the
+## "Skipping way" debug noise for these expected cases.
+func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
+	if way.tags.is_empty():
+		return true
+	for key: String in way.tags:
+		if key.begins_with("removed:"):
+			return true
+	# Abstract structural outlines without their own renderable footprint.
+	var man_made: String = way.tags.get("man_made", "")
+	if man_made == "bridge" or man_made == "embankment":
+		return true
+	# Bus/transport station outlines are represented elsewhere (nodes/areas).
+	if way.tags.get("public_transport", "") == "station":
+		return true
+	if way.tags.get("amenity", "") == "bus_station":
+		return true
+	return false
 
 func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
 	var inside := false
