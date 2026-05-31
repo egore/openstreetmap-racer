@@ -139,6 +139,10 @@ func _get_min_height(tags: Dictionary) -> float:
 		var h: float = tags["min_height"].to_float()
 		if h > 0.0:
 			return h
+	if tags.has("building:min_level"):
+		var levels: int = tags["building:min_level"].to_int()
+		if levels > 0:
+			return levels * FLOOR_HEIGHT
 	return 0.0
 
 func _get_building_height(tags: Dictionary) -> float:
