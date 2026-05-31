@@ -51,6 +51,24 @@ const ROOF_SHAPE_ALIASES := {
 	"shed": "skillion",
 }
 
+const ROOF_MATERIAL_COLORS := {
+	"roof_tiles": Color(0.7, 0.35, 0.25),
+	"tile": Color(0.7, 0.35, 0.25),
+	"slate": Color(0.35, 0.35, 0.4),
+	"metal": Color(0.5, 0.5, 0.55),
+	"copper": Color(0.45, 0.7, 0.55),
+	"tar_paper": Color(0.2, 0.2, 0.2),
+	"eternit": Color(0.5, 0.5, 0.5),
+	"gravel": Color(0.55, 0.55, 0.5),
+	"grass": Color(0.35, 0.55, 0.25),
+	"glass": Color(0.6, 0.75, 0.85),
+	"thatch": Color(0.7, 0.6, 0.35),
+	"concrete": Color(0.6, 0.6, 0.6),
+	"stone": Color(0.5, 0.5, 0.48),
+	"zinc": Color(0.55, 0.55, 0.58),
+	"tin": Color(0.55, 0.55, 0.55),
+}
+
 func build_building_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
@@ -156,6 +174,15 @@ func _get_roof_color(tags: Dictionary) -> Color:
 		var parsed := _parse_color(c)
 		if parsed != Color.BLACK:
 			return parsed
+	elif tags.has("roof:color"):
+		var c: String = tags["roof:color"].strip_edges().to_lower()
+		var parsed := _parse_color(c)
+		if parsed != Color.BLACK:
+			return parsed
+	if tags.has("roof:material"):
+		var mat_name: String = tags["roof:material"].strip_edges().to_lower()
+		if ROOF_MATERIAL_COLORS.has(mat_name):
+			return ROOF_MATERIAL_COLORS[mat_name]
 	return DEFAULT_ROOF_COLOR
 
 func _parse_color(c: String) -> Color:
