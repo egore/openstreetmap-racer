@@ -87,23 +87,62 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	sidewalk_mat.albedo_color = SIDEWALK_COLOR
 	sidewalk_st.set_material(sidewalk_mat)
 
-	# Build a ribbon mesh along the polyline
+	# Build a ribbon mesh along the polyline using miter joins at bends
 	var half_w := width / 2.0
 	var sidewalk_sides := _get_sidewalk_sides(way.tags)
 	var has_left_sidewalk: bool = sidewalk_sides["left"]
 	var has_right_sidewalk: bool = sidewalk_sides["right"]
+	var miter_limit := 2.0  # clamp miter to avoid spikes on very sharp turns
 
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-		var forward := (p1 - p0).normalized()
-		var lateral := Vector3(-forward.z, 0.0, forward.x).normalized()
-		var right := lateral * half_w
+	# Pre-compute the left and right edge vertices for each point using miter joins.
+	# At interior points the miter bisects the angle between adjacent segments so that
+	# both segments share the same edge vertices, eliminating gaps and overlaps.
+	var n_pts := points.size()
+	var left_edge: Array = []
+	var right_edge: Array = []
 
-		var v0 := Vector3(p0.x - right.x, ROAD_Y, p0.z - right.z)
-		var v1 := Vector3(p0.x + right.x, ROAD_Y, p0.z + right.z)
-		var v2 := Vector3(p1.x + right.x, ROAD_Y, p1.z + right.z)
-		var v3 := Vector3(p1.x - right.x, ROAD_Y, p1.z - right.z)
+	for i: int in range(n_pts):
+		var pt := points[i]
+		var offset: Vector3
+		if i == 0:
+			# First point: use the direction of the first segment
+			var fwd := (points[1] - points[0]).normalized()
+			var lateral := Vector3(-fwd.z, 0.0, fwd.x).normalized()
+			offset = lateral * half_w
+		elif i == n_pts - 1:
+			# Last point: use the direction of the last segment
+			var fwd := (points[i] - points[i - 1]).normalized()
+			var lateral := Vector3(-fwd.z, 0.0, fwd.x).normalized()
+			offset = lateral * half_w
+		else:
+			# Interior point: compute miter join
+			var fwd_prev := (points[i] - points[i - 1]).normalized()
+			var fwd_next := (points[i + 1] - points[i]).normalized()
+			var lat_prev := Vector3(-fwd_prev.z, 0.0, fwd_prev.x).normalized()
+			var lat_next := Vector3(-fwd_next.z, 0.0, fwd_next.x).normalized()
+			# Miter direction is the average of the two lateral directions
+			var miter_dir := (lat_prev + lat_next)
+			if miter_dir.length_squared() < 0.0001:
+				# Segments are nearly antiparallel (U-turn) — fall back to previous lateral
+				miter_dir = lat_prev
+			else:
+				miter_dir = miter_dir.normalized()
+			# Scale miter to maintain correct width: half_w / dot(miter, lateral)
+			var d := miter_dir.dot(lat_prev)
+			var miter_len := half_w
+			if absf(d) > 0.0001:
+				miter_len = half_w / d
+			# Clamp miter length to prevent extreme spikes at sharp angles
+			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
+			offset = miter_dir * miter_len
+		left_edge.append(Vector3(pt.x - offset.x, ROAD_Y, pt.z - offset.z))
+		right_edge.append(Vector3(pt.x + offset.x, ROAD_Y, pt.z + offset.z))
+
+	for i: int in range(n_pts - 1):
+		var v0: Vector3 = left_edge[i]
+		var v1: Vector3 = right_edge[i]
+		var v2: Vector3 = right_edge[i + 1]
+		var v3: Vector3 = left_edge[i + 1]
 
 		# Triangle 1
 		st.set_normal(Vector3.UP)
@@ -122,10 +161,14 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		st.add_vertex(v2)
 
 		if has_left_sidewalk:
-			_add_sidewalk_segment(sidewalk_st, p0 - right, p1 - right, -lateral, i == 0, i == points.size() - 2)
+			# Left edge outward direction: points away from road center (leftward)
+			var outward: Vector3 = (Vector3(points[i].x, ROAD_Y, points[i].z) - left_edge[i]).normalized()
+			_add_sidewalk_segment(sidewalk_st, left_edge[i], left_edge[i + 1], -outward, i == 0, i == n_pts - 2)
 
 		if has_right_sidewalk:
-			_add_sidewalk_segment(sidewalk_st, p0 + right, p1 + right, lateral, i == 0, i == points.size() - 2)
+			# Right edge outward direction: points away from road center (rightward)
+			var outward: Vector3 	= (right_edge[i] - Vector3(points[i].x, ROAD_Y, points[i].z)).normalized()
+			_add_sidewalk_segment(sidewalk_st, right_edge[i], right_edge[i + 1], outward, i == 0, i == n_pts - 2)
 
 	var mesh := st.commit()
 	if has_left_sidewalk or has_right_sidewalk:
