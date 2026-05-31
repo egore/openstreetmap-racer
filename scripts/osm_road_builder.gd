@@ -241,19 +241,33 @@ func _add_sidewalk_segment(st: SurfaceTool, edge_start: Vector3, edge_end: Vecto
 	var outer_start_top := Vector3(outer_start.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, outer_start.z)
 	var outer_end_top := Vector3(outer_end.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, outer_end.z)
 
-	_add_quad(st, inner_start_top, outer_start_top, outer_end_top, inner_end_top)
-	_add_quad(st, outer_start_bottom, outer_start_top, outer_end_top, outer_end_bottom)
-	_add_quad(st, inner_start_bottom, inner_end_bottom, inner_end_top, inner_start_top)
+	# Top face — should face up
+	_add_quad_facing(st, inner_start_top, inner_end_top, outer_end_top, outer_start_top, Vector3.UP)
+	# Outer wall — should face outward (away from road)
+	_add_quad_facing(st, outer_start_bottom, outer_start_top, outer_end_top, outer_end_bottom, outward)
+	# Inner wall — should face inward (toward road, i.e. -outward)
+	_add_quad_facing(st, inner_start_bottom, inner_end_bottom, inner_end_top, inner_start_top, -outward)
 
 	if add_start_cap:
-		_add_quad(st, outer_start_bottom, inner_start_bottom, inner_start_top, outer_start_top)
+		# Start cap — should face toward start (opposite of edge direction)
+		var cap_normal := (edge_start - edge_end).normalized()
+		_add_quad_facing(st, outer_start_bottom, inner_start_bottom, inner_start_top, outer_start_top, cap_normal)
 
 	if add_end_cap:
-		_add_quad(st, inner_end_bottom, outer_end_bottom, outer_end_top, inner_end_top)
+		# End cap — should face toward end
+		var cap_normal := (edge_end - edge_start).normalized()
+		_add_quad_facing(st, inner_end_bottom, outer_end_bottom, outer_end_top, inner_end_top, cap_normal)
 
-func _add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3) -> void:
-	_add_tri(st, a, b, c)
-	_add_tri(st, a, c, d)
+func _add_quad_facing(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, desired_normal: Vector3) -> void:
+	# Compute the actual face normal from the winding order
+	var face_normal := (b - a).cross(c - a)
+	# If the winding produces a normal opposite to desired, flip the quad
+	if face_normal.dot(desired_normal) < 0.0:
+		_add_tri(st, a, b, c)
+		_add_tri(st, a, c, d)
+	else:
+		_add_tri(st, a, c, b)
+		_add_tri(st, a, d, c)
 
 func _add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
 	var normal := Plane(a, b, c).normal
