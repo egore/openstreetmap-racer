@@ -57,6 +57,14 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	var roof_color := _get_roof_color(tags)
 	var building_type: String = tags.get("building", "yes")
 	var wall_color: Color = BUILDING_COLORS.get(building_type, DEFAULT_BUILDING_COLOR)
+	if tags.has("building:colour"):
+		var parsed := _parse_color(tags["building:colour"].strip_edges().to_lower())
+		if parsed != Color.BLACK:
+			wall_color = parsed
+	elif tags.has("building:color"):
+		var parsed := _parse_color(tags["building:color"].strip_edges().to_lower())
+		if parsed != Color.BLACK:
+			wall_color = parsed
 	var roof_orientation: String = tags.get("roof:orientation", "along")
 
 	# For non-flat roofs, the wall height is total height minus roof height
