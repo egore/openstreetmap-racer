@@ -92,7 +92,8 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	var height := _get_building_height(tags)
 	var min_height := _get_min_height(tags)
 	var roof_shape := _get_roof_shape(tags)
-	var roof_height := _get_roof_height(tags, roof_shape)
+	var roof_orientation: String = tags.get("roof:orientation", "along")
+	var roof_height := _get_roof_height(tags, roof_shape, points, roof_orientation)
 	var roof_color := _get_roof_color(tags)
 	var building_type: String = tags.get("building", tags.get("building:part", "yes"))
 	var wall_color: Color = BUILDING_COLORS.get(building_type, DEFAULT_BUILDING_COLOR)
@@ -108,7 +109,6 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		var mat_name: String = tags["building:material"].strip_edges().to_lower()
 		if MATERIAL_COLORS.has(mat_name):
 			wall_color = MATERIAL_COLORS[mat_name]
-	var roof_orientation: String = tags.get("roof:orientation", "along")
 	var roof_direction: float = -1.0
 	if tags.has("roof:direction"):
 		roof_direction = tags["roof:direction"].to_float()
@@ -173,7 +173,7 @@ func _get_roof_shape(tags: Dictionary) -> String:
 		shape = ROOF_SHAPE_ALIASES[shape]
 	return shape
 
-func _get_roof_height(tags: Dictionary, roof_shape: String) -> float:
+func _get_roof_height(tags: Dictionary, roof_shape: String, points: PackedVector3Array = PackedVector3Array(), orientation: String = "along") -> float:
 	if tags.has("roof:height"):
 		var h: float = tags["roof:height"].to_float()
 		if h > 0.0:
@@ -182,6 +182,23 @@ func _get_roof_height(tags: Dictionary, roof_shape: String) -> float:
 		var levels: int = tags["roof:levels"].to_int()
 		if levels > 0:
 			return levels * FLOOR_HEIGHT
+	if tags.has("roof:angle"):
+		var angle_deg: float = tags["roof:angle"].to_float()
+		if angle_deg > 0.0 and angle_deg < 90.0 and points.size() >= 3:
+			# Compute the building width perpendicular to the ridge
+			var ridge_dir := PolygonUtils.polygon_longest_edge_dir(points)
+			if orientation == "across":
+				ridge_dir = Vector3(-ridge_dir.z, 0.0, ridge_dir.x)
+			var perp_dir := Vector3(-ridge_dir.z, 0.0, ridge_dir.x)
+			var centroid := PolygonUtils.polygon_centroid(points)
+			var min_perp := INF
+			var max_perp := -INF
+			for p: Vector3 in points:
+				var proj := PolygonUtils.project_xz(p, centroid, perp_dir)
+				min_perp = min(min_perp, proj)
+				max_perp = max(max_perp, proj)
+			var half_width := absf(max_perp - min_perp) / 2.0
+			return tan(deg_to_rad(angle_deg)) * half_width
 	if roof_shape == "flat":
 		return 0.0
 	return DEFAULT_ROOF_HEIGHT
