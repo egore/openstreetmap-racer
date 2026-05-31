@@ -139,9 +139,30 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 
 	return root
 
+## Parse a height string value to meters. Handles:
+## - bare numbers (assumed meters): "12", "12.5"
+## - explicit meters: "12 m", "12m"
+## - feet: "40'", "40 ft", "40ft"
+## - feet and inches: "40'6\"", though this is rare
+func _parse_height(value: String) -> float:
+	var s := value.strip_edges()
+	if s.is_empty():
+		return 0.0
+	# Check for feet indicator
+	if s.ends_with("'") or s.ends_with("ft"):
+		var num_str := s.replace("ft", "").replace("'", "").strip_edges()
+		var ft := num_str.to_float()
+		return ft * 0.3048
+	# Check for explicit meters suffix
+	if s.ends_with("m"):
+		var num_str := s.left(s.length() - 1).strip_edges()
+		return num_str.to_float()
+	# Bare number (assumed meters)
+	return s.to_float()
+
 func _get_min_height(tags: Dictionary) -> float:
 	if tags.has("min_height"):
-		var h: float = tags["min_height"].to_float()
+		var h: float = _parse_height(tags["min_height"])
 		if h > 0.0:
 			return h
 	if tags.has("building:min_level"):
@@ -152,7 +173,7 @@ func _get_min_height(tags: Dictionary) -> float:
 
 func _get_building_height(tags: Dictionary) -> float:
 	if tags.has("height"):
-		var h: float = tags["height"].to_float()
+		var h: float = _parse_height(tags["height"])
 		if h > 0.0:
 			return h
 	if tags.has("building:levels"):
@@ -175,7 +196,7 @@ func _get_roof_shape(tags: Dictionary) -> String:
 
 func _get_roof_height(tags: Dictionary, roof_shape: String, points: PackedVector3Array = PackedVector3Array(), orientation: String = "along") -> float:
 	if tags.has("roof:height"):
-		var h: float = tags["roof:height"].to_float()
+		var h: float = _parse_height(tags["roof:height"])
 		if h > 0.0:
 			return h
 	if tags.has("roof:levels"):
