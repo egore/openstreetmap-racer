@@ -18,6 +18,9 @@ func build_relation(rel: OSMParser.OSMRelation, osm_data: OSMParser.OSMData) -> 
 		elif tags.has("landuse") or tags.has("natural") or tags.has("leisure"):
 			return _build_multipolygon_area(rel, osm_data)
 
+	elif tags.get("type", "") == "building":
+		return _build_building_relation(rel, osm_data)
+
 	# Route relations (could visualize bus routes, etc.) - skip for now
 	# Boundary relations - skip for now
 
@@ -86,6 +89,58 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		mesh_instance.name = "AreaPart_%d" % way_id
 		root.add_child(mesh_instance)
 		has_children = true
+
+	if has_children:
+		return root
+	return null
+
+func _build_building_relation(rel: OSMParser.OSMRelation, osm_data: OSMParser.OSMData) -> Node3D:
+	# type=building relation: render parts, skip outline
+	var root := Node3D.new()
+	root.name = "RelBuilding_%d" % rel.id
+	var has_children := false
+
+	# Collect outline tags for defaults
+	var outline_tags: Dictionary = {}
+	for member: Dictionary in rel.members:
+		if member["type"] != "way":
+			continue
+		if member["role"] == "outline":
+			var way_id: int = member["ref"]
+			if osm_data.ways.has(way_id):
+				outline_tags = osm_data.ways[way_id].tags.duplicate()
+			break
+
+	# Merge relation tags over outline tags for defaults
+	for k: String in rel.tags:
+		outline_tags[k] = rel.tags[k]
+
+	# Build each part member
+	for member: Dictionary in rel.members:
+		if member["type"] != "way":
+			continue
+		if member["role"] != "part":
+			continue
+
+		var way_id: int = member["ref"]
+		if not osm_data.ways.has(way_id):
+			continue
+
+		var way: OSMParser.OSMWay = osm_data.ways[way_id]
+		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+
+		if points.size() < 3:
+			continue
+
+		# Part tags override outline/relation defaults
+		var merged_tags := outline_tags.duplicate()
+		for k: String in way.tags:
+			merged_tags[k] = way.tags[k]
+
+		var building_node := _building_builder.build_building_from_polygon(points, merged_tags, way_id)
+		if building_node != null:
+			root.add_child(building_node)
+			has_children = true
 
 	if has_children:
 		return root
