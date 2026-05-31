@@ -26,6 +26,24 @@ const BUILDING_COLORS := {
 
 const DEFAULT_BUILDING_COLOR := Color(0.7, 0.68, 0.62)
 
+const MATERIAL_COLORS := {
+	"brick": Color(0.65, 0.35, 0.25),
+	"plaster": Color(0.85, 0.82, 0.75),
+	"wood": Color(0.6, 0.45, 0.3),
+	"concrete": Color(0.65, 0.65, 0.65),
+	"metal": Color(0.6, 0.6, 0.65),
+	"glass": Color(0.6, 0.75, 0.85),
+	"stone": Color(0.55, 0.55, 0.5),
+	"sandstone": Color(0.8, 0.7, 0.5),
+	"limestone": Color(0.8, 0.78, 0.7),
+	"granite": Color(0.5, 0.5, 0.5),
+	"marble": Color(0.9, 0.88, 0.85),
+	"render": Color(0.85, 0.82, 0.75),
+	"stucco": Color(0.85, 0.8, 0.7),
+	"cement_block": Color(0.6, 0.6, 0.58),
+	"steel": Color(0.55, 0.55, 0.6),
+}
+
 # Roof shape aliases: map common misspellings / synonyms to canonical names
 const ROOF_SHAPE_ALIASES := {
 	"pitched": "gabled",
@@ -65,6 +83,10 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		var parsed := _parse_color(tags["building:color"].strip_edges().to_lower())
 		if parsed != Color.BLACK:
 			wall_color = parsed
+	elif tags.has("building:material"):
+		var mat_name: String = tags["building:material"].strip_edges().to_lower()
+		if MATERIAL_COLORS.has(mat_name):
+			wall_color = MATERIAL_COLORS[mat_name]
 	var roof_orientation: String = tags.get("roof:orientation", "along")
 
 	# For non-flat roofs, the wall height is total height minus roof height
