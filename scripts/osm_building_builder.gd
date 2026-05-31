@@ -88,6 +88,7 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		points = _reverse_polygon(points)
 
 	var height := _get_building_height(tags)
+	var min_height := _get_min_height(tags)
 	var roof_shape := _get_roof_shape(tags)
 	var roof_height := _get_roof_height(tags, roof_shape)
 	var roof_color := _get_roof_color(tags)
@@ -107,21 +108,22 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 			wall_color = MATERIAL_COLORS[mat_name]
 	var roof_orientation: String = tags.get("roof:orientation", "along")
 
-	# For non-flat roofs, the wall height is total height minus roof height
-	var wall_height := height
+	# For non-flat roofs, the wall height is total height minus roof height minus min_height
+	var wall_height := height - min_height
 	if roof_shape != "flat" and roof_shape != "":
-		wall_height = maxf(height - roof_height, 2.0)
+		wall_height = maxf(height - min_height - roof_height, 2.0)
 
 	var root := Node3D.new()
 	root.name = "Building_%d" % id
 
-	# Build walls
-	var wall_mesh := _build_walls(points, wall_height, wall_color)
+	# Build walls (raised by min_height when building is elevated)
+	var wall_base := BUILDING_Y + min_height
+	var wall_mesh := _build_walls(points, wall_height, wall_color, wall_base)
 	if wall_mesh != null:
 		root.add_child(wall_mesh)
 
-	# Build roof based on shape
-	var roof_nodes := _build_roof_shape(points, wall_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation)
+	# Build roof based on shape (roof sits on top of the walls)
+	var roof_nodes := _build_roof_shape(points, min_height + wall_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation)
 	for node: Node3D in roof_nodes:
 		root.add_child(node)
 
@@ -131,6 +133,13 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		root.add_child(label)
 
 	return root
+
+func _get_min_height(tags: Dictionary) -> float:
+	if tags.has("min_height"):
+		var h: float = tags["min_height"].to_float()
+		if h > 0.0:
+			return h
+	return 0.0
 
 func _get_building_height(tags: Dictionary) -> float:
 	if tags.has("height"):
@@ -234,7 +243,7 @@ func _reverse_polygon(points: PackedVector3Array) -> PackedVector3Array:
 		result.append(result[0])
 	return result
 
-func _build_walls(points: PackedVector3Array, height: float, color: Color) -> MeshInstance3D:
+func _build_walls(points: PackedVector3Array, height: float, color: Color, base_y: float = 0.0) -> MeshInstance3D:
 	# Points are always CCW (normalized in _build_building_mesh)
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -247,10 +256,10 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color) -> Me
 		var p0 := points[i]
 		var p1 := points[i + 1]
 
-		var bl := Vector3(p0.x, BUILDING_Y, p0.z)
-		var br := Vector3(p1.x, BUILDING_Y, p1.z)
-		var tr := Vector3(p1.x, BUILDING_Y + height, p1.z)
-		var tl := Vector3(p0.x, BUILDING_Y + height, p0.z)
+		var bl := Vector3(p0.x, base_y, p0.z)
+		var br := Vector3(p1.x, base_y, p1.z)
+		var tr := Vector3(p1.x, base_y + height, p1.z)
+		var tl := Vector3(p0.x, base_y + height, p0.z)
 
 		var wall_dir := (br - bl).normalized()
 		var normal := Vector3(wall_dir.z, 0.0, -wall_dir.x).normalized()
