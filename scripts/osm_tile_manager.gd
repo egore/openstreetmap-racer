@@ -14,6 +14,9 @@ signal tile_unloaded(tile_key: Vector2i)
 @export var tile_size: float = 200.0  # meters per tile edge
 @export var load_radius: int = 2      # tiles in each direction to keep loaded
 @export var unload_radius: int = 3    # tiles beyond this are freed
+## Number of grid cells per tile edge when building displaced terrain from a
+## DEM. Higher = smoother slopes but more vertices. Ignored when terrain is flat.
+@export var terrain_subdivisions: int = 16
 
 var _osm_data: OSMParser.OSMData = null
 var _spatial_index: Dictionary = {}   # Vector2i tile_key -> { ways: [], nodes: [], relations: [] }
@@ -202,7 +205,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		elif _is_parking(way):
 			var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
 			var color := PolygonUtils.get_area_color(way.tags)
-			var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.015)
+			var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.015, true)
 			if mesh_instance != null:
 				mesh_instance.name = "Parking_%d" % way.id
 				tile_root.add_child(mesh_instance)
@@ -259,7 +262,39 @@ func get_loaded_tile_count() -> int:
 func get_osm_data() -> OSMParser.OSMData:
 	return _osm_data
 
+
+## Terrain elevation (meters) at a world XZ position, or 0.0 when the world is
+## flat / not yet loaded. Used by spawn logic to place the car on the ground.
+func get_terrain_height(world_pos: Vector3) -> float:
+	if not _has_terrain():
+		return 0.0
+	return _osm_data.height_provider.sample_local_xz(world_pos.x, world_pos.z)
+
+
+## Eagerly load the tiles around a world position without waiting for the camera
+## to drift into them. Returns true once at least the centering tile is present.
+## Spawn logic calls this so a ground collider exists before the car is unfrozen,
+## which is what prevents the car free-falling through a not-yet-streamed world.
+func ensure_tiles_around(world_pos: Vector3) -> bool:
+	if _osm_data == null:
+		return false
+	_current_tile = _pos_to_tile(world_pos)
+	_update_tiles()
+	return true
+
+func _has_terrain() -> bool:
+	return _osm_data != null \
+		and _osm_data.height_provider != null \
+		and _osm_data.height_provider.is_ready()
+
 func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
+	if _has_terrain():
+		_build_terrain_ground(parent, tkey)
+	else:
+		_build_flat_ground(parent, tkey)
+
+## Flat fallback ground (no DEM): a single thin box collider + plane mesh.
+func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 	var ground_body := StaticBody3D.new()
 	ground_body.name = "Ground"
 	ground_body.position = Vector3(
@@ -287,6 +322,75 @@ func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
 	ground_body.add_child(col_shape)
 
 	parent.add_child(ground_body)
+
+## DEM-displaced ground: a subdivided grid sampled against the HeightProvider,
+## with a trimesh collider matching the visible surface so the car drives on
+## the real terrain. Vertices are built in world space (mesh at origin) so the
+## sampled heights and the OSM geometry share one coordinate frame.
+func _build_terrain_ground(parent: Node3D, tkey: Vector2i) -> void:
+	var hp := _osm_data.height_provider
+	var subs: int = max(1, terrain_subdivisions)
+	var origin_x := tkey.x * tile_size
+	var origin_z := tkey.y * tile_size
+	var step := tile_size / float(subs)
+
+	# Precompute the grid of heights so each interior vertex is sampled once.
+	var verts: Array[Vector3] = []
+	verts.resize((subs + 1) * (subs + 1))
+	for gz: int in range(subs + 1):
+		for gx: int in range(subs + 1):
+			var wx := origin_x + float(gx) * step
+			var wz := origin_z + float(gz) * step
+			var wy := hp.sample_local_xz(wx, wz)
+			verts[gz * (subs + 1) + gx] = Vector3(wx, wy, wz)
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.35, 0.55, 0.25)  # grass green
+	st.set_material(mat)
+
+	for gz: int in range(subs):
+		for gx: int in range(subs):
+			var i00: int = gz * (subs + 1) + gx
+			var i10: int = i00 + 1
+			var i01: int = (gz + 1) * (subs + 1) + gx
+			var i11: int = i01 + 1
+			# Two triangles per cell, wound so the front face points up (+Y).
+			# Godot uses clockwise winding for front faces when viewed against the
+			# normal; the reversed vertex order here keeps the grass visible from
+			# above instead of being backface-culled.
+			_add_terrain_tri(st, verts[i00], verts[i11], verts[i01])
+			_add_terrain_tri(st, verts[i00], verts[i10], verts[i11])
+
+	st.generate_normals()
+	var mesh := st.commit()
+
+	var ground_body := StaticBody3D.new()
+	ground_body.name = "Ground"
+
+	var ground := MeshInstance3D.new()
+	ground.name = "GroundMesh"
+	ground.mesh = mesh
+	ground_body.add_child(ground)
+
+	var col_shape := CollisionShape3D.new()
+	col_shape.name = "GroundCollision"
+	# create_trimesh_shape() builds a ONE-SIDED concave collider; bodies approach
+	# from the back of the triangle winding pass straight through. Terrain must be
+	# collidable from both sides (and our triangle winding is not guaranteed to
+	# face up everywhere), so enable backface collision.
+	var tri_shape: ConcavePolygonShape3D = mesh.create_trimesh_shape()
+	tri_shape.backface_collision = true
+	col_shape.shape = tri_shape
+	ground_body.add_child(col_shape)
+
+	parent.add_child(ground_body)
+
+func _add_terrain_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	st.add_vertex(a)
+	st.add_vertex(b)
+	st.add_vertex(c)
 
 func _is_road(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("highway")
@@ -371,7 +475,8 @@ func _build_area(way: OSMParser.OSMWay) -> MeshInstance3D:
 	# Simple colored flat polygon for land use areas
 	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
 	var color := PolygonUtils.get_area_color(way.tags)
-	var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color)
+	# Drape land-use areas over the terrain (each vertex keeps its DEM elevation).
+	var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
 	if mesh_instance != null:
 		mesh_instance.name = "Area_%d" % way.id
 	return mesh_instance

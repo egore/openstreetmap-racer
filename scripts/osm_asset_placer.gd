@@ -217,17 +217,18 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 		var forward := (p1 - p0).normalized()
 		var right := Vector3(-forward.z, 0.0, forward.x).normalized() * half_w
 
-		# Bottom vertices
-		var bl0 := Vector3(p0.x - right.x, 0.0, p0.z - right.z)
-		var br0 := Vector3(p0.x + right.x, 0.0, p0.z + right.z)
-		var bl1 := Vector3(p1.x - right.x, 0.0, p1.z - right.z)
-		var br1 := Vector3(p1.x + right.x, 0.0, p1.z + right.z)
+		# Bottom vertices sit on the terrain (p.y carries the DEM elevation; 0 in
+		# a flat world); tops are height meters above each end's ground.
+		var bl0 := Vector3(p0.x - right.x, p0.y, p0.z - right.z)
+		var br0 := Vector3(p0.x + right.x, p0.y, p0.z + right.z)
+		var bl1 := Vector3(p1.x - right.x, p1.y, p1.z - right.z)
+		var br1 := Vector3(p1.x + right.x, p1.y, p1.z + right.z)
 
 		# Top vertices
-		var tl0 := Vector3(bl0.x, height, bl0.z)
-		var tr0 := Vector3(br0.x, height, br0.z)
-		var tl1 := Vector3(bl1.x, height, bl1.z)
-		var tr1 := Vector3(br1.x, height, br1.z)
+		var tl0 := Vector3(bl0.x, p0.y + height, bl0.z)
+		var tr0 := Vector3(br0.x, p0.y + height, br0.z)
+		var tl1 := Vector3(bl1.x, p1.y + height, bl1.z)
+		var tr1 := Vector3(br1.x, p1.y + height, br1.z)
 
 		# A linear OSM way (fence/wall) has no inherent CW/CCW orientation, so
 		# each face is emitted via add_quad_facing with an explicit desired

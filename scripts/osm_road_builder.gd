@@ -141,8 +141,10 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 			# Clamp miter length to prevent extreme spikes at sharp angles
 			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
 			offset = miter_dir * miter_len
-		left_edge.append(Vector3(pt.x - offset.x, ROAD_Y, pt.z - offset.z))
-		right_edge.append(Vector3(pt.x + offset.x, ROAD_Y, pt.z + offset.z))
+		# Carry the node's terrain elevation (pt.y) so the road follows the DEM,
+		# floating ROAD_Y above it. When no DEM is loaded pt.y is 0 (flat world).
+		left_edge.append(Vector3(pt.x - offset.x, pt.y + ROAD_Y, pt.z - offset.z))
+		right_edge.append(Vector3(pt.x + offset.x, pt.y + ROAD_Y, pt.z + offset.z))
 
 	for i: int in range(n_pts - 1):
 		var v0: Vector3 = left_edge[i]
@@ -168,12 +170,14 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 		if has_left_sidewalk:
 			# Left edge outward direction: points away from road center (leftward)
-			var outward: Vector3 = (Vector3(points[i].x, ROAD_Y, points[i].z) - left_edge[i]).normalized()
+			var center := Vector3(points[i].x, left_edge[i].y, points[i].z)
+			var outward: Vector3 = (center - left_edge[i]).normalized()
 			_add_sidewalk_segment(sidewalk_st, left_edge[i], left_edge[i + 1], -outward, i == 0, i == n_pts - 2)
 
 		if has_right_sidewalk:
 			# Right edge outward direction: points away from road center (rightward)
-			var outward: Vector3 	= (right_edge[i] - Vector3(points[i].x, ROAD_Y, points[i].z)).normalized()
+			var center := Vector3(points[i].x, right_edge[i].y, points[i].z)
+			var outward: Vector3 = (right_edge[i] - center).normalized()
 			_add_sidewalk_segment(sidewalk_st, right_edge[i], right_edge[i + 1], outward, i == 0, i == n_pts - 2)
 
 	var mesh := st.commit()
@@ -269,8 +273,10 @@ func _build_ribbon_edges(points: PackedVector3Array, half_w: float, y: float) ->
 				miter_len = half_w / d
 			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
 			offset = miter_dir * miter_len
-		left_edge.append(Vector3(pt.x - offset.x, y, pt.z - offset.z))
-		right_edge.append(Vector3(pt.x + offset.x, y, pt.z + offset.z))
+		# Carry the node's terrain elevation (pt.y); y is the small float offset
+		# above ground. Flat world keeps pt.y == 0.
+		left_edge.append(Vector3(pt.x - offset.x, pt.y + y, pt.z - offset.z))
+		right_edge.append(Vector3(pt.x + offset.x, pt.y + y, pt.z + offset.z))
 	return { "left": left_edge, "right": right_edge }
 
 func _get_sidewalk_sides(tags: Dictionary) -> Dictionary:
@@ -319,17 +325,23 @@ func _is_rendered_sidewalk_value(value: String) -> bool:
 func _add_sidewalk_segment(st: SurfaceTool, edge_start: Vector3, edge_end: Vector3, outward: Vector3, add_start_cap: bool, add_end_cap: bool) -> void:
 	var offset := outward * SIDEWALK_WIDTH
 
-	var inner_start_bottom := Vector3(edge_start.x, SIDEWALK_BASE_Y, edge_start.z)
-	var inner_end_bottom := Vector3(edge_end.x, SIDEWALK_BASE_Y, edge_end.z)
-	var inner_start_top := Vector3(edge_start.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, edge_start.z)
-	var inner_end_top := Vector3(edge_end.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, edge_end.z)
+	# Base each sidewalk on the terrain elevation of its edge (the edges carry
+	# pt.y + ROAD_Y), so the curb follows the DEM. SIDEWALK_BASE_Y stays the
+	# ground reference; subtract ROAD_Y to land on terrain, not the road skin.
+	var start_base := edge_start.y - ROAD_Y + SIDEWALK_BASE_Y
+	var end_base := edge_end.y - ROAD_Y + SIDEWALK_BASE_Y
+
+	var inner_start_bottom := Vector3(edge_start.x, start_base, edge_start.z)
+	var inner_end_bottom := Vector3(edge_end.x, end_base, edge_end.z)
+	var inner_start_top := Vector3(edge_start.x, start_base + SIDEWALK_HEIGHT, edge_start.z)
+	var inner_end_top := Vector3(edge_end.x, end_base + SIDEWALK_HEIGHT, edge_end.z)
 
 	var outer_start := edge_start + offset
 	var outer_end := edge_end + offset
-	var outer_start_bottom := Vector3(outer_start.x, SIDEWALK_BASE_Y, outer_start.z)
-	var outer_end_bottom := Vector3(outer_end.x, SIDEWALK_BASE_Y, outer_end.z)
-	var outer_start_top := Vector3(outer_start.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, outer_start.z)
-	var outer_end_top := Vector3(outer_end.x, SIDEWALK_BASE_Y + SIDEWALK_HEIGHT, outer_end.z)
+	var outer_start_bottom := Vector3(outer_start.x, start_base, outer_start.z)
+	var outer_end_bottom := Vector3(outer_end.x, end_base, outer_end.z)
+	var outer_start_top := Vector3(outer_start.x, start_base + SIDEWALK_HEIGHT, outer_start.z)
+	var outer_end_top := Vector3(outer_end.x, end_base + SIDEWALK_HEIGHT, outer_end.z)
 
 	# Top face — should face up
 	_add_quad_facing(st, inner_start_top, inner_end_top, outer_end_top, outer_start_top, Vector3.UP)
