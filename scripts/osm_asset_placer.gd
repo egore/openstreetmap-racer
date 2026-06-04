@@ -99,6 +99,12 @@ func place_assets_batched(nodes: Array) -> Node3D:
 		var xform := Transform3D(Basis.IDENTITY, node.local_pos + Vector3(0.0, y_offset, 0.0))
 		box_groups[key]["transforms"].append(xform)
 
+		# A MultiMesh can't carry per-instance labels, so batched box assets
+		# (give_way, stop, crossing, ...) would otherwise lose their debug
+		# labels entirely. Add one Label3D per node, lifted relative to the
+		# node's elevated ground position.
+		_add_debug_label_at(root, def, node.tags, node.local_pos)
+
 	for key: String in box_groups:
 		var group: Dictionary = box_groups[key]
 		var mmi := _build_box_multimesh(group["def"], group["transforms"])
@@ -280,7 +286,10 @@ func _add_debug_label_at(parent: Node3D, def: Dictionary, tags: Dictionary, pos:
 	label.modulate = Color(1.0, 1.0, 1.0, 0.9)
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
 	label.outline_size = 8
-	var label_y: float = def["y_offset"] * 2.0 + 1.0
+	# pos.y carries the terrain elevation at this point (0 in a flat world), so
+	# the label must be lifted relative to the ground, not world zero, or it
+	# sinks into the terrain wherever elevation is applied.
+	var label_y: float = pos.y + def["y_offset"] * 2.0 + 1.0
 	label.position = Vector3(pos.x, label_y, pos.z)
 	parent.add_child(label)
 
