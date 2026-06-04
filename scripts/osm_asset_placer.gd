@@ -256,7 +256,9 @@ func place_way_asset(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Node
 	root.add_child(mesh_instance)
 
 	# Place label at the midpoint of the way
-	var mid_point := points[points.size() / 2]
+	@warning_ignore("integer_division")
+	var mid_index := points.size() / 2
+	var mid_point := points[mid_index]
 	_add_debug_label_at(root, def, way.tags, mid_point)
 
 	return root
