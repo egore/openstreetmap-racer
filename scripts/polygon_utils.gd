@@ -38,6 +38,14 @@ const AREA_COLORS := {
 	"power": {
 		"generator": Color(0.45, 0.45, 0.5),
 	},
+	"man_made": {
+		"wastewater_plant": Color(0.5, 0.52, 0.55),   # concrete treatment basins
+		"water_works": Color(0.5, 0.52, 0.55),
+		"works": Color(0.55, 0.5, 0.48),              # industrial works ground
+		"reservoir_covered": Color(0.45, 0.5, 0.55),
+		"storage_tank": Color(0.55, 0.55, 0.58),
+		"wastewater": Color(0.5, 0.52, 0.55),
+	},
 	"area:highway": {
 		"traffic_island": Color(0.6, 0.6, 0.58),
 	},
@@ -178,6 +186,29 @@ static func _add_tri_with_normal(st: SurfaceTool, a: Vector3, b: Vector3, c: Vec
 	st.add_vertex(b)
 	st.set_normal(normal)
 	st.add_vertex(c)
+
+## Emit a 4-sided prism ("tube") of half-extent `radius` running from p0 to p1.
+## A cheap stand-in for a cylinder (4 side quads, no end caps) used for thin
+## linear structures like power cables and gantry beams that read fine as a
+## square cross-section from a distance. Faces are emitted outward-facing so the
+## tube is visible from any angle. Degenerate (zero-length) segments are skipped.
+static func add_tube_segment(st: SurfaceTool, p0: Vector3, p1: Vector3, radius: float) -> void:
+	var dir := (p1 - p0)
+	if dir.length_squared() < 0.000001:
+		return
+	dir = dir.normalized()
+	# Pick any axis not parallel to the tube to seed the cross-section frame.
+	var up := Vector3.UP
+	if absf(dir.dot(up)) > 0.99:
+		up = Vector3.FORWARD
+	var side := dir.cross(up).normalized() * radius
+	var vert := dir.cross(side).normalized() * radius
+	var ring0: Array[Vector3] = [p0 + side, p0 + vert, p0 - side, p0 - vert]
+	var ring1: Array[Vector3] = [p1 + side, p1 + vert, p1 - side, p1 - vert]
+	for k: int in range(4):
+		var n := (k + 1) % 4
+		var outward: Vector3 = ((ring0[k] - p0) + (ring1[k] - p1)).normalized()
+		add_quad_facing(st, ring0[k], ring0[n], ring1[n], ring1[k], outward)
 
 ## Compute the centroid of a polygon in the XZ plane.
 static func polygon_centroid(points: PackedVector3Array) -> Vector3:
