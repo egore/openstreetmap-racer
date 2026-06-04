@@ -30,6 +30,7 @@ const ASSET_DEFS := {
 		"telephone": { "color": Color(0.8, 0.2, 0.2), "size": Vector3(0.8, 2.2, 0.8), "y_offset": 1.1, "label": "Phone Booth" },
 		"fuel": { "color": Color(0.8, 0.3, 0.1), "size": Vector3(2.0, 3.0, 1.0), "y_offset": 1.5, "label": "Fuel Station" },
 		"parking": { "color": Color(0.3, 0.3, 0.7), "size": Vector3(1.0, 2.0, 0.1), "y_offset": 1.0, "label": "Parking Sign" },
+		"charging_station": { "color": Color(0.2, 0.8, 0.3), "size": Vector3(0.5, 1.4, 0.4), "y_offset": 0.7, "label": "Charging Station" },
 	},
 	"barrier": {
 		"bollard": { "color": Color(0.5, 0.5, 0.5), "size": Vector3(0.2, 0.8, 0.2), "y_offset": 0.4, "label": "Bollard", "scene": "res://scenes/models/bollard.blend" },
@@ -96,8 +97,18 @@ func place_assets_batched(nodes: Array) -> Node3D:
 		if not box_groups.has(key):
 			box_groups[key] = { "def": def, "transforms": [] as Array[Transform3D] }
 		var y_offset: float = def["y_offset"]
-		var xform := Transform3D(Basis.IDENTITY, node.local_pos + Vector3(0.0, y_offset, 0.0))
-		box_groups[key]["transforms"].append(xform)
+
+		# Some amenities (e.g. charging stations) carry a `capacity` tag that
+		# describes how many units exist at the spot. Draw one block per unit,
+		# laid out in a centered row so the cluster reads as a single station.
+		var count := _node_block_count(node.tags)
+		var size: Vector3 = def["size"]
+		var spacing: float = size.x + 0.2
+		var row_start: float = -spacing * float(count - 1) * 0.5
+		for i in range(count):
+			var col_offset := Vector3(row_start + spacing * float(i), 0.0, 0.0)
+			var xform := Transform3D(Basis.IDENTITY, node.local_pos + col_offset + Vector3(0.0, y_offset, 0.0))
+			box_groups[key]["transforms"].append(xform)
 
 		# A MultiMesh can't carry per-instance labels, so batched box assets
 		# (give_way, stop, crossing, ...) would otherwise lose their debug
@@ -121,6 +132,18 @@ func _box_group_key(def: Dictionary) -> String:
 	var size: Vector3 = def["size"]
 	var color: Color = def["color"]
 	return "%s|%s" % [size, color]
+
+
+# Number of blocks to draw for a node. Defaults to 1, but honors the OSM
+# `capacity` tag (used by amenity=charging_station among others) so a station
+# with N charging points renders as N blocks.
+func _node_block_count(tags: Dictionary) -> int:
+	if not tags.has("capacity"):
+		return 1
+	var raw: String = str(tags["capacity"]).strip_edges()
+	if not raw.is_valid_int():
+		return 1
+	return clampi(raw.to_int(), 1, 16)
 
 
 func _build_box_multimesh(def: Dictionary, transforms: Array) -> MultiMeshInstance3D:
