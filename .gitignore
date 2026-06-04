@@ -5,3 +5,7 @@
 
 # Documentation used as inspiration
 /references
+
+# Generated data
+/data/*.dem.png
+/data/*.dem.json
