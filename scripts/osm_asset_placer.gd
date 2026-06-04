@@ -37,6 +37,9 @@ const ASSET_DEFS := {
 		"gate": { "color": Color(0.4, 0.3, 0.2), "size": Vector3(3.0, 1.5, 0.1), "y_offset": 0.75, "label": "Gate" },
 		"fence": { "color": Color(0.5, 0.4, 0.3), "size": Vector3(0.1, 1.5, 0.1), "y_offset": 0.75, "label": "Fence Post" },
 		"hedge": { "color": Color(0.2, 0.45, 0.15), "size": Vector3(0.6, 1.2, 0.6), "y_offset": 0.6, "label": "Hedge" },
+		"wall": { "color": Color(0.55, 0.55, 0.55), "size": Vector3(0.3, 1.5, 0.3), "y_offset": 0.75, "label": "Wall" },
+		# barrier=wall + wall=noise_barrier: tall sound-deadening wall (~3 m).
+		"noise_barrier": { "color": Color(0.5, 0.52, 0.58), "size": Vector3(0.3, 3.0, 0.3), "y_offset": 1.5, "label": "Noise Barrier" },
 	},
 	"man_made": {
 		"tower": { "color": Color(0.6, 0.6, 0.6), "size": Vector3(2.0, 15.0, 2.0), "y_offset": 7.5, "label": "Tower" },
@@ -331,6 +334,13 @@ func _find_asset_def(tags: Dictionary) -> Dictionary:
 		if tags.has(tag_key):
 			var tag_value: String = tags[tag_key]
 			var sub: Dictionary = ASSET_DEFS[tag_key]
+			# A barrier=wall can be refined by a wall=* subtag (e.g.
+			# wall=noise_barrier). Prefer the more specific subtag definition
+			# when one exists so noise barriers get their taller geometry.
+			if tag_key == "barrier" and tag_value == "wall" and tags.has("wall"):
+				var wall_value: String = tags["wall"]
+				if sub.has(wall_value):
+					return sub[wall_value]
 			if sub.has(tag_value):
 				return sub[tag_value]
 			elif sub.has("*"):
