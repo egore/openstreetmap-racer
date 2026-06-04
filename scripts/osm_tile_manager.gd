@@ -43,6 +43,13 @@ func _load_osm_data() -> void:
 		push_error("OSMTileManager: Failed to load OSM data")
 		return
 	_build_spatial_index()
+	# Pass terrain parameters to builders for draped meshes and subdivided ribbons.
+	if _has_terrain():
+		var grid_step := tile_size / float(max(1, terrain_subdivisions))
+		_relation_builder.height_provider = _osm_data.height_provider
+		_relation_builder.terrain_grid_step = grid_step
+		_road_builder.height_provider = _osm_data.height_provider
+		_road_builder.terrain_grid_step = grid_step
 	print("OSMTileManager: Spatial index built, ready for tile loading")
 	data_loaded.emit(_osm_data)
 
@@ -151,8 +158,47 @@ func _load_tile(tkey: Vector2i) -> void:
 	tile_root.name = "Tile_%d_%d" % [tkey.x, tkey.y]
 	add_child(tile_root)
 
-	# Build ground plane for the tile
-	_build_ground(tile_root, tkey)
+	# Check whether the tile is fully covered by an area polygon. If so, skip
+	# the terrain ground mesh (the draped area renders on top anyway and the
+	# terrain underneath is invisible). This saves vertices and avoids z-fighting.
+	var tile_covered := false
+	if _has_terrain():
+		var grid_step := tile_size / float(max(1, terrain_subdivisions))
+		var origin_x := float(tkey.x) * tile_size
+		var origin_z := float(tkey.y) * tile_size
+		for way: OSMParser.OSMWay in bucket["ways"]:
+			if _is_area(way) or _is_parking(way):
+				var pts := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+				if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
+						pts, origin_x, origin_z, tile_size, grid_step):
+					tile_covered = true
+					break
+		# Also check multipolygon area relations.
+		if not tile_covered:
+			for rel: OSMParser.OSMRelation in bucket["relations"]:
+				if rel.tags.get("type", "") != "multipolygon":
+					continue
+				if not (rel.tags.has("landuse") or rel.tags.has("natural") or rel.tags.has("leisure")):
+					continue
+				for member: Dictionary in rel.members:
+					if member["type"] != "way" or member["role"] != "outer":
+						continue
+					var way_id: int = member["ref"]
+					if not _osm_data.ways.has(way_id):
+						continue
+					var pts := PolygonUtils.way_to_points(
+						_osm_data.ways[way_id].node_ids, _osm_data.nodes)
+					if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
+							pts, origin_x, origin_z, tile_size, grid_step):
+						tile_covered = true
+						break
+				if tile_covered:
+					break
+
+	# Build ground plane for the tile. When fully covered by an area polygon the
+	# visible mesh is redundant (the draped area sits on top), but the physics
+	# collider is still needed so the car doesn't fall through.
+	_build_ground(tile_root, tkey, tile_covered)
 
 	# Collect building:part ways and determine which building outlines to suppress
 	var building_part_ways: Array[OSMParser.OSMWay] = []
@@ -205,12 +251,19 @@ func _load_tile(tkey: Vector2i) -> void:
 		elif _is_parking(way):
 			var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
 			var color := PolygonUtils.get_area_color(way.tags)
-			var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.015, true)
+			var mesh_instance: MeshInstance3D
+			if _has_terrain():
+				var grid_step := tile_size / float(max(1, terrain_subdivisions))
+				var tile_clip: Array[float] = _tile_clip_rect(tkey)
+				mesh_instance = PolygonUtils.build_terrain_draped_mesh(
+					points, color, _osm_data.height_provider, grid_step, 0.015, tile_clip)
+			else:
+				mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.015, true)
 			if mesh_instance != null:
 				mesh_instance.name = "Parking_%d" % way.id
 				tile_root.add_child(mesh_instance)
 		elif _is_area(way):
-			var mesh_instance := _build_area(way)
+			var mesh_instance := _build_area(way, tkey)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
 		elif not _is_ignorable_way(way):
@@ -233,6 +286,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		tile_root.add_child(assets_root)
 
 	# Process relations (multipolygon buildings, etc.)
+	_relation_builder.tile_clip_rect = _tile_clip_rect(tkey) as Variant
 	var processed_rel_ids := {}
 	for rel: OSMParser.OSMRelation in bucket["relations"]:
 		if processed_rel_ids.has(rel.id):
@@ -287,9 +341,9 @@ func _has_terrain() -> bool:
 		and _osm_data.height_provider != null \
 		and _osm_data.height_provider.is_ready()
 
-func _build_ground(parent: Node3D, tkey: Vector2i) -> void:
+func _build_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = false) -> void:
 	if _has_terrain():
-		_build_terrain_ground(parent, tkey)
+		_build_terrain_ground(parent, tkey, skip_visual)
 	else:
 		_build_flat_ground(parent, tkey)
 
@@ -327,7 +381,7 @@ func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 ## with a trimesh collider matching the visible surface so the car drives on
 ## the real terrain. Vertices are built in world space (mesh at origin) so the
 ## sampled heights and the OSM geometry share one coordinate frame.
-func _build_terrain_ground(parent: Node3D, tkey: Vector2i) -> void:
+func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = false) -> void:
 	var hp := _osm_data.height_provider
 	var subs: int = max(1, terrain_subdivisions)
 	var origin_x := tkey.x * tile_size
@@ -369,10 +423,14 @@ func _build_terrain_ground(parent: Node3D, tkey: Vector2i) -> void:
 	var ground_body := StaticBody3D.new()
 	ground_body.name = "Ground"
 
-	var ground := MeshInstance3D.new()
-	ground.name = "GroundMesh"
-	ground.mesh = mesh
-	ground_body.add_child(ground)
+	# When the tile is fully covered by an area polygon, the visible terrain is
+	# redundant (it sits underneath the opaque draped area mesh). Skip the visual
+	# mesh to save draw calls and avoid z-fighting, but keep the collider.
+	if not skip_visual:
+		var ground := MeshInstance3D.new()
+		ground.name = "GroundMesh"
+		ground.mesh = mesh
+		ground_body.add_child(ground)
 
 	var col_shape := CollisionShape3D.new()
 	col_shape.name = "GroundCollision"
@@ -471,12 +529,23 @@ func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
 		j = i
 	return inside
 
-func _build_area(way: OSMParser.OSMWay) -> MeshInstance3D:
-	# Simple colored flat polygon for land use areas
+func _build_area(way: OSMParser.OSMWay, tkey: Vector2i) -> MeshInstance3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
 	var color := PolygonUtils.get_area_color(way.tags)
-	# Drape land-use areas over the terrain (each vertex keeps its DEM elevation).
-	var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
+	var mesh_instance: MeshInstance3D
+	if _has_terrain():
+		var grid_step := tile_size / float(max(1, terrain_subdivisions))
+		var tile_clip: Array[float] = _tile_clip_rect(tkey)
+		mesh_instance = PolygonUtils.build_terrain_draped_mesh(
+			points, color, _osm_data.height_provider, grid_step, 0.01, tile_clip)
+	else:
+		mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
 	if mesh_instance != null:
 		mesh_instance.name = "Area_%d" % way.id
 	return mesh_instance
+
+## Return [min_x, max_x, min_z, max_z] for a tile key.
+func _tile_clip_rect(tkey: Vector2i) -> Array[float]:
+	var ox := float(tkey.x) * tile_size
+	var oz := float(tkey.y) * tile_size
+	return [ox, ox + tile_size, oz, oz + tile_size]

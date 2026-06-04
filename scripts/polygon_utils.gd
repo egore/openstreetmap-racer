@@ -251,3 +251,200 @@ static func ridge_t(point: Vector3, origin: Vector3, direction: Vector3, min_pro
 	if abs(span) < 0.001:
 		return 0.5
 	return clampf((proj - min_proj) / span, 0.0, 1.0)
+
+
+# ─── Terrain-draped polyline subdivision ──────────────────────────────────────
+
+## Subdivide a polyline so that no segment is longer than max_step meters,
+## re-sampling elevation from the HeightProvider at every new intermediate
+## point. This makes roads, waterways and other ribbons follow the terrain
+## rather than linearly interpolating between sparse OSM nodes.
+##
+## Returns the original points unchanged when no HeightProvider is available
+## or when every segment is already short enough.
+static func subdivide_polyline_to_terrain(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		max_step: float,
+) -> PackedVector3Array:
+	if points.size() < 2:
+		return points
+	if hp == null or not hp.is_ready():
+		return points
+
+	var result: PackedVector3Array = []
+	result.append(points[0])
+
+	for i: int in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		# Distance in the XZ plane (horizontal length of the segment).
+		var dx := b.x - a.x
+		var dz := b.z - a.z
+		var seg_len := sqrt(dx * dx + dz * dz)
+
+		if seg_len <= max_step:
+			# Segment is short enough — keep the original endpoint.
+			result.append(b)
+		else:
+			# Subdivide: insert evenly-spaced intermediate points.
+			var n_sub := int(ceil(seg_len / max_step))
+			for s: int in range(1, n_sub + 1):
+				var t := float(s) / float(n_sub)
+				var px := a.x + dx * t
+				var pz := a.z + dz * t
+				var py := hp.sample_local_xz(px, pz)
+				result.append(Vector3(px, py, pz))
+
+	return result
+
+
+# ─── Terrain-draped polygon mesh ─────────────────────────────────────────────
+
+## Build a polygon mesh that conforms to the terrain grid by subdividing the
+## polygon into terrain-cell-sized pieces and sampling the HeightProvider at
+## every vertex. This prevents large area polygons from floating above or
+## clipping through the undulating terrain.
+##
+## When no HeightProvider is supplied (flat world), falls back to the simple
+## build_flat_polygon_mesh.
+##
+## grid_step is the terrain cell size (tile_size / terrain_subdivisions).
+## y_offset is added to the sampled elevation to prevent z-fighting with the
+## ground mesh (typically 0.01–0.02).
+## clip_rect limits the grid iteration to a specific world-space rectangle
+## (Vector4: min_x, max_x, min_z, max_z). Large polygons spanning many tiles
+## MUST pass the current tile bounds here to avoid iterating over thousands
+## of grid cells. When null the polygon's own AABB is used (only safe for
+## small polygons).
+static func build_terrain_draped_mesh(
+		points: PackedVector3Array,
+		color: Color,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,  # null or Array[float] [min_x, max_x, min_z, max_z]
+) -> MeshInstance3D:
+	if points.size() < 3:
+		return null
+	if hp == null or not hp.is_ready():
+		return build_flat_polygon_mesh(points, color, y_offset, true)
+
+	# Convert the polygon to 2D (XZ plane) for clipping operations.
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	# Strip the closing duplicate if present.
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Determine the grid iteration bounds. When a clip_rect is provided (the
+	# current tile bounds), use it instead of the polygon's full AABB so we
+	# only process the cells that belong to this tile.
+	var min_x: float
+	var max_x: float
+	var min_z: float
+	var max_z: float
+	if clip_rect != null:
+		min_x = clip_rect[0]
+		max_x = clip_rect[1]
+		min_z = clip_rect[2]
+		max_z = clip_rect[3]
+	else:
+		var bounds := polygon_bounds_xz(points)
+		min_x = bounds[0]
+		max_x = bounds[1]
+		min_z = bounds[2]
+		max_z = bounds[3]
+
+	var grid_x0 := floorf(min_x / grid_step) * grid_step
+	var grid_z0 := floorf(min_z / grid_step) * grid_step
+	var grid_x1 := ceilf(max_x / grid_step) * grid_step
+	var grid_z1 := ceilf(max_z / grid_step) * grid_step
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	st.set_material(mat)
+
+	var has_tris := false
+	var cell_x := grid_x0
+	while cell_x < grid_x1 - 0.001:
+		var cell_z := grid_z0
+		var next_x := cell_x + grid_step
+		while cell_z < grid_z1 - 0.001:
+			var next_z := cell_z + grid_step
+			# Build the grid cell rectangle.
+			var cell_rect: PackedVector2Array = PackedVector2Array([
+				Vector2(cell_x, cell_z),
+				Vector2(cell_x, next_z),
+				Vector2(next_x, next_z),
+				Vector2(next_x, cell_z),
+			])
+
+			# Intersect cell with the polygon.
+			var clips := Geometry2D.intersect_polygons(cell_rect, poly_2d)
+			for clip: PackedVector2Array in clips:
+				var indices := Geometry2D.triangulate_polygon(clip)
+				if indices.size() == 0:
+					continue
+				for idx: int in indices:
+					var p2 := clip[idx]
+					var wy := hp.sample_local_xz(p2.x, p2.y) + y_offset
+					st.set_normal(Vector3.UP)
+					st.add_vertex(Vector3(p2.x, wy, p2.y))
+					has_tris = true
+
+			cell_z = next_z
+		cell_x = next_x
+
+	if not has_tris:
+		return null
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.mesh = st.commit()
+	return mesh_instance
+
+
+## Test whether a polygon fully covers a terrain tile. Used by the tile
+## manager to skip the visible terrain mesh under opaque area polygons.
+## Only checks the four tile corners (fast reject via AABB + 4 PIP tests).
+static func polygon_covers_tile(
+		points: PackedVector3Array,
+		tile_origin_x: float,
+		tile_origin_z: float,
+		tile_size: float,
+		_grid_step: float  # unused, kept for API compat
+) -> bool:
+	# Fast AABB reject: if the polygon's bounding box doesn't fully contain the
+	# tile rectangle, it can't possibly cover it.
+	var bounds := polygon_bounds_xz(points)
+	if bounds[0] > tile_origin_x or bounds[1] < tile_origin_x + tile_size:
+		return false
+	if bounds[2] > tile_origin_z or bounds[3] < tile_origin_z + tile_size:
+		return false
+
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Check the four tile corners. If all are inside the polygon, the tile is
+	# fully covered (convex or concave polygons with re-entrants narrow enough
+	# to miss a corner are acceptable false-negatives — they just keep the
+	# terrain visible, which is safe).
+	var tx1 := tile_origin_x + tile_size
+	var tz1 := tile_origin_z + tile_size
+	if not Geometry2D.is_point_in_polygon(Vector2(tile_origin_x, tile_origin_z), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tx1, tile_origin_z), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tile_origin_x, tz1), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tx1, tz1), poly_2d):
+		return false
+	return true
