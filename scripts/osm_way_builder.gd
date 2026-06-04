@@ -1,11 +1,15 @@
-class_name OSMRoadBuilder
+class_name OSMWayBuilder
 extends RefCounted
 
-## Builds 3D road meshes from OSM ways tagged with "highway".
+## Builds terrain-draped ribbon meshes from linear OSM ways: roads (highway=*),
+## waterways (waterway=*), and railways (railway=*). All three share the miter-
+## joined ribbon edge math and DEM-following subdivision below. Elevated
+## structures that ride above the ground (power lines, gantries) live in
+## OSMInfrastructureBuilder instead.
 
 ## Terrain parameters set by the tile manager. When a HeightProvider is
-## available, polyline points are subdivided so road/waterway ribbons follow
-## the DEM instead of linearly interpolating between sparse OSM nodes.
+## available, polyline points are subdivided so road/waterway/railway ribbons
+## follow the DEM instead of linearly interpolating between sparse OSM nodes.
 var height_provider: HeightProvider = null
 var terrain_grid_step: float = 0.0
 
@@ -256,6 +260,121 @@ func build_waterway(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshI
 
 	mesh_instance.mesh = st.commit()
 	return mesh_instance
+
+# ─── Railways ────────────────────────────────────────────────────────────────
+
+const RAILWAY_WIDTHS := {
+	"rail": 2.6,        # standard-gauge track bed (sleeper length ~2.6 m)
+	"light_rail": 2.6,
+	"subway": 2.6,
+	"tram": 2.2,
+	"narrow_gauge": 1.8,
+	"monorail": 1.2,
+	"funicular": 2.2,
+	"disused": 2.6,
+	"preserved": 2.6,
+}
+const RAILWAY_DEFAULT_WIDTH := 2.6
+const RAILWAY_BED_COLOR := Color(0.32, 0.28, 0.25)   # ballast / sleepers brown-grey
+const RAILWAY_RAIL_COLOR := Color(0.6, 0.6, 0.62)    # steel rails
+const RAILWAY_BED_Y := 0.03                          # ballast just above ground/road skin
+const RAILWAY_RAIL_Y := 0.06                          # rails sit on top of the bed
+const RAILWAY_RAIL_HALF := 0.07                       # half-width of each rail strip
+const RAILWAY_GAUGE_FRAC := 0.55                      # rail spacing as fraction of bed width
+
+## Builds a track-bed ribbon for a railway way (rail, tram, light_rail, ...),
+## plus two thin steel rail strips on top so tracks read as rails rather than a
+## plain road. Underground/elevated handling is left to the caller; returns null
+## for degenerate ways.
+func build_railway(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInstance3D:
+	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+	if points.size() < 2:
+		return null
+
+	# Subdivide long segments so the ribbon follows the terrain.
+	if terrain_grid_step > 0.0:
+		points = PolygonUtils.subdivide_polyline_to_terrain(
+			points, height_provider, terrain_grid_step)
+
+	var railway_type: String = way.tags.get("railway", "rail")
+	var width: float = RAILWAY_WIDTHS.get(railway_type, RAILWAY_DEFAULT_WIDTH)
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.name = "Railway_%d" % way.id
+
+	# Ballast bed.
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bed_mat := StandardMaterial3D.new()
+	bed_mat.albedo_color = RAILWAY_BED_COLOR
+	st.set_material(bed_mat)
+
+	var bed := _build_ribbon_edges(points, width / 2.0, RAILWAY_BED_Y)
+	var bed_left: Array = bed["left"]
+	var bed_right: Array = bed["right"]
+	for i: int in range(points.size() - 1):
+		_emit_ribbon_quad(st, bed_left[i], bed_right[i], bed_right[i + 1], bed_left[i + 1])
+
+	# Two rail strips, offset symmetrically from the centerline.
+	var rail_offset := (width * RAILWAY_GAUGE_FRAC) / 2.0
+	var rail_st := SurfaceTool.new()
+	rail_st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var rail_mat := StandardMaterial3D.new()
+	rail_mat.albedo_color = RAILWAY_RAIL_COLOR
+	rail_mat.metallic = 0.6
+	rail_st.set_material(rail_mat)
+
+	_emit_offset_strip(rail_st, points, rail_offset, RAILWAY_RAIL_HALF, RAILWAY_RAIL_Y)
+	_emit_offset_strip(rail_st, points, -rail_offset, RAILWAY_RAIL_HALF, RAILWAY_RAIL_Y)
+
+	var mesh := st.commit()
+	mesh = rail_st.commit(mesh)
+	mesh_instance.mesh = mesh
+	return mesh_instance
+
+# ─── Ribbon helpers ──────────────────────────────────────────────────────────
+
+## Emit the two triangles of a ribbon quad (left/right edges of a segment) with
+## an upward normal. Shared by the railway bed and rail strips.
+func _emit_ribbon_quad(st: SurfaceTool, l0: Vector3, r0: Vector3, r1: Vector3, l1: Vector3) -> void:
+	st.set_normal(Vector3.UP); st.add_vertex(l0)
+	st.set_normal(Vector3.UP); st.add_vertex(r1)
+	st.set_normal(Vector3.UP); st.add_vertex(r0)
+	st.set_normal(Vector3.UP); st.add_vertex(l0)
+	st.set_normal(Vector3.UP); st.add_vertex(l1)
+	st.set_normal(Vector3.UP); st.add_vertex(r1)
+
+## Emit a narrow ribbon strip parallel to the centerline, displaced laterally by
+## `center_offset` (signed) and `half` wide, at height `y`. Used for rail strips.
+func _emit_offset_strip(st: SurfaceTool, points: PackedVector3Array, center_offset: float, half: float, y: float) -> void:
+	var n_pts := points.size()
+	var centerline: PackedVector3Array = PackedVector3Array()
+	centerline.resize(n_pts)
+	for i: int in range(n_pts):
+		var lateral: Vector3
+		if i == 0:
+			var fwd := (points[1] - points[0]).normalized()
+			lateral = Vector3(-fwd.z, 0.0, fwd.x).normalized()
+		elif i == n_pts - 1:
+			var fwd := (points[i] - points[i - 1]).normalized()
+			lateral = Vector3(-fwd.z, 0.0, fwd.x).normalized()
+		else:
+			var fwd_prev := (points[i] - points[i - 1]).normalized()
+			var fwd_next := (points[i + 1] - points[i]).normalized()
+			var lat_prev := Vector3(-fwd_prev.z, 0.0, fwd_prev.x).normalized()
+			var lat_next := Vector3(-fwd_next.z, 0.0, fwd_next.x).normalized()
+			lateral = (lat_prev + lat_next)
+			if lateral.length_squared() < 0.0001:
+				lateral = lat_prev
+			else:
+				lateral = lateral.normalized()
+		var pt := points[i]
+		centerline[i] = Vector3(pt.x + lateral.x * center_offset, pt.y, pt.z + lateral.z * center_offset)
+	var edges := _build_ribbon_edges(centerline, half, y)
+	var left_edge: Array = edges["left"]
+	var right_edge: Array = edges["right"]
+	for i: int in range(n_pts - 1):
+		_emit_ribbon_quad(st, left_edge[i], right_edge[i], right_edge[i + 1], left_edge[i + 1])
 
 ## Compute miter-joined left/right edge vertices for a polyline ribbon.
 ## Returns { "left": Array[Vector3], "right": Array[Vector3] }.

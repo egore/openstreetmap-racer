@@ -23,13 +23,15 @@ var _spatial_index: Dictionary = {}   # Vector2i tile_key -> { ways: [], nodes: 
 var _loaded_tiles: Dictionary = {}    # Vector2i tile_key -> Node3D (tile root)
 var _current_tile: Vector2i = Vector2i(999999, 999999)
 
-var _road_builder: OSMRoadBuilder = null
+var _way_builder: OSMWayBuilder = null
+var _infrastructure_builder: OSMInfrastructureBuilder = null
 var _building_builder: OSMBuildingBuilder = null
 var _asset_placer: OSMAssetPlacer = null
 var _relation_builder: OSMRelationBuilder = null
 
 func _ready() -> void:
-	_road_builder = OSMRoadBuilder.new()
+	_way_builder = OSMWayBuilder.new()
+	_infrastructure_builder = OSMInfrastructureBuilder.new()
 	_building_builder = OSMBuildingBuilder.new()
 	_asset_placer = OSMAssetPlacer.new()
 	_relation_builder = OSMRelationBuilder.new()
@@ -48,8 +50,8 @@ func _load_osm_data() -> void:
 		var grid_step := tile_size / float(max(1, terrain_subdivisions))
 		_relation_builder.height_provider = _osm_data.height_provider
 		_relation_builder.terrain_grid_step = grid_step
-		_road_builder.height_provider = _osm_data.height_provider
-		_road_builder.terrain_grid_step = grid_step
+		_way_builder.height_provider = _osm_data.height_provider
+		_way_builder.terrain_grid_step = grid_step
 	print("OSMTileManager: Spatial index built, ready for tile loading")
 	data_loaded.emit(_osm_data)
 
@@ -227,11 +229,23 @@ func _load_tile(tkey: Vector2i) -> void:
 		processed_way_ids[way.id] = true
 
 		if _is_road(way):
-			var mesh_instance := _road_builder.build_road(way, _osm_data)
+			var mesh_instance := _way_builder.build_road(way, _osm_data)
+			if mesh_instance != null:
+				tile_root.add_child(mesh_instance)
+		elif _is_railway(way):
+			var mesh_instance := _way_builder.build_railway(way, _osm_data)
+			if mesh_instance != null:
+				tile_root.add_child(mesh_instance)
+		elif _is_power_line(way):
+			var mesh_instance := _infrastructure_builder.build_power_line(way, _osm_data)
+			if mesh_instance != null:
+				tile_root.add_child(mesh_instance)
+		elif _is_gantry(way):
+			var mesh_instance := _infrastructure_builder.build_gantry(way, _osm_data)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
 		elif _is_waterway(way):
-			var mesh_instance := _road_builder.build_waterway(way, _osm_data)
+			var mesh_instance := _way_builder.build_waterway(way, _osm_data)
 			if mesh_instance != null:
 				tile_root.add_child(mesh_instance)
 		elif _is_building(way):
@@ -448,6 +462,34 @@ func _add_terrain_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 func _is_road(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("highway")
 
+## Railway track way (rail, tram, light_rail, subway, narrow_gauge, ...).
+## Abstract sub-features that are not a physical line (platforms, signals,
+## crossings carried on nodes) are excluded.
+const _RAILWAY_LINE_VALUES := {
+	"rail": true, "light_rail": true, "subway": true, "tram": true,
+	"narrow_gauge": true, "monorail": true, "funicular": true,
+	"preserved": true, "disused": true, "miniature": true,
+}
+func _is_railway(way: OSMParser.OSMWay) -> bool:
+	return _RAILWAY_LINE_VALUES.has(way.tags.get("railway", ""))
+
+## Overhead power cable way (transmission line, distribution minor_line, cable).
+## Closed power rings (substations/generators) are handled by _is_area instead.
+const _POWER_LINE_VALUES := {
+	"line": true, "minor_line": true, "cable": true,
+}
+func _is_power_line(way: OSMParser.OSMWay) -> bool:
+	if _is_closed_way(way):
+		return false
+	return _POWER_LINE_VALUES.has(way.tags.get("power", ""))
+
+## Sign/signal gantry spanning a road. Closed gantry rings (rare) are left to
+## the area path.
+func _is_gantry(way: OSMParser.OSMWay) -> bool:
+	if _is_closed_way(way):
+		return false
+	return way.tags.get("man_made", "") == "gantry"
+
 func _is_building(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("building")
 
@@ -475,12 +517,21 @@ func _is_waterway(way: OSMParser.OSMWay) -> bool:
 func _is_closed_way(way: OSMParser.OSMWay) -> bool:
 	return way.node_ids.size() >= 4 and way.node_ids[0] == way.node_ids[-1]
 
+## Closed man_made values that describe a ground footprint (treatment plants,
+## works, reservoirs, ...) rather than a point structure or linear feature.
+const _MAN_MADE_AREA_VALUES := {
+	"wastewater_plant": true, "water_works": true, "works": true,
+	"reservoir_covered": true, "storage_tank": true, "wastewater": true,
+}
 func _is_area(way: OSMParser.OSMWay) -> bool:
 	if way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure"):
 		return true
-	# Closed amenity/shop/power/area:highway rings render as flat colored ground.
+	# Closed amenity/shop/power/area:highway/man_made rings render as flat
+	# colored ground.
 	if not _is_closed_way(way):
 		return false
+	if _MAN_MADE_AREA_VALUES.has(way.tags.get("man_made", "")):
+		return true
 	return way.tags.has("amenity") or way.tags.has("shop") \
 		or way.tags.has("power") or way.tags.has("area:highway")
 
@@ -488,12 +539,26 @@ func _is_area(way: OSMParser.OSMWay) -> bool:
 ## parent relation, explicitly removed features, and abstract man_made outlines
 ## that carry no usable surface geometry. Returning true suppresses the
 ## "Skipping way" debug noise for these expected cases.
+## OSM "lifecycle" prefixes mark features that are not currently present on the
+## ground (disused, abandoned, planned, etc.). Ways tagged only under one of
+## these namespaces have no renderable present-day geometry.
+const _LIFECYCLE_PREFIXES := [
+	"removed:", "disused:", "abandoned:", "razed:", "demolished:",
+	"destroyed:", "construction:", "proposed:", "planned:", "was:",
+]
 func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 	if way.tags.is_empty():
 		return true
 	for key: String in way.tags:
-		if key.begins_with("removed:"):
-			return true
+		for prefix: String in _LIFECYCLE_PREFIXES:
+			if key.begins_with(prefix):
+				return true
+	# Administrative / political boundaries are abstract lines, not features.
+	if way.tags.has("boundary"):
+		return true
+	# A bare "area=yes/no" with no feature tag carries no surface to render.
+	if way.tags.size() == 1 and way.tags.has("area"):
+		return true
 	# Abstract structural outlines without their own renderable footprint.
 	var man_made: String = way.tags.get("man_made", "")
 	if man_made == "bridge" or man_made == "embankment":
