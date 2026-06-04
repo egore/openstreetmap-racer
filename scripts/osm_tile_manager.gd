@@ -272,9 +272,14 @@ func _load_tile(tkey: Vector2i) -> void:
 				mesh_instance.name = "Parking_%d" % way.id
 				tile_root.add_child(mesh_instance)
 		elif _is_area(way):
-			var mesh_instance := _build_area(way, tkey)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
+			if PolygonUtils.is_scrub(way.tags):
+				var scrub_node := _build_scrub(way, tkey)
+				if scrub_node != null:
+					tile_root.add_child(scrub_node)
+			else:
+				var mesh_instance := _build_area(way, tkey)
+				if mesh_instance != null:
+					tile_root.add_child(mesh_instance)
 		elif not _is_ignorable_way(way):
 			print_debug("Skipping way with tags", way.tags)
 
@@ -588,6 +593,16 @@ func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
 			inside = not inside
 		j = i
 	return inside
+
+func _build_scrub(way: OSMParser.OSMWay, tkey: Vector2i) -> Node3D:
+	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+	var hp: HeightProvider = _osm_data.height_provider if _has_terrain() else null
+	var grid_step := tile_size / float(max(1, terrain_subdivisions)) if _has_terrain() else 0.0
+	var tile_clip: Variant = _tile_clip_rect(tkey) if _has_terrain() else null
+	var node := PolygonUtils.build_scrub_area(points, hp, grid_step, 0.01, tile_clip)
+	if node != null:
+		node.name = "Scrub_%d" % way.id
+	return node
 
 func _build_area(way: OSMParser.OSMWay, tkey: Vector2i) -> MeshInstance3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)

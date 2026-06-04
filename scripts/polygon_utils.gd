@@ -431,6 +431,148 @@ static func build_terrain_draped_mesh(
 	return mesh_instance
 
 
+## Return true when tags represent a scrub area (natural=scrub).
+static func is_scrub(tags: Dictionary) -> bool:
+	return tags.get("natural", "") == "scrub"
+
+
+# ─── Scrub ball scattering ───────────────────────────────────────────────────
+
+## Density of scrub balls per square meter.  Adjust to taste.
+const SCRUB_DENSITY := 0.15
+## Minimum / maximum diameter of scrub balls (meters).
+const SCRUB_MIN_DIAMETER := 1.0
+const SCRUB_MAX_DIAMETER := 3.0
+## Palette of greens used for scrub balls (random per ball).
+const SCRUB_COLORS: Array[Color] = [
+	Color(0.25, 0.50, 0.15),
+	Color(0.30, 0.55, 0.20),
+	Color(0.35, 0.45, 0.18),
+	Color(0.28, 0.52, 0.12),
+	Color(0.40, 0.58, 0.22),
+]
+## Darker ground colour underneath the scrub balls.
+const SCRUB_GROUND_COLOR := Color(0.35, 0.45, 0.20)
+
+## Build a Node3D for a scrub area: a flat ground polygon plus scattered green
+## balls of varying size rendered via MultiMeshInstance3D.
+##
+## hp may be null (flat world).  When present, balls sit on terrain.
+## y_offset lifts the ground polygon to prevent z-fighting.
+static func build_scrub_area(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,
+) -> Node3D:
+	if points.size() < 3:
+		return null
+
+	var root := Node3D.new()
+
+	# --- ground polygon ---
+	var ground: MeshInstance3D
+	if hp != null and hp.is_ready() and grid_step > 0.0:
+		ground = build_terrain_draped_mesh(points, SCRUB_GROUND_COLOR, hp, grid_step, y_offset, clip_rect)
+	else:
+		ground = build_flat_polygon_mesh(points, SCRUB_GROUND_COLOR, y_offset, true)
+	if ground != null:
+		ground.name = "ScrubGround"
+		root.add_child(ground)
+
+	# --- scatter positions inside polygon ---
+	var scatter_points := _scatter_points_in_polygon(points, hp)
+	if scatter_points.size() == 0:
+		if ground != null:
+			return root
+		return null
+
+	# --- build MultiMesh of spheres ---
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.instance_count = scatter_points.size()
+
+	# Shared sphere mesh (low-poly: 8 rings x 12 sectors is fine at distance)
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 12
+	sphere.rings = 8
+	# Use vertex colours from the MultiMesh.
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	sphere.material = mat
+	mm.mesh = sphere
+
+	var rng := RandomNumberGenerator.new()
+	# Deterministic seed from first polygon vertex so rebuilds are stable.
+	rng.seed = hash(Vector2(points[0].x, points[0].z))
+
+	for i: int in range(scatter_points.size()):
+		var pos: Vector3 = scatter_points[i]
+		var diameter := rng.randf_range(SCRUB_MIN_DIAMETER, SCRUB_MAX_DIAMETER)
+		var scale_val := diameter  # sphere mesh is 1 m, so scale == diameter
+		var t := Transform3D()
+		t = t.scaled(Vector3(scale_val, scale_val, scale_val))
+		# Place centre of ball at ground + half radius so it sits *on* the surface.
+		t.origin = Vector3(pos.x, pos.y + diameter * 0.5, pos.z)
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, SCRUB_COLORS[rng.randi() % SCRUB_COLORS.size()])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.name = "ScrubBalls"
+	root.add_child(mmi)
+
+	return root
+
+
+## Scatter random sample points inside a polygon using rejection sampling on
+## its AABB.  Returns world-space positions with Y set from the
+## HeightProvider (or 0 when flat).
+static func _scatter_points_in_polygon(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+) -> Array[Vector3]:
+	var result: Array[Vector3] = []
+	var bounds := polygon_bounds_xz(points)
+	var min_x := bounds[0]
+	var max_x := bounds[1]
+	var min_z := bounds[2]
+	var max_z := bounds[3]
+	var area := (max_x - min_x) * (max_z - min_z)
+	if area < 1.0:
+		return result
+
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Number of candidate points proportional to polygon AABB area.
+	var n_candidates := int(area * SCRUB_DENSITY)
+	# Cap to avoid performance issues on huge polygons.
+	n_candidates = min(n_candidates, 4000)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(Vector2(points[0].x, points[0].z)) + 1
+
+	for _j: int in range(n_candidates):
+		var px := rng.randf_range(min_x, max_x)
+		var pz := rng.randf_range(min_z, max_z)
+		if Geometry2D.is_point_in_polygon(Vector2(px, pz), poly_2d):
+			var py := 0.0
+			if hp != null and hp.is_ready():
+				py = hp.sample_local_xz(px, pz)
+			result.append(Vector3(px, py, pz))
+
+	return result
+
+
 ## Test whether a polygon fully covers a terrain tile. Used by the tile
 ## manager to skip the visible terrain mesh under opaque area polygons.
 ## Only checks the four tile corners (fast reject via AABB + 4 PIP tests).

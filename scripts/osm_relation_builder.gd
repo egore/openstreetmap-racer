@@ -74,6 +74,7 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 	root.name = "RelArea_%d" % rel.id
 	var has_children := false
 
+	var is_scrub := PolygonUtils.is_scrub(rel.tags)
 	var color := PolygonUtils.get_area_color(rel.tags)
 	var use_terrain := height_provider != null and height_provider.is_ready() \
 		and terrain_grid_step > 0.0
@@ -91,18 +92,27 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
 		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
-		var mesh_instance: MeshInstance3D
-		if use_terrain:
-			mesh_instance = PolygonUtils.build_terrain_draped_mesh(
-				points, color, height_provider, terrain_grid_step, 0.01, tile_clip_rect)
+		if is_scrub:
+			var hp: HeightProvider = height_provider if use_terrain else null
+			var gs: float = terrain_grid_step if use_terrain else 0.0
+			var scrub_node := PolygonUtils.build_scrub_area(points, hp, gs, 0.01, tile_clip_rect)
+			if scrub_node != null:
+				scrub_node.name = "ScrubPart_%d" % way_id
+				root.add_child(scrub_node)
+				has_children = true
 		else:
-			mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
-		if mesh_instance == null:
-			continue
+			var mesh_instance: MeshInstance3D
+			if use_terrain:
+				mesh_instance = PolygonUtils.build_terrain_draped_mesh(
+					points, color, height_provider, terrain_grid_step, 0.01, tile_clip_rect)
+			else:
+				mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
+			if mesh_instance == null:
+				continue
 
-		mesh_instance.name = "AreaPart_%d" % way_id
-		root.add_child(mesh_instance)
-		has_children = true
+			mesh_instance.name = "AreaPart_%d" % way_id
+			root.add_child(mesh_instance)
+			has_children = true
 
 	if has_children:
 		return root
