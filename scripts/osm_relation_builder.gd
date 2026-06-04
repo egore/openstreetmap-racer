@@ -5,6 +5,13 @@ extends RefCounted
 
 var _building_builder: OSMBuildingBuilder = null
 
+## Terrain parameters set by the tile manager for terrain-draped area meshes.
+var height_provider: HeightProvider = null
+var terrain_grid_step: float = 0.0
+## Set per-tile before building relations to clip large polygons to tile bounds.
+## Array[float] [min_x, max_x, min_z, max_z] or null.
+var tile_clip_rect: Variant = null
+
 func _init() -> void:
 	_building_builder = OSMBuildingBuilder.new()
 
@@ -68,6 +75,8 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 	var has_children := false
 
 	var color := PolygonUtils.get_area_color(rel.tags)
+	var use_terrain := height_provider != null and height_provider.is_ready() \
+		and terrain_grid_step > 0.0
 
 	for member: Dictionary in rel.members:
 		if member["type"] != "way":
@@ -82,7 +91,12 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
 		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
-		var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
+		var mesh_instance: MeshInstance3D
+		if use_terrain:
+			mesh_instance = PolygonUtils.build_terrain_draped_mesh(
+				points, color, height_provider, terrain_grid_step, 0.01, tile_clip_rect)
+		else:
+			mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
 		if mesh_instance == null:
 			continue
 

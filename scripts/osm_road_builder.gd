@@ -3,6 +3,12 @@ extends RefCounted
 
 ## Builds 3D road meshes from OSM ways tagged with "highway".
 
+## Terrain parameters set by the tile manager. When a HeightProvider is
+## available, polyline points are subdivided so road/waterway ribbons follow
+## the DEM instead of linearly interpolating between sparse OSM nodes.
+var height_provider: HeightProvider = null
+var terrain_grid_step: float = 0.0
+
 # Road width in meters based on highway type
 const ROAD_WIDTHS := {
 	"motorway": 12.0,
@@ -59,6 +65,11 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 	if points.size() < 2:
 		return null
+
+	# Subdivide long segments so the ribbon follows the terrain.
+	if terrain_grid_step > 0.0:
+		points = PolygonUtils.subdivide_polyline_to_terrain(
+			points, height_provider, terrain_grid_step)
 
 	var highway_type: String = way.tags.get("highway", "unclassified")
 	var width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
@@ -205,6 +216,11 @@ func build_waterway(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshI
 	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 	if points.size() < 2:
 		return null
+
+	# Subdivide long segments so the ribbon follows the terrain.
+	if terrain_grid_step > 0.0:
+		points = PolygonUtils.subdivide_polyline_to_terrain(
+			points, height_provider, terrain_grid_step)
 
 	var waterway_type: String = way.tags.get("waterway", "stream")
 	var width: float = WATERWAY_WIDTHS.get(waterway_type, WATERWAY_DEFAULT_WIDTH)
