@@ -74,7 +74,11 @@ static func triangulate_xz(points: PackedVector3Array) -> PackedInt32Array:
 
 ## Build a flat colored MeshInstance3D from a 3D polygon at the given Y height.
 ## Returns null when fewer than 3 points or triangulation fails.
-static func build_flat_polygon_mesh(points: PackedVector3Array, color: Color, y: float = 0.01) -> MeshInstance3D:
+## Build a triangulated flat polygon mesh.
+## When drape_terrain is true, each vertex keeps its own elevation (points[idx].y)
+## and y is added as an offset, so the polygon follows the DEM. When false (the
+## default, used by roofs), every vertex sits at the single height y.
+static func build_flat_polygon_mesh(points: PackedVector3Array, color: Color, y: float = 0.01, drape_terrain: bool = false) -> MeshInstance3D:
 	if points.size() < 3:
 		return null
 
@@ -91,8 +95,9 @@ static func build_flat_polygon_mesh(points: PackedVector3Array, color: Color, y:
 
 	for i: int in range(indices.size()):
 		var idx: int = indices[i]
+		var vy: float = (points[idx].y + y) if drape_terrain else y
 		st.set_normal(Vector3.UP)
-		st.add_vertex(Vector3(points[idx].x, y, points[idx].z))
+		st.add_vertex(Vector3(points[idx].x, vy, points[idx].z))
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.mesh = st.commit()

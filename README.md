@@ -20,6 +20,8 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 7. **Car Controller** (`scripts/car_controller.gd`) — Simple WASD driving controller.
 
+8. **Height Provider** (`scripts/height_provider.gd`) — Samples terrain elevation from a pre-baked DEM heightmap (Copernicus GLO-30 or NASA SRTM). When present, OSM nodes are lifted onto the terrain and the ground becomes a displaced mesh. Degrades to a flat world when no DEM is baked.
+
 ### Dynamic Loading
 
 The tile manager tracks which tile the camera is in. When the camera crosses into a new tile, it:
@@ -32,6 +34,7 @@ The tile manager tracks which tile the camera is in. When the camera crosses int
 - OSM lat/lon is projected to local meters using the dataset center as origin
 - X = East, Z = South (negated latitude), Y = Up
 - 1 unit = 1 meter
+- Y (elevation) is 0 unless a DEM heightmap is baked (see *Terrain Elevation* below)
 
 ## Setup
 
@@ -46,6 +49,55 @@ Alternatively, use [JOSM](https://josm.openstreetmap.de/) for larger exports, or
 ```
 https://overpass-api.de/api/map?bbox=8.46,49.48,8.48,49.49
 ```
+
+### Terrain Elevation (optional)
+
+By default the world is flat (Y = 0). To render real terrain, bake a Digital
+Elevation Model (DEM) into a heightmap with `tools/bake_dem.py`. The game loads
+it at startup, lifts OSM nodes onto the terrain, and replaces the flat ground
+with a displaced mesh (with a matching collider, so the car drives on the
+relief). No DEM = flat world, so this step is entirely optional.
+
+**Choosing a source:**
+
+| | Copernicus GLO-30 (recommended) | NASA SRTM |
+|---|---|---|
+| Resolution | 30 m, global, void-filled | 30 m (US) / 90 m (global, 60°N–56°S) |
+| Access | AWS Open Data, no auth | NASA Earthdata login or mirrors |
+| License | Free / permissive | Public domain |
+
+**Workflow:**
+
+1. Ask the baker which Copernicus tiles your map needs. It reads the bounds from
+   `data/map.osm` and prints the exact S3 URIs plus ready-to-run download and
+   bake commands (a bbox may span several 1°×1° tiles):
+   ```sh
+   uv run tools/bake_dem.py --list-tiles
+   ```
+
+2. Download the listed tile(s). Copernicus needs no credentials — copy the
+   `aws s3 cp` line(s) printed by step 1, e.g.:
+   ```sh
+   aws s3 cp --no-sign-request \
+     s3://copernicus-dem-30m/Copernicus_DSM_COG_10_N50_00_E007_00_DEM/Copernicus_DSM_COG_10_N50_00_E007_00_DEM.tif \
+     Copernicus_DSM_COG_10_N50_00_E007_00_DEM.tif
+   ```
+
+3. Bake it with [uv](https://docs.astral.sh/uv/) (bounds are auto-detected from
+   `data/map.osm`). The script declares its dependencies inline (PEP 723), so
+   `uv run` installs them automatically on first use — no venv or `pip install`:
+   ```sh
+   uv run tools/bake_dem.py --dem Copernicus_DSM_COG_10_N50_00_E007_00_DEM.tif --source "Copernicus GLO-30"
+   ```
+   Pass `--dem` multiple times to mosaic several tiles. This writes
+   `data/map.dem.png` (16-bit heightmap) and `data/map.dem.json` (geographic +
+   elevation metadata the game uses to decode it).
+
+4. Run the game — terrain appears automatically. Delete the two `data/map.dem.*`
+   files to go back to flat.
+
+Tune `terrain_subdivisions` on the tile manager (default 16) to trade vertex
+count for slope smoothness.
 
 ### Running
 

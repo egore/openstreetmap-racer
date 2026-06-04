@@ -82,7 +82,7 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
 		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
-		var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color)
+		var mesh_instance := PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
 		if mesh_instance == null:
 			continue
 

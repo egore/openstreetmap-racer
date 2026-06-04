@@ -28,6 +28,20 @@ func _ready() -> void:
 	tile_manager.tile_loaded.connect(_on_tiles_changed)
 	tile_manager.tile_unloaded.connect(_on_tiles_changed)
 
+	# Hold the car still until the world (and its ground colliders) exist. The
+	# scene places the car at a flat-world height; with DEM terrain the ground is
+	# at the local elevation and tiles stream in a frame or two after startup, so
+	# spawning blind would drop the car underground or through empty space.
+	car.freeze = true
+	# The tile manager is a child, so its _ready (which parses OSM and emits
+	# data_loaded) runs before this _ready. If the data is already available we
+	# missed the signal and must spawn now; otherwise wait for the signal.
+	var osm_data := tile_manager.get_osm_data()
+	if osm_data != null:
+		_on_world_ready(osm_data)
+	else:
+		tile_manager.data_loaded.connect(_on_world_ready)
+
 	# Refresh the info label on a fixed cadence rather than accumulating delta.
 	var timer := Timer.new()
 	timer.wait_time = 0.5
@@ -52,6 +66,52 @@ func _set_paused(paused: bool) -> void:
 	pause_menu.visible = paused
 	# Free the cursor for the menu while paused, recapture it on resume.
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED)
+
+## Place the car on the terrain once OSM data is parsed, build the ground under
+## it, then release physics. Runs once at startup (data_loaded fires a single
+## time after the spatial index is ready).
+func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
+	# Force the tiles around the spawn XZ to exist so there is a collider to land
+	# on before we drop the car. Keep the car's authored XZ; only Y is corrected.
+	var spawn_xz := car.global_position
+	tile_manager.ensure_tiles_around(spawn_xz)
+
+	# The terrain collider is a concave trimesh, which is registered into the
+	# physics space a frame after add_child. Resolve the spawn height by raycasting
+	# down onto the actual collider rather than trusting the sampled height alone:
+	# this guarantees we drop onto a live surface and never start below a one-sided
+	# trimesh face (which the car would silently fall through).
+	await get_tree().physics_frame
+	var ground_y := tile_manager.get_terrain_height(spawn_xz)
+	var hit_y := _raycast_ground_y(spawn_xz, ground_y)
+	if not is_nan(hit_y):
+		ground_y = hit_y
+
+	const SPAWN_CLEARANCE := 1.0
+	var t := car.global_transform
+	t.origin.y = ground_y + SPAWN_CLEARANCE
+	car.global_transform = t
+
+	# Zero any velocity accumulated while frozen, then unfreeze on the next step.
+	car.linear_velocity = Vector3.ZERO
+	car.angular_velocity = Vector3.ZERO
+	await get_tree().physics_frame
+	car.freeze = false
+
+## Raycast straight down through the spawn column to find the terrain collider's
+## surface Y. Starts well above the sampled height and reaches well below it.
+## Returns NAN when nothing is hit (e.g. flat world with no collider yet), so the
+## caller can fall back to the sampled height.
+func _raycast_ground_y(xz: Vector3, approx_y: float) -> float:
+	var space := get_world_3d().direct_space_state
+	var from := Vector3(xz.x, approx_y + 50.0, xz.z)
+	var to := Vector3(xz.x, approx_y - 50.0, xz.z)
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [car.get_rid()]
+	var hit := space.intersect_ray(query)
+	if hit.is_empty():
+		return NAN
+	return hit.position.y
 
 func _on_quit_pressed() -> void:
 	get_tree().quit()

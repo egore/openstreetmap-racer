@@ -85,6 +85,13 @@ func build_building_from_polygon(points: PackedVector3Array, tags: Dictionary, i
 	return _build_building_mesh(points, tags, id)
 
 func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int) -> Node3D:
+	# Capture footprint elevation, then flatten points to y=0 so all geometry is
+	# built in local space relative to BUILDING_Y. The root node is raised to the
+	# terrain height afterward (see below), keeping walls and roofs coplanar.
+	var ground_y := _average_footprint_y(points)
+	for i: int in range(points.size()):
+		points[i] = Vector3(points[i].x, 0.0, points[i].z)
+
 	# Normalize winding to CCW so all wall/roof code can assume consistent vertex order
 	points = PolygonUtils.normalize_to_ccw(points)
 
@@ -119,6 +126,11 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 
 	var root := Node3D.new()
 	root.name = "Building_%d" % id
+
+	# Lift the whole building onto the terrain. All wall/roof geometry below is
+	# built relative to BUILDING_Y (0); translating the rigid root by the footprint
+	# elevation places it on the DEM without re-deriving every roof vertex.
+	root.position.y = ground_y
 
 	# Build walls (raised by min_height when building is elevated)
 	var wall_base := BUILDING_Y + min_height
@@ -158,6 +170,16 @@ func _parse_height(value: String) -> float:
 		return num_str.to_float()
 	# Bare number (assumed meters)
 	return s.to_float()
+
+## Average terrain elevation across a footprint's nodes. Used to seat the whole
+## building on the DEM. Returns 0.0 for a flat world (node.y all zero).
+func _average_footprint_y(points: PackedVector3Array) -> float:
+	if points.is_empty():
+		return 0.0
+	var sum := 0.0
+	for p: Vector3 in points:
+		sum += p.y
+	return sum / points.size()
 
 func _get_min_height(tags: Dictionary) -> float:
 	if tags.has("min_height"):

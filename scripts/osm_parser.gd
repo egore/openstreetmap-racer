@@ -27,8 +27,15 @@ class OSMData:
 	var bounds: Rect2 = Rect2()      # lat/lon bounds
 	var center_lat: float = 0.0
 	var center_lon: float = 0.0
+	var height_provider: HeightProvider = null  # null or flat when no DEM loaded
 
-static func parse_file(path: String) -> OSMData:
+## Parse an .osm file into structured data.
+##
+## When apply_elevation is true, a HeightProvider is loaded from the default
+## DEM heightmap (data/map.dem.png + data/map.dem.json) and every node's
+## local_pos.y is lifted to its terrain elevation. When no DEM is present, or
+## apply_elevation is false, the world stays flat at y=0.
+static func parse_file(path: String, apply_elevation: bool = true) -> OSMData:
 	var data := OSMData.new()
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
@@ -135,6 +142,15 @@ static func parse_file(path: String) -> OSMData:
 	# Compute local positions for all nodes
 	for node: OSMNode in data.nodes.values():
 		node.local_pos = _latlon_to_local(node.lat, node.lon, data.center_lat, data.center_lon)
+
+	# Lift nodes onto the terrain when a DEM heightmap is available.
+	if apply_elevation:
+		data.height_provider = HeightProvider.new()
+		if data.height_provider.load_from_files(data.center_lat, data.center_lon):
+			for node: OSMNode in data.nodes.values():
+				# Sample by lat/lon so elevation is independent of any rounding
+				# in the local-meter projection.
+				node.local_pos.y = data.height_provider.sample_latlon(node.lat, node.lon)
 
 	print("OSMParser: Loaded %d nodes, %d ways, %d relations" % [
 		data.nodes.size(), data.ways.size(), data.relations.size()
