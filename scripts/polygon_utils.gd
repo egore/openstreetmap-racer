@@ -492,7 +492,7 @@ static func build_forest_area(
 		root.add_child(ground)
 
 	# --- scatter positions ---
-	var scatter := _scatter_points_in_polygon(points, hp, FOREST_DENSITY)
+	var scatter := _scatter_points_in_polygon(points, hp, FOREST_DENSITY, clip_rect)
 	if scatter.size() == 0:
 		if ground != null:
 			return root
@@ -620,7 +620,7 @@ static func build_scrub_area(
 		root.add_child(ground)
 
 	# --- scatter positions inside polygon ---
-	var scatter_points := _scatter_points_in_polygon(points, hp)
+	var scatter_points := _scatter_points_in_polygon(points, hp, SCRUB_DENSITY, clip_rect)
 	if scatter_points.size() == 0:
 		if ground != null:
 			return root
@@ -671,10 +671,14 @@ static func build_scrub_area(
 ## its AABB.  Returns world-space positions with Y set from the
 ## HeightProvider (or 0 when flat).
 ## density overrides SCRUB_DENSITY when supplied (e.g. forests are sparser).
+## clip_rect limits scatter to the current tile bounds ([min_x, max_x, min_z,
+## max_z]) so large polygons spanning many tiles only place vegetation inside
+## the tile being built. When null the polygon's own AABB is used.
 static func _scatter_points_in_polygon(
 		points: PackedVector3Array,
 		hp: HeightProvider,
 		density: float = SCRUB_DENSITY,
+		clip_rect: Variant = null,
 ) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	var bounds := polygon_bounds_xz(points)
@@ -682,6 +686,18 @@ static func _scatter_points_in_polygon(
 	var max_x := bounds[1]
 	var min_z := bounds[2]
 	var max_z := bounds[3]
+
+	# Clamp scatter region to the tile clip rect so vegetation only spawns
+	# inside the tile currently being built. Without this, a forest spanning
+	# several tiles would place trees across its entire footprint in every
+	# tile that touches it, causing "flying trees" on unloaded neighbours.
+	if clip_rect != null:
+		min_x = maxf(min_x, clip_rect[0])
+		max_x = minf(max_x, clip_rect[1])
+		min_z = maxf(min_z, clip_rect[2])
+		max_z = minf(max_z, clip_rect[3])
+	if min_x >= max_x or min_z >= max_z:
+		return result
 	var area := (max_x - min_x) * (max_z - min_z)
 	if area < 1.0:
 		return result
