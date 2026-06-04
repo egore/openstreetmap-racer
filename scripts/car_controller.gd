@@ -133,20 +133,20 @@ func _physics_process(_delta: float) -> void:
 	var steer_limit: float = lerp(max_steer_angle, min_steer_angle, speed_ratio)
 	steer_limit *= clamp(1.0 - max(speed_ratio - 0.45, 0.0) * 1.3, 0.3, 1.0)
 
-	var engine_force := 0.0
+	var drive_force := 0.0
 	var brake_force := idle_brake_force
 	if forward_input > 0.0 and forward_speed < max_speed:
-		engine_force = engine_force_value * forward_input
+		drive_force = engine_force_value * forward_input
 		brake_force = 0.0
 	elif reverse_input > 0.0:
 		if forward_speed > 1.0:
 			brake_force = brake_force_value * reverse_input
 		elif forward_speed > -reverse_max_speed:
-			engine_force = -reverse_engine_force * reverse_input
+			drive_force = -reverse_engine_force * reverse_input
 			brake_force = 0.0
 
-	if forward_speed > max_speed and engine_force > 0.0:
-		engine_force = 0.0
+	if forward_speed > max_speed and drive_force > 0.0:
+		drive_force = 0.0
 
 	# Handbrake: lock the rear axle and break its grip so the back end can slide.
 	# Cut engine force so the player can't power through the locked wheels, and apply
@@ -154,14 +154,14 @@ func _physics_process(_delta: float) -> void:
 	# which is what lets the car rotate into a drift.
 	var rear_brake := brake_force
 	if handbrake_active:
-		engine_force = 0.0
+		drive_force = 0.0
 		rear_brake = handbrake_force_value * handbrake_input
 	_set_rear_friction(handbrake_active)
 
 	front_left_wheel.steering = steer_input * steer_limit
 	front_right_wheel.steering = steer_input * steer_limit
-	rear_left_wheel.engine_force = engine_force
-	rear_right_wheel.engine_force = engine_force
+	rear_left_wheel.engine_force = drive_force
+	rear_right_wheel.engine_force = drive_force
 	rear_left_wheel.brake = rear_brake
 	rear_right_wheel.brake = rear_brake
 	front_left_wheel.brake = brake_force * 0.35

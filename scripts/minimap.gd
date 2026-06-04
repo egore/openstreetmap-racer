@@ -226,7 +226,7 @@ func _draw_road_on_map(points: PackedVector3Array, car_pos: Vector3, car_angle: 
 
 ## Clip a line segment (a->b) to a circle of given radius centered at origin.
 ## Returns empty array if fully outside, or [clipped_a, clipped_b].
-func _clip_segment_to_circle(a: Vector2, b: Vector2, radius: float, r_sq: float) -> Array:
+func _clip_segment_to_circle(a: Vector2, b: Vector2, _radius: float, r_sq: float) -> Array:
 	var a_inside := a.length_squared() <= r_sq
 	var b_inside := b.length_squared() <= r_sq
 
