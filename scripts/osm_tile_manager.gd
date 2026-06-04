@@ -57,11 +57,6 @@ func _build_spatial_index() -> void:
 	_spatial_index.clear()
 
 	# Index standalone nodes (nodes with tags that aren't just part of ways)
-	var way_node_ids := {}
-	for way: OSMParser.OSMWay in _osm_data.ways.values():
-		for nid: int in way.node_ids:
-			way_node_ids[nid] = true
-
 	for node: OSMParser.OSMNode in _osm_data.nodes.values():
 		if node.tags.size() > 0:
 			var tkey := _pos_to_tile(node.local_pos)

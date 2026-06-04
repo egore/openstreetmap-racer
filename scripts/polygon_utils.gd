@@ -244,14 +244,6 @@ static func shrink_polygon_xz(points: PackedVector3Array, amount: float) -> Pack
 static func project_xz(point: Vector3, origin: Vector3, direction: Vector3) -> float:
 	return (point.x - origin.x) * direction.x + (point.z - origin.z) * direction.z
 
-## Lerp a point along the ridge axis: returns 0.0 at min projection, 1.0 at max projection.
-static func ridge_t(point: Vector3, origin: Vector3, direction: Vector3, min_proj: float, max_proj: float) -> float:
-	var proj := project_xz(point, origin, direction)
-	var span := max_proj - min_proj
-	if abs(span) < 0.001:
-		return 0.5
-	return clampf((proj - min_proj) / span, 0.0, 1.0)
-
 
 # ─── Terrain-draped polyline subdivision ──────────────────────────────────────
 

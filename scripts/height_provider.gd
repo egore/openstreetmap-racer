@@ -73,11 +73,6 @@ func is_ready() -> bool:
 	return _ready
 
 
-## Human-readable description of the DEM source, or "" when flat.
-func get_source() -> String:
-	return _source
-
-
 ## Load the baked heightmap + metadata and bind it to the dataset origin.
 ##
 ## ref_lat/ref_lon are the OSM dataset center (OSMData.center_lat/center_lon).
@@ -165,12 +160,6 @@ func _decode_elevations(img: Image) -> void:
 		for x: int in range(_width):
 			_elev[i] = min_elev + img.get_pixel(x, y).r * range_elev
 			i += 1
-
-
-## Elevation (meters) at a local world position. Y is ignored; only XZ matter.
-## Returns 0.0 when no heightmap is loaded.
-func sample_local(pos: Vector3) -> float:
-	return sample_local_xz(pos.x, pos.z)
 
 
 ## Elevation (meters) for a local-meter XZ coordinate (X=east, Z=south).

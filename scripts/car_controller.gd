@@ -37,8 +37,6 @@ signal gear_changed(gear: int)
 @onready var rear_right_wheel: VehicleWheel3D = $RearRightWheel
 
 @onready var camera_pivot: Node3D = $CameraPivot
-@onready var camera: Camera3D = $CameraPivot/Camera3D
-@onready var car_mesh: Node3D = $CarMesh
 @onready var front_left_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Right
 @onready var front_right_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Left
 @onready var rear_left_wheel_mesh: Node3D = $CarMesh/Wheel_Rear_Right
