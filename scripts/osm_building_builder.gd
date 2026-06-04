@@ -6,12 +6,19 @@ extends RefCounted
 ## half-hipped, gambrel, mansard, round, dome, onion, saltbox, sawtooth.
 ## Supports roof:direction (compass bearing 0-360) which takes priority over
 ## roof:orientation for specifying ridge direction.
+##
+## building=roof is treated as an open structure (canopy / porch / petrol-station
+## roof): a roof held up by thin support posts with no enclosing walls, rather
+## than a solid block. See https://wiki.openstreetmap.org/wiki/Tag:building%3Droof
+## (building:part=roof remains a normal walled roof part of a larger building.)
 
 const DEFAULT_HEIGHT := 8.0       # meters if no height/levels tag
 const FLOOR_HEIGHT := 3.0         # meters per floor
 const BUILDING_Y := 0.0
 const DEFAULT_ROOF_COLOR := Color(0.55, 0.35, 0.3)
 const DEFAULT_ROOF_HEIGHT := 3.0  # meters for pitched roofs when not specified
+const ROOF_SUPPORT_RADIUS := 0.12 # meters; radius of support posts for building=roof
+const ROOF_SLAB_THICKNESS := 0.3  # meters; thickness of a flat building=roof slab
 
 const BUILDING_COLORS := {
 	"residential": Color(0.75, 0.7, 0.6),
@@ -119,11 +126,6 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	if tags.has("roof:direction"):
 		roof_direction = tags["roof:direction"].to_float()
 
-	# For non-flat roofs, the wall height is total height minus roof height minus min_height
-	var wall_height := height - min_height
-	if roof_shape != "flat" and roof_shape != "":
-		wall_height = maxf(height - min_height - roof_height, 2.0)
-
 	var root := Node3D.new()
 	root.name = "Building_%d" % id
 
@@ -131,6 +133,23 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	# built relative to BUILDING_Y (0); translating the rigid root by the footprint
 	# elevation places it on the DEM without re-deriving every roof vertex.
 	root.position.y = ground_y
+
+	# building=roof is an open structure (canopy/porch): just a roof held up by
+	# thin supports, with no enclosing walls. See
+	# https://wiki.openstreetmap.org/wiki/Tag:building%3Droof
+	# (Note: building:part=roof is a real roof part of a larger building and is
+	#  handled via the normal wall+roof path below, so we key off the top-level
+	#  "building" tag specifically rather than the merged building_type.)
+	if tags.get("building", "") == "roof":
+		_build_open_roof(root, points, height, min_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
+		if tags.has("name") and tags["name"] != "":
+			root.add_child(_create_building_label(tags["name"], points, height))
+		return root
+
+	# For non-flat roofs, the wall height is total height minus roof height minus min_height
+	var wall_height := height - min_height
+	if roof_shape != "flat" and roof_shape != "":
+		wall_height = maxf(height - min_height - roof_height, 2.0)
 
 	# Build walls (raised by min_height when building is elevated)
 	var wall_base := BUILDING_Y + min_height
@@ -149,6 +168,98 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		root.add_child(label)
 
 	return root
+
+## Build an open roof structure (building=roof): a roof held up by thin support
+## posts, with no enclosing walls. The roof underside ("ceiling") sits at
+## (height - roof_height) and the posts run from the ground up to that ceiling.
+## All geometry is built relative to BUILDING_Y; the caller's root carries the
+## terrain offset.
+func _build_open_roof(root: Node3D, points: PackedVector3Array, height: float,
+		min_height: float, roof_height: float, roof_color: Color, wall_color: Color,
+		roof_shape: String, roof_orientation: String, roof_direction: float) -> void:
+	# Effective roof thickness/height. A flat roof has no pitch, so give it a thin
+	# slab so it reads as a solid roof rather than a paper-thin plane.
+	var effective_roof_h := roof_height
+	if roof_shape == "flat" or roof_shape == "":
+		effective_roof_h = ROOF_SLAB_THICKNESS
+
+	# Ceiling is the underside of the roof; posts reach up to it.
+	var ceiling_y := maxf(height - effective_roof_h, min_height + 0.5)
+
+	# Support posts at each footprint vertex (skip the duplicated closing vertex).
+	var post_color := wall_color
+	for i: int in range(points.size() - 1):
+		var post := _build_support_post(points[i], BUILDING_Y, ceiling_y, post_color)
+		if post != null:
+			post.name = "Support_%d" % i
+			root.add_child(post)
+
+	# Roof sits on top of the posts at the ceiling height.
+	if roof_shape == "flat" or roof_shape == "":
+		# Solid slab: top face + bottom face + thin sides.
+		var slab := _build_roof_slab(points, ceiling_y, effective_roof_h, roof_color)
+		if slab != null:
+			root.add_child(slab)
+	else:
+		var roof_nodes := _build_roof_shape(points, ceiling_y, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
+		for node: Node3D in roof_nodes:
+			root.add_child(node)
+
+## Build a single vertical support post (square prism) from base_y to top_y at xz.
+func _build_support_post(xz: Vector3, base_y: float, top_y: float, color: Color) -> MeshInstance3D:
+	if top_y <= base_y:
+		return null
+	var st := _new_st(color)
+	var r := ROOF_SUPPORT_RADIUS
+	var cx := xz.x
+	var cz := xz.z
+	# Four corners of the square cross-section (CCW when viewed from above)
+	var c0 := Vector3(cx - r, 0.0, cz - r)
+	var c1 := Vector3(cx + r, 0.0, cz - r)
+	var c2 := Vector3(cx + r, 0.0, cz + r)
+	var c3 := Vector3(cx - r, 0.0, cz + r)
+	var corners := [c0, c1, c2, c3]
+	# Side walls
+	for i: int in range(4):
+		var a: Vector3 = corners[i]
+		var b: Vector3 = corners[(i + 1) % 4]
+		var bl := Vector3(a.x, base_y, a.z)
+		var br := Vector3(b.x, base_y, b.z)
+		var tr := Vector3(b.x, top_y, b.z)
+		var tl := Vector3(a.x, top_y, a.z)
+		_add_quad(st, bl, br, tr, tl)
+	return _make_mesh(st, "Support")
+
+## Build a flat roof as a solid slab with thickness (top, bottom, and side faces).
+func _build_roof_slab(points: PackedVector3Array, base_y: float, thickness: float, color: Color) -> MeshInstance3D:
+	var top_y := base_y + thickness
+	var st := _new_st(color)
+	# Top face (CCW, upward normal) and bottom face (downward normal)
+	var indices := PolygonUtils.triangulate_xz(points)
+	for i: int in range(0, indices.size(), 3):
+		var ia: int = indices[i]
+		var ib: int = indices[i + 1]
+		var ic: int = indices[i + 2]
+		# Top face
+		_add_tri(st,
+			Vector3(points[ia].x, top_y, points[ia].z),
+			Vector3(points[ib].x, top_y, points[ib].z),
+			Vector3(points[ic].x, top_y, points[ic].z))
+		# Bottom face (reversed winding so it faces down)
+		_add_tri(st,
+			Vector3(points[ia].x, base_y, points[ia].z),
+			Vector3(points[ic].x, base_y, points[ic].z),
+			Vector3(points[ib].x, base_y, points[ib].z))
+	# Side faces around the perimeter
+	for i: int in range(points.size() - 1):
+		var p0 := points[i]
+		var p1 := points[i + 1]
+		var bl := Vector3(p0.x, base_y, p0.z)
+		var br := Vector3(p1.x, base_y, p1.z)
+		var tr := Vector3(p1.x, top_y, p1.z)
+		var tl := Vector3(p0.x, top_y, p0.z)
+		_add_quad(st, bl, br, tr, tl)
+	return _make_mesh(st, "Roof")
 
 ## Parse a height string value to meters. Handles:
 ## - bare numbers (assumed meters): "12", "12.5"
