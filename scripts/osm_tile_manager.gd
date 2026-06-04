@@ -29,12 +29,32 @@ var _building_builder: OSMBuildingBuilder = null
 var _asset_placer: OSMAssetPlacer = null
 var _relation_builder: OSMRelationBuilder = null
 
+## Ordered way-feature handlers. Dispatch is first-match-wins, so this order
+## encodes the precedence the old if-elif chain relied on:
+##   - power_line / gantry before area  (closed-ring features must claim their
+##     ways before the generic closed-ring AreaHandler does)
+##   - parking before area              (dedicated styling/naming)
+## Adding a feature type = add a handler file and one entry here.
+var _way_handlers: Array[OSMWayHandler] = []
+
 func _ready() -> void:
 	_way_builder = OSMWayBuilder.new()
 	_infrastructure_builder = OSMInfrastructureBuilder.new()
 	_building_builder = OSMBuildingBuilder.new()
 	_asset_placer = OSMAssetPlacer.new()
 	_relation_builder = OSMRelationBuilder.new()
+
+	_way_handlers = [
+		RoadHandler.new(),
+		RailwayHandler.new(),
+		PowerLineHandler.new(),
+		GantryHandler.new(),
+		WaterwayHandler.new(),
+		BuildingHandler.new(),
+		BarrierHandler.new(),
+		ParkingHandler.new(),
+		AreaHandler.new(),
+	]
 
 	_load_osm_data()
 
@@ -164,7 +184,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		var origin_x := float(tkey.x) * tile_size
 		var origin_z := float(tkey.y) * tile_size
 		for way: OSMParser.OSMWay in bucket["ways"]:
-			if _is_area(way) or _is_parking(way):
+			if AreaHandler.is_area(way) or ParkingHandler.is_parking(way):
 				var pts := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
 				if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
 						pts, origin_x, origin_z, tile_size, grid_step):
@@ -221,70 +241,26 @@ func _load_tile(tkey: Vector2i) -> void:
 				if _point_in_polygon_xz(part_centroid, bld_points):
 					suppressed_building_ids[way.id] = true
 
-	# Process ways (roads, buildings from ways, etc.)
+	# Process ways (roads, buildings from ways, etc.) via the handler registry.
+	# Each way is offered to handlers in priority order; the first match builds
+	# it. This replaces the central if-elif dispatch — feature-specific logic now
+	# lives in scripts/handlers/*.gd (see _way_handlers).
+	var ctx := _make_tile_context(tkey, suppressed_building_ids)
 	var processed_way_ids := {}
 	for way: OSMParser.OSMWay in bucket["ways"]:
 		if processed_way_ids.has(way.id):
 			continue
 		processed_way_ids[way.id] = true
 
-		if _is_road(way):
-			var mesh_instance := _way_builder.build_road(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
-		elif _is_railway(way):
-			var mesh_instance := _way_builder.build_railway(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
-		elif _is_power_line(way):
-			var mesh_instance := _infrastructure_builder.build_power_line(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
-		elif _is_gantry(way):
-			var mesh_instance := _infrastructure_builder.build_gantry(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
-		elif _is_waterway(way):
-			var mesh_instance := _way_builder.build_waterway(way, _osm_data)
-			if mesh_instance != null:
-				tile_root.add_child(mesh_instance)
-		elif _is_building(way):
-			if not suppressed_building_ids.has(way.id):
-				var mesh_instance := _building_builder.build_building_from_way(way, _osm_data)
-				if mesh_instance != null:
-					tile_root.add_child(mesh_instance)
-		elif _is_barrier_way(way):
-			var barrier_node := _asset_placer.place_way_asset(way, _osm_data)
-			if barrier_node != null:
-				tile_root.add_child(barrier_node)
-		elif _is_parking(way):
-			var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
-			var color := PolygonUtils.get_area_color(way.tags)
-			var mesh_instance: MeshInstance3D
-			if _has_terrain():
-				var grid_step := tile_size / float(max(1, terrain_subdivisions))
-				var tile_clip: Array[float] = _tile_clip_rect(tkey)
-				mesh_instance = PolygonUtils.build_terrain_draped_mesh(
-					points, color, _osm_data.height_provider, grid_step, 0.015, tile_clip)
-			else:
-				mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.015, true)
-			if mesh_instance != null:
-				mesh_instance.name = "Parking_%d" % way.id
-				tile_root.add_child(mesh_instance)
-		elif _is_area(way):
-			if PolygonUtils.is_scrub(way.tags):
-				var scrub_node := _build_scrub(way, tkey)
-				if scrub_node != null:
-					tile_root.add_child(scrub_node)
-			elif PolygonUtils.is_forest(way.tags):
-				var forest_node := _build_forest(way, tkey)
-				if forest_node != null:
-					tile_root.add_child(forest_node)
-			else:
-				var mesh_instance := _build_area(way, tkey)
-				if mesh_instance != null:
-					tile_root.add_child(mesh_instance)
-		elif not _is_ignorable_way(way):
+		var handled := false
+		for handler: OSMWayHandler in _way_handlers:
+			if handler.matches(way, ctx):
+				var node := handler.build(way, ctx)
+				if node != null:
+					tile_root.add_child(node)
+				handled = true
+				break
+		if not handled and not _is_ignorable_way(way):
 			print_debug("Skipping way with tags", way.tags)
 
 	# Render building:part ways as 3D buildings
@@ -316,6 +292,23 @@ func _load_tile(tkey: Vector2i) -> void:
 
 	_loaded_tiles[tkey] = tile_root
 	tile_loaded.emit(tkey)
+
+## Build the per-tile context handed to every way handler. Bundles the shared
+## builders and tile parameters so handler build() signatures stay uniform.
+func _make_tile_context(tkey: Vector2i, suppressed_building_ids: Dictionary) -> OSMTileContext:
+	var ctx := OSMTileContext.new()
+	ctx.osm_data = _osm_data
+	ctx.tile_key = tkey
+	ctx.tile_size = tile_size
+	ctx.has_terrain = _has_terrain()
+	ctx.grid_step = tile_size / float(max(1, terrain_subdivisions)) if ctx.has_terrain else 0.0
+	ctx.tile_clip = _tile_clip_rect(tkey) if ctx.has_terrain else null
+	ctx.suppressed_building_ids = suppressed_building_ids
+	ctx.way_builder = _way_builder
+	ctx.infrastructure_builder = _infrastructure_builder
+	ctx.building_builder = _building_builder
+	ctx.asset_placer = _asset_placer
+	return ctx
 
 func _unload_tile(tkey: Vector2i) -> void:
 	var tile_node: Node3D = _loaded_tiles[tkey]
@@ -468,81 +461,11 @@ func _add_terrain_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 	st.add_vertex(b)
 	st.add_vertex(c)
 
-func _is_road(way: OSMParser.OSMWay) -> bool:
-	return way.tags.has("highway")
-
-## Railway track way (rail, tram, light_rail, subway, narrow_gauge, ...).
-## Abstract sub-features that are not a physical line (platforms, signals,
-## crossings carried on nodes) are excluded.
-const _RAILWAY_LINE_VALUES := {
-	"rail": true, "light_rail": true, "subway": true, "tram": true,
-	"narrow_gauge": true, "monorail": true, "funicular": true,
-	"preserved": true, "disused": true, "miniature": true,
-}
-func _is_railway(way: OSMParser.OSMWay) -> bool:
-	return _RAILWAY_LINE_VALUES.has(way.tags.get("railway", ""))
-
-## Overhead power cable way (transmission line, distribution minor_line, cable).
-## Closed power rings (substations/generators) are handled by _is_area instead.
-const _POWER_LINE_VALUES := {
-	"line": true, "minor_line": true, "cable": true,
-}
-func _is_power_line(way: OSMParser.OSMWay) -> bool:
-	if _is_closed_way(way):
-		return false
-	return _POWER_LINE_VALUES.has(way.tags.get("power", ""))
-
-## Sign/signal gantry spanning a road. Closed gantry rings (rare) are left to
-## the area path.
-func _is_gantry(way: OSMParser.OSMWay) -> bool:
-	if _is_closed_way(way):
-		return false
-	return way.tags.get("man_made", "") == "gantry"
-
-func _is_building(way: OSMParser.OSMWay) -> bool:
-	return way.tags.has("building")
-
+## building:part footprints are rendered in a dedicated pass (they bypass the
+## outline-suppression test), so this predicate stays on the manager rather than
+## becoming a way handler.
 func _is_building_part(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("building:part")
-
-func _is_barrier_way(way: OSMParser.OSMWay) -> bool:
-	return way.tags.has("barrier")
-
-func _is_parking(way: OSMParser.OSMWay) -> bool:
-	return way.tags.get("amenity", "") == "parking"
-
-## Linear water feature. Underground waterways (culverts/tunnels) are ignored so
-## they do not paint blue ribbons across the surface.
-func _is_waterway(way: OSMParser.OSMWay) -> bool:
-	if not way.tags.has("waterway"):
-		return false
-	if way.tags.get("tunnel", "") != "" or way.tags.has("culvert"):
-		return false
-	if way.tags.get("layer", "0").to_int() < 0:
-		return false
-	return true
-
-## A way is closed when its first and last node ids match (an enclosed ring).
-func _is_closed_way(way: OSMParser.OSMWay) -> bool:
-	return way.node_ids.size() >= 4 and way.node_ids[0] == way.node_ids[-1]
-
-## Closed man_made values that describe a ground footprint (treatment plants,
-## works, reservoirs, ...) rather than a point structure or linear feature.
-const _MAN_MADE_AREA_VALUES := {
-	"wastewater_plant": true, "water_works": true, "works": true,
-	"reservoir_covered": true, "storage_tank": true, "wastewater": true,
-}
-func _is_area(way: OSMParser.OSMWay) -> bool:
-	if way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure"):
-		return true
-	# Closed amenity/shop/power/area:highway/man_made rings render as flat
-	# colored ground.
-	if not _is_closed_way(way):
-		return false
-	if _MAN_MADE_AREA_VALUES.has(way.tags.get("man_made", "")):
-		return true
-	return way.tags.has("amenity") or way.tags.has("shop") \
-		or way.tags.has("power") or way.tags.has("area:highway")
 
 ## Ways we deliberately do not render: untagged ring members consumed by their
 ## parent relation, explicitly removed features, and abstract man_made outlines
@@ -597,41 +520,6 @@ func _point_in_polygon_xz(point: Vector3, polygon: PackedVector3Array) -> bool:
 			inside = not inside
 		j = i
 	return inside
-
-func _build_scrub(way: OSMParser.OSMWay, tkey: Vector2i) -> Node3D:
-	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
-	var hp: HeightProvider = _osm_data.height_provider if _has_terrain() else null
-	var grid_step := tile_size / float(max(1, terrain_subdivisions)) if _has_terrain() else 0.0
-	var tile_clip: Variant = _tile_clip_rect(tkey) if _has_terrain() else null
-	var node := PolygonUtils.build_scrub_area(points, hp, grid_step, 0.01, tile_clip)
-	if node != null:
-		node.name = "Scrub_%d" % way.id
-	return node
-
-func _build_forest(way: OSMParser.OSMWay, tkey: Vector2i) -> Node3D:
-	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
-	var hp: HeightProvider = _osm_data.height_provider if _has_terrain() else null
-	var grid_step := tile_size / float(max(1, terrain_subdivisions)) if _has_terrain() else 0.0
-	var tile_clip: Variant = _tile_clip_rect(tkey) if _has_terrain() else null
-	var node := PolygonUtils.build_forest_area(points, hp, grid_step, 0.01, tile_clip)
-	if node != null:
-		node.name = "Forest_%d" % way.id
-	return node
-
-func _build_area(way: OSMParser.OSMWay, tkey: Vector2i) -> MeshInstance3D:
-	var points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
-	var color := PolygonUtils.get_area_color(way.tags)
-	var mesh_instance: MeshInstance3D
-	if _has_terrain():
-		var grid_step := tile_size / float(max(1, terrain_subdivisions))
-		var tile_clip: Array[float] = _tile_clip_rect(tkey)
-		mesh_instance = PolygonUtils.build_terrain_draped_mesh(
-			points, color, _osm_data.height_provider, grid_step, 0.01, tile_clip)
-	else:
-		mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
-	if mesh_instance != null:
-		mesh_instance.name = "Area_%d" % way.id
-	return mesh_instance
 
 ## Return [min_x, max_x, min_z, max_z] for a tile key.
 func _tile_clip_rect(tkey: Vector2i) -> Array[float]:
