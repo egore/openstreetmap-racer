@@ -12,6 +12,7 @@ var terrain_grid_step: float = 0.0
 ## Array[float] [min_x, max_x, min_z, max_z] or null.
 var tile_clip_rect: Variant = null
 
+
 func _init() -> void:
 	_building_builder = OSMBuildingBuilder.new()
 
@@ -75,6 +76,7 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 	var has_children := false
 
 	var is_scrub := PolygonUtils.is_scrub(rel.tags)
+	var is_forest := PolygonUtils.is_forest(rel.tags)
 	var color := PolygonUtils.get_area_color(rel.tags)
 	var use_terrain := height_provider != null and height_provider.is_ready() \
 		and terrain_grid_step > 0.0
@@ -99,6 +101,14 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 			if scrub_node != null:
 				scrub_node.name = "ScrubPart_%d" % way_id
 				root.add_child(scrub_node)
+				has_children = true
+		elif is_forest:
+			var hp: HeightProvider = height_provider if use_terrain else null
+			var gs: float = terrain_grid_step if use_terrain else 0.0
+			var forest_node := PolygonUtils.build_forest_area(points, hp, gs, 0.01, tile_clip_rect)
+			if forest_node != null:
+				forest_node.name = "ForestPart_%d" % way_id
+				root.add_child(forest_node)
 				has_children = true
 		else:
 			var mesh_instance: MeshInstance3D

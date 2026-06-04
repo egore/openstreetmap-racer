@@ -435,6 +435,144 @@ static func build_terrain_draped_mesh(
 static func is_scrub(tags: Dictionary) -> bool:
 	return tags.get("natural", "") == "scrub"
 
+## Return true when tags represent a forest/wood area.
+static func is_forest(tags: Dictionary) -> bool:
+	return tags.get("natural", "") == "wood" or tags.get("landuse", "") == "forest"
+
+
+# ─── Forest tree scattering ──────────────────────────────────────────────────
+
+## Density of lollipop trees per square metre.  0.05 ≈ one tree per 20 m².
+const FOREST_DENSITY := 0.05
+## Height range of the trunk (metres).
+const FOREST_TRUNK_MIN_H := 3.0
+const FOREST_TRUNK_MAX_H := 6.0
+## Trunk radius (metres).
+const FOREST_TRUNK_RADIUS := 0.15
+## Crown (ball) radius range (metres).
+const FOREST_CROWN_MIN_R := 1.5
+const FOREST_CROWN_MAX_R := 3.0
+## Dark forest-floor colour painted under the trees.
+const FOREST_GROUND_COLOR := Color(0.12, 0.35, 0.08)
+## Trunk colour (brown).
+const FOREST_TRUNK_COLOR := Color(0.35, 0.22, 0.1)
+## Palette of crown greens.
+const FOREST_CROWN_COLORS: Array[Color] = [
+	Color(0.15, 0.45, 0.10),
+	Color(0.20, 0.50, 0.12),
+	Color(0.18, 0.42, 0.08),
+	Color(0.25, 0.52, 0.15),
+]
+
+## Cached procedural lollipop-tree mesh (built once, reused everywhere).
+static var _lollipop_mesh_cache: ArrayMesh = null
+
+## Build a Node3D for a forest area: dark ground polygon + scattered lollipop
+## trees (cylinder trunk + sphere crown) via MultiMeshInstance3D.
+static func build_forest_area(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,
+) -> Node3D:
+	if points.size() < 3:
+		return null
+
+	var root := Node3D.new()
+
+	# --- ground polygon ---
+	var ground: MeshInstance3D
+	if hp != null and hp.is_ready() and grid_step > 0.0:
+		ground = build_terrain_draped_mesh(points, FOREST_GROUND_COLOR, hp, grid_step, y_offset, clip_rect)
+	else:
+		ground = build_flat_polygon_mesh(points, FOREST_GROUND_COLOR, y_offset, true)
+	if ground != null:
+		ground.name = "ForestGround"
+		root.add_child(ground)
+
+	# --- scatter positions ---
+	var scatter := _scatter_points_in_polygon(points, hp, FOREST_DENSITY)
+	if scatter.size() == 0:
+		if ground != null:
+			return root
+		return null
+
+	# --- ensure lollipop mesh is cached ---
+	if _lollipop_mesh_cache == null:
+		_build_lollipop_mesh()
+
+	# --- build MultiMesh with per-instance scale ---
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.instance_count = scatter.size()
+	mm.mesh = _lollipop_mesh_cache
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(Vector2(points[0].x, points[0].z)) + 42
+
+	for i: int in range(scatter.size()):
+		var pos: Vector3 = scatter[i]
+		# Random uniform scale so trunk height and crown radius vary together.
+		var s := rng.randf_range(0.6, 1.3)
+		var t := Transform3D()
+		t = t.scaled(Vector3(s, s, s))
+		t.origin = pos
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, FOREST_CROWN_COLORS[rng.randi() % FOREST_CROWN_COLORS.size()])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.name = "ForestTrees"
+	root.add_child(mmi)
+
+	return root
+
+
+## Build a simple lollipop tree mesh: brown cylinder trunk + green sphere crown.
+## The mesh is unit-scale (trunk ~4.5 m, crown centred on top) so that the
+## MultiMesh per-instance scale produces natural variation.
+static func _build_lollipop_mesh() -> void:
+	var merged := ArrayMesh.new()
+
+	# --- trunk (CylinderMesh) ---
+	var trunk := CylinderMesh.new()
+	trunk.top_radius = FOREST_TRUNK_RADIUS
+	trunk.bottom_radius = FOREST_TRUNK_RADIUS
+	trunk.height = 4.5  # base trunk height before per-instance scale
+	trunk.radial_segments = 6
+	trunk.rings = 1
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = FOREST_TRUNK_COLOR
+
+	var st_trunk := SurfaceTool.new()
+	st_trunk.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Shift trunk up so its base sits at Y=0.
+	st_trunk.append_from(trunk, 0, Transform3D(Basis.IDENTITY, Vector3(0, 2.25, 0)))
+	st_trunk.set_material(trunk_mat)
+	st_trunk.commit(merged)
+
+	# --- crown (SphereMesh) with vertex_color_use_as_albedo ---
+	var crown := SphereMesh.new()
+	crown.radius = 2.0
+	crown.height = 4.0
+	crown.radial_segments = 8
+	crown.rings = 6
+
+	var crown_mat := StandardMaterial3D.new()
+	crown_mat.vertex_color_use_as_albedo = true
+
+	var st_crown := SurfaceTool.new()
+	st_crown.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Place crown centre at top of trunk.
+	st_crown.append_from(crown, 0, Transform3D(Basis.IDENTITY, Vector3(0, 5.5, 0)))
+	st_crown.set_material(crown_mat)
+	st_crown.commit(merged)
+
+	_lollipop_mesh_cache = merged
+
 
 # ─── Scrub ball scattering ───────────────────────────────────────────────────
 
@@ -532,9 +670,11 @@ static func build_scrub_area(
 ## Scatter random sample points inside a polygon using rejection sampling on
 ## its AABB.  Returns world-space positions with Y set from the
 ## HeightProvider (or 0 when flat).
+## density overrides SCRUB_DENSITY when supplied (e.g. forests are sparser).
 static func _scatter_points_in_polygon(
 		points: PackedVector3Array,
 		hp: HeightProvider,
+		density: float = SCRUB_DENSITY,
 ) -> Array[Vector3]:
 	var result: Array[Vector3] = []
 	var bounds := polygon_bounds_xz(points)
@@ -554,9 +694,9 @@ static func _scatter_points_in_polygon(
 		poly_2d.append(Vector2(points[i].x, points[i].z))
 
 	# Number of candidate points proportional to polygon AABB area.
-	var n_candidates := int(area * SCRUB_DENSITY)
+	var n_candidates := int(area * density)
 	# Cap to avoid performance issues on huge polygons.
-	n_candidates = min(n_candidates, 4000)
+	n_candidates = mini(n_candidates, 4000)
 
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash(Vector2(points[0].x, points[0].z)) + 1
