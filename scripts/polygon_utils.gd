@@ -296,7 +296,11 @@ static func subdivide_polyline_to_terrain(
 		return points
 
 	var result: PackedVector3Array = []
-	result.append(points[0])
+	# Re-sample every vertex (including original OSM nodes) against the terrain
+	# *mesh* surface, not the raw bilinear DEM field. The OSM parser lifts nodes
+	# with bilinear sampling, which drifts off the triangulated mesh on slopes;
+	# sample_mesh_height snaps the whole ribbon flush onto the built terrain.
+	result.append(Vector3(points[0].x, hp.sample_mesh_height(points[0].x, points[0].z), points[0].z))
 
 	for i: int in range(points.size() - 1):
 		var a := points[i]
@@ -307,16 +311,17 @@ static func subdivide_polyline_to_terrain(
 		var seg_len := sqrt(dx * dx + dz * dz)
 
 		if seg_len <= max_step:
-			# Segment is short enough — keep the original endpoint.
-			result.append(b)
+			# Segment is short enough — keep the endpoint, re-sampled onto the mesh.
+			result.append(Vector3(b.x, hp.sample_mesh_height(b.x, b.z), b.z))
 		else:
-			# Subdivide: insert evenly-spaced intermediate points.
+			# Subdivide: insert evenly-spaced intermediate points, each draped on
+			# the mesh triangle it falls in.
 			var n_sub := int(ceil(seg_len / max_step))
 			for s: int in range(1, n_sub + 1):
 				var t := float(s) / float(n_sub)
 				var px := a.x + dx * t
 				var pz := a.z + dz * t
-				var py := hp.sample_local_xz(px, pz)
+				var py := hp.sample_mesh_height(px, pz)
 				result.append(Vector3(px, py, pz))
 
 	return result
@@ -415,7 +420,9 @@ static func build_terrain_draped_mesh(
 					continue
 				for idx: int in indices:
 					var p2 := clip[idx]
-					var wy := hp.sample_local_xz(p2.x, p2.y) + y_offset
+					# Drape on the terrain *mesh* triangle (not raw bilinear) so the
+					# area surface coincides with the ground it sits on.
+					var wy := hp.sample_mesh_height(p2.x, p2.y) + y_offset
 					st.set_normal(Vector3.UP)
 					st.add_vertex(Vector3(p2.x, wy, p2.y))
 					has_tris = true
