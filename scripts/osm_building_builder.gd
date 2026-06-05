@@ -565,6 +565,192 @@ func _compute_ridge_geometry(points: PackedVector3Array, base_y: float, roof_h: 
 		"base_y": base_y,
 	}
 
+# ─── Linear profile helper ───────────────────────────────────────────────────
+# Generic roof builder using the linear profile approach from UrbanEye3D.
+# A profile is defined as an array of Vector2(x, y) where x goes from 0.0 to
+# 1.0 across the building width (perpendicular to ridge) and y is the height
+# fraction (0.0 = base, 1.0 = peak).
+#
+# The building polygon is sliced into strips along each profile breakpoint
+# (e.g. the ridge for a gabled roof) using Geometry2D.intersect_polygons.
+# Each strip is triangulated independently so no triangle ever crosses a
+# breakpoint line, preventing the "collapsed ridge" artefact that 2D
+# triangulation produces on L-shaped / concave buildings.
+
+func _build_linear_profile_roof(points: PackedVector3Array, base_y: float, roof_h: float,
+		roof_color: Color, wall_color: Color, orientation: String,
+		roof_direction: float, profile: Array[Vector2]) -> Array[Node3D]:
+	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var min_perp: float = rg["min_perp"]
+	var max_perp: float = rg["max_perp"]
+	var perp_span := absf(max_perp - min_perp)
+	var min_proj: float = rg["min_proj"]
+	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
+
+	# Collect the interior profile breakpoint x-values (excluding 0 and 1)
+	var break_xs: Array[float] = []
+	for bp: Vector2 in profile:
+		if bp.x > 0.001 and bp.x < 0.999:
+			break_xs.append(bp.x)
+	break_xs.sort()
+
+	# Build the list of strip boundaries: [0.0, break1, break2, ..., 1.0]
+	var boundaries: Array[float] = [0.0]
+	boundaries.append_array(break_xs)
+	boundaries.append(1.0)
+
+	# Convert polygon to 2D (XZ → XY) for clipping, stripping closing vertex
+	var n := points.size()
+	var closed := n > 1 and points[0].distance_to(points[n - 1]) < 0.01
+	var inner_n := n - 1 if closed else n
+	var poly_2d: PackedVector2Array = []
+	for idx: int in range(inner_n):
+		poly_2d.append(Vector2(points[idx].x, points[idx].z))
+
+	# 2D axes for building the clip rectangles
+	var perp_2d := Vector2(perp_dir.x, perp_dir.z)
+	var ridge_dir: Vector3 = rg["ridge_dir"]
+	var ridge_2d := Vector2(ridge_dir.x, ridge_dir.z)
+	var centroid_2d := Vector2(centroid.x, centroid.z)
+	# Extend clip rectangles well past the building along the ridge
+	var extend := proj_span + 20.0
+
+	var st_roof := _new_st(roof_color)
+	var st_gable := _new_st(wall_color)
+
+	# For each strip between adjacent profile breakpoints, clip the polygon
+	# to that strip, then triangulate the clipped region.
+	for si: int in range(boundaries.size() - 1):
+		var bx0 := boundaries[si]
+		var bx1 := boundaries[si + 1]
+
+		# The strip runs between two lines at perp positions bx0 and bx1.
+		# Convert to world-space offsets from centroid.
+		var perp0_off := min_perp + bx0 * perp_span  # offset from centroid along perp_dir
+		var perp1_off := min_perp + bx1 * perp_span
+
+		# Build clip rectangle: a wide band along the ridge direction
+		# between the two perp lines. Corners at:
+		#   centroid + perp_dir * perp_off ± ridge_dir * extend
+		var c0 := centroid_2d + perp_2d * perp0_off - ridge_2d * extend
+		var c1 := centroid_2d + perp_2d * perp0_off + ridge_2d * extend
+		var c2 := centroid_2d + perp_2d * perp1_off + ridge_2d * extend
+		var c3 := centroid_2d + perp_2d * perp1_off - ridge_2d * extend
+		var clip_rect := PackedVector2Array([c0, c1, c2, c3])
+
+		var clips := Geometry2D.intersect_polygons(poly_2d, clip_rect)
+		for clip: PackedVector2Array in clips:
+			var tri_indices := Geometry2D.triangulate_polygon(clip)
+			if tri_indices.is_empty():
+				continue
+			for ti: int in range(0, tri_indices.size(), 3):
+				var v: Array[Vector3] = []
+				for vi: int in range(3):
+					var cp := clip[tri_indices[ti + vi]]
+					var perp := (cp.x - centroid.x) * perp_dir.x + (cp.y - centroid.z) * perp_dir.z
+					var px := clampf((perp - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
+					var h_frac := _sample_profile(profile, px)
+					v.append(Vector3(cp.x, base_y + roof_h * h_frac, cp.y))
+				_add_tri(st_roof, v[0], v[1], v[2])
+
+	# Gable wall patches: use the subdivided polygon for edge-by-edge patches.
+	var sub_points := _subdivide_at_profile_breaks(points, centroid, perp_dir, min_perp, perp_span, break_xs)
+	var n_sub := sub_points.size()
+	for i: int in range(n_sub - 1):
+		var p0 := sub_points[i]
+		var p1 := sub_points[i + 1]
+		var perp_v0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
+		var perp_v1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
+		var px0 := clampf((perp_v0 - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
+		var px1 := clampf((perp_v1 - min_perp) / maxf(perp_span, 0.001), 0.0, 1.0)
+		var ry0 := base_y + roof_h * _sample_profile(profile, px0)
+		var ry1 := base_y + roof_h * _sample_profile(profile, px1)
+
+		if ry0 > base_y + 0.01 or ry1 > base_y + 0.01:
+			var bl := Vector3(p0.x, base_y, p0.z)
+			var br := Vector3(p1.x, base_y, p1.z)
+			var tr := Vector3(p1.x, ry1, p1.z)
+			var tl := Vector3(p0.x, ry0, p0.z)
+			if ry0 <= base_y + 0.01:
+				_add_tri(st_gable, bl, tr, br)
+			elif ry1 <= base_y + 0.01:
+				_add_tri(st_gable, bl, tl, br)
+			else:
+				_add_tri(st_gable, bl, tr, br)
+				_add_tri(st_gable, bl, tl, tr)
+
+	var result: Array[Node3D] = []
+	result.append(_make_mesh(st_roof, "Roof"))
+	result.append(_make_mesh(st_gable, "Gables"))
+	return result
+
+## Subdivide polygon edges where they cross profile breakpoint lines.
+## For a gabled roof with profile [0:0, 0.5:1, 1:0], the breakpoint at x=0.5
+## is the ridge line. Any edge crossing that line gets a new vertex inserted
+## at the crossing point, so wall patches can be built edge-by-edge.
+func _subdivide_at_profile_breaks(points: PackedVector3Array, centroid: Vector3,
+		perp_dir: Vector3, min_perp: float, perp_span: float,
+		break_xs: Array[float]) -> PackedVector3Array:
+	if break_xs.is_empty() or perp_span < 0.001:
+		return points
+
+	# Convert break x-values [0,1] to perpendicular world-space positions
+	var break_perps: Array[float] = []
+	for bx: float in break_xs:
+		break_perps.append(min_perp + bx * perp_span)
+
+	var result: PackedVector3Array = []
+	var n := points.size()
+	for i: int in range(n - 1):
+		var p0 := points[i]
+		var p1 := points[i + 1]
+		result.append(p0)
+
+		var perp0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
+		var perp1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
+
+		# Collect all breakpoints that lie strictly between perp0 and perp1
+		var crossings: Array[float] = []
+		for bp: float in break_perps:
+			if (perp0 < bp - 0.001 and bp + 0.001 < perp1) or (perp1 < bp - 0.001 and bp + 0.001 < perp0):
+				crossings.append(bp)
+
+		# Sort crossings by distance from p0
+		if crossings.size() > 1:
+			if perp0 > perp1:
+				crossings.sort()
+				crossings.reverse()
+			else:
+				crossings.sort()
+
+		# Insert interpolated vertices at each crossing
+		for bp: float in crossings:
+			var t := (bp - perp0) / (perp1 - perp0)
+			var px := p0.x + (p1.x - p0.x) * t
+			var pz := p0.z + (p1.z - p0.z) * t
+			result.append(Vector3(px, 0.0, pz))
+
+	# Add closing vertex
+	if n > 0:
+		result.append(points[n - 1])
+	return result
+
+## Sample a piecewise-linear profile at position x (0.0 to 1.0).
+## Profile is an array of Vector2(x_pos, height_fraction) sorted by x_pos.
+func _sample_profile(profile: Array[Vector2], x: float) -> float:
+	if profile.is_empty():
+		return 0.0
+	if x <= profile[0].x:
+		return profile[0].y
+	for i: int in range(profile.size() - 1):
+		if x <= profile[i + 1].x:
+			var t := (x - profile[i].x) / maxf(profile[i + 1].x - profile[i].x, 0.001)
+			return lerpf(profile[i].y, profile[i + 1].y, t)
+	return profile[profile.size() - 1].y
+
 # ─── Flat roof ────────────────────────────────────────────────────────────────
 
 func _roof_flat(points: PackedVector3Array, base_y: float, color: Color) -> Array[Node3D]:
@@ -575,98 +761,23 @@ func _roof_flat(points: PackedVector3Array, base_y: float, color: Color) -> Arra
 	return []
 
 # ─── Gabled roof ─────────────────────────────────────────────────────────────
+# Delegates to the linear profile system with a V-shaped gabled profile:
+# [0:0, 0.5:1, 1:0]. The profile system handles edge subdivision at the ridge
+# breakpoint so rectangular buildings get a proper ridge peak.
 
 func _roof_gabled(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String,
 		roof_direction: float = -1.0) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var _perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_start: Vector3 = rg["ridge_start"]
-	var ridge_end: Vector3 = rg["ridge_end"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-
-	var st_roof := _new_st(roof_color)
-	var st_gable := _new_st(wall_color)
-
-	# For each polygon edge, project it onto the ridge to form a roof slope quad.
-	# Skip edges that are roughly perpendicular to the ridge (gable ends).
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-		var eave0 := Vector3(p0.x, base_y, p0.z)
-		var eave1 := Vector3(p1.x, base_y, p1.z)
-
-		# Project each eave vertex along perp_dir onto the ridge line
-		var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
-		var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
-		var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-		var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-		var ridge0: Vector3 = ridge_start.lerp(ridge_end, t0)
-		var ridge1: Vector3 = ridge_start.lerp(ridge_end, t1)
-
-		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
-		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
-		var dot_ridge := absf(edge_dir.dot(ridge_dir))
-
-		if dot_ridge > 0.5:
-			# Side edge: create roof slope quad from eave to ridge
-			_add_quad(st_roof, eave1, eave0, ridge0, ridge1)
-
-	# Gable triangles at the two ends
-	_add_gable_ends(st_gable, points, base_y, rg)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st_roof, "Roof"))
-	result.append(_make_mesh(st_gable, "Gables"))
-	return result
-
-func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float, rg: Dictionary) -> void:
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_y: float = rg["ridge_y"]
-
-	# Find vertices closest to each end of the ridge
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var threshold := (max_proj - min_proj) * 0.05
-
-	# Collect vertices near each gable end
-	for end_proj: float in [min_proj, max_proj]:
-		var gable_verts: Array[Vector3] = []
-		for i: int in range(points.size() - 1):
-			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
-			if absf(proj - end_proj) < threshold + 0.5:
-				gable_verts.append(points[i])
-
-		if gable_verts.size() >= 2:
-			# Sort by perpendicular distance
-			var perp_dir: Vector3 = rg["perp_dir"]
-			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
-				return PolygonUtils.project_xz(a, centroid, perp_dir) < PolygonUtils.project_xz(b, centroid, perp_dir))
-			var left := gable_verts[0]
-			var right := gable_verts[gable_verts.size() - 1]
-			# The roof slope quads place their ridge vertices on the ridge LINE
-			# (centroid + ridge_dir * proj), i.e. at the centroid's perpendicular
-			# offset. The gable apex must land on that same line, otherwise the
-			# triangle's peak floats away from where the two slopes meet. Project
-			# the corner midpoint onto the ridge line instead of using its raw
-			# perpendicular position.
-			var mid := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
-			var mid_proj := PolygonUtils.project_xz(mid, centroid, ridge_dir)
-			var ridge_pt := centroid + ridge_dir * mid_proj
-			ridge_pt.y = ridge_y
-			var bl := Vector3(left.x, base_y, left.z)
-			var br := Vector3(right.x, base_y, right.z)
-			if end_proj == min_proj:
-				_add_tri(st, br, bl, ridge_pt)
-			else:
-				_add_tri(st, bl, br, ridge_pt)
+	return _build_linear_profile_roof(points, base_y, roof_h, roof_color, wall_color,
+		orientation, roof_direction,
+		# Gabled profile: V-shape, peak at centre
+		[Vector2(0.0, 0.0), Vector2(0.5, 1.0), Vector2(1.0, 0.0)])
 
 # ─── Hipped roof ─────────────────────────────────────────────────────────────
+# Each polygon edge fans to the nearest ridge point. For edges near the hip
+# ends, a triangle connects to the ridge endpoint. For side edges, a quad
+# connects to the corresponding ridge segment. Per-vertex projection ensures
+# correct geometry on arbitrary ngon shapes.
 
 func _roof_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, orientation: String,
@@ -691,47 +802,56 @@ func _roof_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 
 	var st := _new_st(roof_color)
 
-	# Fan from each edge to nearest ridge point
+	# Fan from each edge to nearest ridge point(s), using per-vertex projection
 	var rs_proj: float = min_proj + inset
 	var re_proj: float = max_proj - inset
+	var ridge_span := re_proj - rs_proj
 	for i: int in range(points.size() - 1):
 		var p0 := Vector3(points[i].x, base_y, points[i].z)
 		var p1 := Vector3(points[i + 1].x, base_y, points[i + 1].z)
-		var mid := (p0 + p1) / 2.0
-		var proj := PolygonUtils.project_xz(mid, centroid, ridge_dir)
 
-		if proj <= rs_proj:
-			_add_tri(st, p1, p0, ridge_start)
-		elif proj >= re_proj:
-			_add_tri(st, p1, p0, ridge_end)
+		# Per-vertex projections onto the ridge direction
+		var proj0 := PolygonUtils.project_xz(p0, centroid, ridge_dir)
+		var proj1 := PolygonUtils.project_xz(p1, centroid, ridge_dir)
+
+		# Classify each vertex: before ridge start, on ridge segment, or after ridge end
+		# For vertices in the hip zone, connect to the nearest ridge endpoint
+		# For vertices along the ridge, connect to the corresponding ridge position
+		var r0: Vector3 = _hipped_ridge_point(proj0, rs_proj, re_proj, ridge_span, ridge_start, ridge_end)
+		var r1: Vector3 = _hipped_ridge_point(proj1, rs_proj, re_proj, ridge_span, ridge_start, ridge_end)
+
+		# If both vertices map to the same ridge point, it's a triangle
+		if r0.distance_to(r1) < 0.01:
+			_add_tri(st, p1, p0, r0)
 		else:
-			# Side face: quad from edge to ridge segment
-			var t0 := clampf((PolygonUtils.project_xz(p0, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
-			var t1 := clampf((PolygonUtils.project_xz(p1, centroid, ridge_dir) - rs_proj) / (re_proj - rs_proj), 0.0, 1.0)
-			var r0: Vector3 = ridge_start.lerp(ridge_end, t0)
-			var r1: Vector3 = ridge_start.lerp(ridge_end, t1)
 			_add_quad(st, p1, p0, r0, r1)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
 	return result
 
+## Map a vertex's ridge-direction projection to its ridge point for hipped roofs.
+func _hipped_ridge_point(proj: float, rs_proj: float, re_proj: float,
+		ridge_span: float, ridge_start: Vector3, ridge_end: Vector3) -> Vector3:
+	if proj <= rs_proj:
+		return ridge_start
+	elif proj >= re_proj:
+		return ridge_end
+	else:
+		var t := clampf((proj - rs_proj) / maxf(ridge_span, 0.001), 0.0, 1.0)
+		return ridge_start.lerp(ridge_end, t)
+
 # ─── Pyramidal roof ──────────────────────────────────────────────────────────
+# Uses the conic profile approach: linear taper from base to apex.
+# This is equivalent to the old simple centroid+apex fan but uses the shared
+# conic profile infrastructure for consistency.
 
 func _roof_pyramidal(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color) -> Array[Node3D]:
 	var centroid := PolygonUtils.polygon_centroid(points)
-	var apex := Vector3(centroid.x, base_y + roof_h, centroid.z)
-
-	var st := _new_st(roof_color)
-	for i: int in range(points.size() - 1):
-		var p0 := Vector3(points[i].x, base_y, points[i].z)
-		var p1 := Vector3(points[i + 1].x, base_y, points[i + 1].z)
-		_add_tri(st, p1, p0, apex)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
-	return result
+	# Pyramidal profile: straight line from base (scale=1, h=0) to apex (scale=0, h=1)
+	var profile: Array[Vector2] = [Vector2(1.0, 0.0), Vector2(0.0, 1.0)]
+	return _build_conic_profile_roof(points, base_y, roof_h, roof_color, centroid, profile)
 
 # ─── Skillion roof (mono-pitch) ──────────────────────────────────────────────
 
@@ -758,9 +878,8 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 		for idx: int in range(0, indices.size(), 3):
 			_add_tri(st_roof, roof_points[indices[idx]], roof_points[indices[idx + 1]], roof_points[indices[idx + 2]])
 
-	# Wall extension: fill the gap between wall top (base_y) and sloped roof on each edge.
-	# Side walls (parallel to ridge) get quads; end walls (perpendicular) get triangles.
-	var ridge_dir: Vector3 = rg["ridge_dir"]
+	# Wall extension: fill the gap between wall top (base_y) and sloped roof.
+	# Winding matches _build_walls for CCW polygons: (bl, tl/tr, br).
 	var st_wall := _new_st(wall_color)
 	for i: int in range(points.size() - 1):
 		var y0 := roof_points[i].y
@@ -771,25 +890,13 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 			var wall_tr := Vector3(points[i + 1].x, y1, points[i + 1].z)
 			var wall_tl := Vector3(points[i].x, y0, points[i].z)
 
-			# Detect end walls (perpendicular to ridge) by checking edge direction
-			var edge_dir := (Vector3(points[i + 1].x, 0, points[i + 1].z) - Vector3(points[i].x, 0, points[i].z)).normalized()
-			var dot_ridge := absf(edge_dir.dot(ridge_dir))
-
-			if dot_ridge > 0.5:
-				# End wall (along ridge direction): triangle from base_y to sloped roof
-				# One corner is at base_y, the other at base_y + roof_h
-				if y0 <= base_y + 0.01:
-					# Left corner at base_y, right corner raised -> triangle bl, br, tr
-					_add_tri(st_wall, wall_br, wall_bl, wall_tr)
-				elif y1 <= base_y + 0.01:
-					# Right corner at base_y, left corner raised -> triangle bl, br, tl
-					_add_tri(st_wall, wall_bl, wall_br, wall_tl)
-				else:
-					# Both raised (shouldn't normally happen for end walls, but handle it)
-					_add_quad(st_wall, wall_br, wall_bl, wall_tl, wall_tr)
+			if y0 <= base_y + 0.01:
+				_add_tri(st_wall, wall_bl, wall_tr, wall_br)
+			elif y1 <= base_y + 0.01:
+				_add_tri(st_wall, wall_bl, wall_tl, wall_br)
 			else:
-				# Side wall (perpendicular to ridge): standard quad
-				_add_quad(st_wall, wall_br, wall_bl, wall_tl, wall_tr)
+				_add_tri(st_wall, wall_bl, wall_tr, wall_br)
+				_add_tri(st_wall, wall_bl, wall_tl, wall_tr)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st_roof, "Roof"))
@@ -797,577 +904,331 @@ func _roof_skillion(points: PackedVector3Array, base_y: float, roof_h: float,
 	return result
 
 # ─── Half-hipped roof ────────────────────────────────────────────────────────
+# A gabled roof with small hip triangles replacing the top part of each gable end.
+# Uses the strip-sliced approach from _build_linear_profile_roof with
+# additional height blending in the hip zones near the building ends.
 
 func _roof_half_hipped(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String,
 		roof_direction: float = -1.0) -> Array[Node3D]:
 	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
-
-	var proj_span: float = float(rg["max_proj"]) - float(rg["min_proj"])
-	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
-	var inset := minf(perp_span * 0.25, proj_span * 0.15)
-
-	var centroid: Vector3 = rg["centroid"]
 	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var ridge_y: float = rg["ridge_y"]
+	var perp_dir: Vector3 = rg["perp_dir"]
+	var centroid: Vector3 = rg["centroid"]
+	var min_perp: float = rg["min_perp"]
+	var max_perp: float = rg["max_perp"]
+	var perp_span := absf(max_perp - min_perp)
+	var perp_mid := (min_perp + max_perp) / 2.0
+	var half_span := perp_span / 2.0
+
 	var min_proj: float = rg["min_proj"]
 	var max_proj: float = rg["max_proj"]
+	var proj_span := max_proj - min_proj
 
-	# hip_y: the height where the gable wall ends and the hip triangle begins
-	var half_span := proj_span * 0.5
-	var hip_y := base_y + (ridge_y - base_y) * (1.0 - inset / maxf(half_span, 0.001))
-	hip_y = clampf(hip_y, base_y, ridge_y)
+	# Hip inset: how far from the end the ridge starts
+	var inset := minf(perp_span * 0.25, proj_span * 0.15)
+	var rs_proj := min_proj + inset
+	var re_proj := max_proj - inset
 
-	var st := _new_st(roof_color)
+	# Strip-slice the polygon along the ridge line (perp x=0.5)
+	var break_xs: Array[float] = [0.5]
+
+	var n := points.size()
+	var closed := n > 1 and points[0].distance_to(points[n - 1]) < 0.01
+	var inner_n := n - 1 if closed else n
+	var poly_2d: PackedVector2Array = []
+	for idx: int in range(inner_n):
+		poly_2d.append(Vector2(points[idx].x, points[idx].z))
+
+	var perp_2d := Vector2(perp_dir.x, perp_dir.z)
+	var ridge_2d := Vector2(ridge_dir.x, ridge_dir.z)
+	var centroid_2d := Vector2(centroid.x, centroid.z)
+	var extend := proj_span + 20.0
+
+	var boundaries: Array[float] = [0.0]
+	boundaries.append_array(break_xs)
+	boundaries.append(1.0)
+
+	var st_roof := _new_st(roof_color)
 	var st_gable := _new_st(wall_color)
 
-	# Side edges (parallel to ridge): gabled-style slope quads from eave to ridge
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-		var eave0 := Vector3(p0.x, base_y, p0.z)
-		var eave1 := Vector3(p1.x, base_y, p1.z)
+	# Triangulate each strip with hip-blended heights
+	for si: int in range(boundaries.size() - 1):
+		var bx0 := boundaries[si]
+		var bx1 := boundaries[si + 1]
+		var perp0_off := min_perp + bx0 * perp_span
+		var perp1_off := min_perp + bx1 * perp_span
 
-		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
-		var dot_ridge := absf(edge_dir.dot(ridge_dir))
+		var c0 := centroid_2d + perp_2d * perp0_off - ridge_2d * extend
+		var c1 := centroid_2d + perp_2d * perp0_off + ridge_2d * extend
+		var c2 := centroid_2d + perp_2d * perp1_off + ridge_2d * extend
+		var c3 := centroid_2d + perp_2d * perp1_off - ridge_2d * extend
+		var clip_rect := PackedVector2Array([c0, c1, c2, c3])
 
-		if dot_ridge > 0.5:
-			# Side edge: roof slope quad from eave to ridge (like gabled)
-			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
-			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
-			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var r0: Vector3 = rg["ridge_start"].lerp(rg["ridge_end"], t0)
-			var r1: Vector3 = rg["ridge_start"].lerp(rg["ridge_end"], t1)
-			_add_quad(st, eave1, eave0, r0, r1)
+		var clips := Geometry2D.intersect_polygons(poly_2d, clip_rect)
+		for clip: PackedVector2Array in clips:
+			var tri_indices := Geometry2D.triangulate_polygon(clip)
+			if tri_indices.is_empty():
+				continue
+			for ti: int in range(0, tri_indices.size(), 3):
+				var v: Array[Vector3] = []
+				for vi: int in range(3):
+					var cp := clip[tri_indices[ti + vi]]
+					var perp := (cp.x - centroid.x) * perp_dir.x + (cp.y - centroid.z) * perp_dir.z
+					var dist_from_centre := absf(perp - perp_mid)
+					var t := 1.0 - clampf(dist_from_centre / maxf(half_span, 0.001), 0.0, 1.0)
+					var h := base_y + roof_h * t
+					# Hip blending near ends
+					var proj := (cp.x - centroid.x) * ridge_dir.x + (cp.y - centroid.z) * ridge_dir.z
+					if proj < rs_proj:
+						var end_t := clampf((proj - min_proj) / maxf(inset, 0.001), 0.0, 1.0)
+						h = lerpf(base_y, h, end_t)
+					elif proj > re_proj:
+						var end_t := clampf((max_proj - proj) / maxf(inset, 0.001), 0.0, 1.0)
+						h = lerpf(base_y, h, end_t)
+					v.append(Vector3(cp.x, h, cp.y))
+				_add_tri(st_roof, v[0], v[1], v[2])
 
-	# Hip triangles at each end: small triangle from hip_y up to ridge
-	_add_half_hip_end_triangles(st, points, base_y, rg, inset, hip_y)
+	# Gable/hip wall patches
+	var sub_points := _subdivide_at_profile_breaks(points, centroid, perp_dir, min_perp, perp_span, break_xs)
+	var n_sub := sub_points.size()
+	for i: int in range(n_sub - 1):
+		var p0 := sub_points[i]
+		var p1 := sub_points[i + 1]
+		var perp_v0 := PolygonUtils.project_xz(p0, centroid, perp_dir)
+		var perp_v1 := PolygonUtils.project_xz(p1, centroid, perp_dir)
+		var dist0 := absf(perp_v0 - perp_mid)
+		var dist1 := absf(perp_v1 - perp_mid)
+		var t0 := 1.0 - clampf(dist0 / maxf(half_span, 0.001), 0.0, 1.0)
+		var t1 := 1.0 - clampf(dist1 / maxf(half_span, 0.001), 0.0, 1.0)
+		var ry0 := base_y + roof_h * t0
+		var ry1 := base_y + roof_h * t1
+		# Hip blending
+		var proj0 := PolygonUtils.project_xz(p0, centroid, ridge_dir)
+		var proj1 := PolygonUtils.project_xz(p1, centroid, ridge_dir)
+		if proj0 < rs_proj:
+			ry0 = lerpf(base_y, ry0, clampf((proj0 - min_proj) / maxf(inset, 0.001), 0.0, 1.0))
+		elif proj0 > re_proj:
+			ry0 = lerpf(base_y, ry0, clampf((max_proj - proj0) / maxf(inset, 0.001), 0.0, 1.0))
+		if proj1 < rs_proj:
+			ry1 = lerpf(base_y, ry1, clampf((proj1 - min_proj) / maxf(inset, 0.001), 0.0, 1.0))
+		elif proj1 > re_proj:
+			ry1 = lerpf(base_y, ry1, clampf((max_proj - proj1) / maxf(inset, 0.001), 0.0, 1.0))
 
-	# Trapezoidal gable walls below the hip portion
-	_add_half_hipped_gable_ends(st_gable, points, base_y, rg, inset)
+		if ry0 > base_y + 0.01 or ry1 > base_y + 0.01:
+			var bl := Vector3(p0.x, base_y, p0.z)
+			var br := Vector3(p1.x, base_y, p1.z)
+			var tr := Vector3(p1.x, ry1, p1.z)
+			var tl := Vector3(p0.x, ry0, p0.z)
+			if ry0 <= base_y + 0.01:
+				_add_tri(st_gable, bl, tr, br)
+			elif ry1 <= base_y + 0.01:
+				_add_tri(st_gable, bl, tl, br)
+			else:
+				_add_tri(st_gable, bl, tr, br)
+				_add_tri(st_gable, bl, tl, tr)
 
 	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
+	result.append(_make_mesh(st_roof, "Roof"))
 	result.append(_make_mesh(st_gable, "Gables"))
 	return result
 
-func _add_half_hip_end_triangles(st: SurfaceTool, points: PackedVector3Array,
-		_base_y: float, rg: Dictionary, inset: float, hip_y: float) -> void:
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_y: float = rg["ridge_y"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-	var half_span := proj_span * 0.5
-	var threshold := proj_span * 0.05
-
-	for end_proj: float in [min_proj, max_proj]:
-		# Collect vertices near this gable end
-		var gable_verts: Array[Vector3] = []
-		for i: int in range(points.size() - 1):
-			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
-			if absf(proj - end_proj) < threshold + 0.5:
-				gable_verts.append(points[i])
-
-		if gable_verts.size() >= 2:
-			var perp_sort_dir := perp_dir
-			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
-				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
-			var left := gable_verts[0]
-			var right := gable_verts[gable_verts.size() - 1]
-
-			# Mid-point at this gable end (XZ only)
-			var mid_xz := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
-
-			# Inset fraction for the trapezoid top
-			var frac := inset / maxf(half_span, 0.001)
-
-			# Top corners of the trapezoid at hip_y (narrowed by frac)
-			var tl := Vector3(
-				lerp(left.x, mid_xz.x, frac), hip_y, lerp(left.z, mid_xz.z, frac))
-			var tr_v := Vector3(
-				lerp(right.x, mid_xz.x, frac), hip_y, lerp(right.z, mid_xz.z, frac))
-
-			# Ridge point for this end
-			var ridge_pt: Vector3
-			if end_proj == min_proj:
-				ridge_pt = centroid + ridge_dir * (min_proj + inset)
-			else:
-				ridge_pt = centroid + ridge_dir * (max_proj - inset)
-			ridge_pt.y = ridge_y
-
-			# Small hip triangle: from trapezoid top edge (tl, tr_v) up to ridge
-			if end_proj == min_proj:
-				_add_tri(st, tr_v, tl, ridge_pt)
-			else:
-				_add_tri(st, tl, tr_v, ridge_pt)
-
-func _add_half_hipped_gable_ends(st: SurfaceTool, points: PackedVector3Array,
-		base_y: float, rg: Dictionary, inset: float) -> void:
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_y: float = rg["ridge_y"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-	var threshold := proj_span * 0.05
-
-	# The hip transition height: the gable wall extends from base_y up to hip_y,
-	# then the hip triangle takes over from hip_y up to ridge_y.
-	# hip_y is where the inset ridge point sits projected down proportionally.
-	var half_span := proj_span * 0.5
-	var hip_y := base_y + (ridge_y - base_y) * (1.0 - inset / maxf(half_span, 0.001))
-	hip_y = clampf(hip_y, base_y, ridge_y)
-
-	for end_proj: float in [min_proj, max_proj]:
-		var gable_verts: Array[Vector3] = []
-		for i: int in range(points.size() - 1):
-			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
-			if absf(proj - end_proj) < threshold + 0.5:
-				gable_verts.append(points[i])
-
-		if gable_verts.size() >= 2:
-			var perp_sort_dir := perp_dir
-			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
-				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
-			var left := gable_verts[0]
-			var right := gable_verts[gable_verts.size() - 1]
-
-			# Full-width base corners
-			var bl := Vector3(left.x, base_y, left.z)
-			var br := Vector3(right.x, base_y, right.z)
-
-			# Narrower top corners at hip transition height
-			# The top edge is inset proportionally: at hip_y the gable narrows
-			# to match where the hip slope begins
-			var mid_xz := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
-			var frac := inset / maxf(half_span, 0.001)
-			var tl := Vector3(
-				lerp(left.x, mid_xz.x, frac), hip_y, lerp(left.z, mid_xz.z, frac))
-			var tr_v := Vector3(
-				lerp(right.x, mid_xz.x, frac), hip_y, lerp(right.z, mid_xz.z, frac))
-
-			# Draw trapezoid, flipping winding for opposite end
-			if end_proj == min_proj:
-				_add_quad(st, br, bl, tl, tr_v)
-			else:
-				_add_quad(st, bl, br, tr_v, tl)
-
 # ─── Gambrel roof ────────────────────────────────────────────────────────────
+# Uses a linear profile approach: gambrel profile has steep lower slope and
+# shallow upper slope on each side. Profile from UrbanEye3D's LinearProfiles:
+# {0.0:0.0, 0.25:0.75, 0.5:1.0, 0.75:0.75, 1.0:0.0}
 
 func _roof_gambrel(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String,
 		roof_direction: float = -1.0) -> Array[Node3D]:
-	# Gambrel: two slopes on each side - steep lower, shallow upper
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var _perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_start: Vector3 = rg["ridge_start"]
-	var ridge_end: Vector3 = rg["ridge_end"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-	var min_perp: float = rg["min_perp"]
-	var max_perp: float = rg["max_perp"]
-	var perp_span := absf(max_perp - min_perp)
-	var _half_perp := perp_span / 2.0
-	var break_frac := 0.5  # break point at 50% from eave to ridge
-	var break_y := base_y + roof_h * 0.65  # Y at the break point
-
-	var st := _new_st(roof_color)
-	var st_gable := _new_st(wall_color)
-
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-
-		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
-		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
-		var dot_ridge := absf(edge_dir.dot(ridge_dir))
-
-		if dot_ridge > 0.5:
-			var eave0 := Vector3(p0.x, base_y, p0.z)
-			var eave1 := Vector3(p1.x, base_y, p1.z)
-
-			# Project eave points onto ridge line
-			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
-			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
-			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var ridge0: Vector3 = ridge_start.lerp(ridge_end, t0)
-			var ridge1: Vector3 = ridge_start.lerp(ridge_end, t1)
-
-			# Break point: midway between eave and ridge (in XZ)
-			var break0 := eave0.lerp(ridge0, break_frac)
-			break0.y = break_y
-			var break1 := eave1.lerp(ridge1, break_frac)
-			break1.y = break_y
-
-			# Lower steep slope: eave to break
-			_add_quad(st, eave1, eave0, break0, break1)
-			# Upper shallow slope: break to ridge
-			_add_quad(st, break1, break0, ridge0, ridge1)
-
-	_add_gambrel_gable_ends(st_gable, points, base_y, rg, break_frac, break_y)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
-	result.append(_make_mesh(st_gable, "Gables"))
-	return result
-
-func _add_gambrel_gable_ends(st: SurfaceTool, points: PackedVector3Array,
-		base_y: float, rg: Dictionary, break_frac: float, break_y: float) -> void:
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_y: float = rg["ridge_y"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-	var threshold := proj_span * 0.05
-
-	for end_proj: float in [min_proj, max_proj]:
-		var gable_verts: Array[Vector3] = []
-		for i: int in range(points.size() - 1):
-			var proj := PolygonUtils.project_xz(points[i], centroid, ridge_dir)
-			if absf(proj - end_proj) < threshold + 0.5:
-				gable_verts.append(points[i])
-
-		if gable_verts.size() >= 2:
-			var perp_sort_dir := perp_dir
-			gable_verts.sort_custom(func(a: Vector3, b: Vector3) -> bool:
-				return PolygonUtils.project_xz(a, centroid, perp_sort_dir) < PolygonUtils.project_xz(b, centroid, perp_sort_dir))
-			var left := gable_verts[0]
-			var right := gable_verts[gable_verts.size() - 1]
-
-			# Bottom corners (full width at base_y)
-			var bl := Vector3(left.x, base_y, left.z)
-			var br := Vector3(right.x, base_y, right.z)
-
-			# Ridge peak (midpoint at ridge_y)
-			var ridge_pt := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
-			ridge_pt.y = ridge_y
-
-			# Break points: lerp from each eave corner toward ridge at break_frac
-			var break_l := Vector3(
-				lerp(left.x, ridge_pt.x, break_frac), break_y, lerp(left.z, ridge_pt.z, break_frac))
-			var break_r := Vector3(
-				lerp(right.x, ridge_pt.x, break_frac), break_y, lerp(right.z, ridge_pt.z, break_frac))
-
-			# Pentagon: bl, br, break_r, ridge_pt, break_l
-			# The two ends face opposite directions, so flip winding for max_proj end
-			if end_proj == min_proj:
-				_add_quad(st, br, bl, break_l, break_r)
-				_add_tri(st, break_r, break_l, ridge_pt)
-			else:
-				_add_quad(st, bl, br, break_r, break_l)
-				_add_tri(st, break_l, break_r, ridge_pt)
+	return _build_linear_profile_roof(points, base_y, roof_h, roof_color, wall_color,
+		orientation, roof_direction,
+		# Gambrel profile: steep lower slope, shallow upper
+		[Vector2(0.0, 0.0), Vector2(0.25, 0.75), Vector2(0.5, 1.0), Vector2(0.75, 0.75), Vector2(1.0, 0.0)])
 
 # ─── Mansard roof ────────────────────────────────────────────────────────────
+# Mansard: steep sloped sides with a flat or nearly-flat top.
+# Uses centroid-based inset scaling (like UrbanEye3D's MesherMansard) to create
+# the inner polygon, ensuring correct vertex correspondence on any ngon shape.
+# The lower steep faces connect outer and inner polygon edges 1:1, then a hipped
+# upper portion sits on top.
 
 func _roof_mansard(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, _orientation: String) -> Array[Node3D]:
-	# Mansard: steep sides with a flat or nearly flat top
-	var inset_amount := 1.5  # meters to inset for the flat top
+	var centroid := PolygonUtils.polygon_centroid(points)
+	var n := points.size() - 1  # exclude closing vertex
+	if n < 3:
+		return _roof_pyramidal(points, base_y, roof_h, roof_color)
+
+	# Inset polygon by scaling toward centroid (like UrbanEye3D).
+	# This preserves vertex count and correspondence, unlike Geometry2D.offset_polygon
+	# which may change vertex count.
+	var inset_frac := 0.3  # scale inner polygon to 70% of outer
+	var lower_h := roof_h * 0.5  # lower steep part is half the roof height
+	var lower_y := base_y + lower_h
 	var top_y := base_y + roof_h
 
-	var top_points := PolygonUtils.shrink_polygon_xz(points, inset_amount)
+	var inner_points: PackedVector3Array = []
+	for i: int in range(n):
+		var px := centroid.x + (points[i].x - centroid.x) * (1.0 - inset_frac)
+		var pz := centroid.z + (points[i].z - centroid.z) * (1.0 - inset_frac)
+		inner_points.append(Vector3(px, 0.0, pz))
+	inner_points.append(inner_points[0])  # close polygon
 
 	var st := _new_st(roof_color)
 
-	# Steep side faces: connect base polygon to inset polygon at top
-	if top_points.size() >= 3:
-		# For each base edge, find nearest top points
-		for i: int in range(points.size() - 1):
-			var p0 := Vector3(points[i].x, base_y, points[i].z)
-			var p1 := Vector3(points[i + 1].x, base_y, points[i + 1].z)
+	# Lower steep side faces: quads connecting outer base edge to inner edge at lower_y
+	for i: int in range(n):
+		var ni := (i + 1) % n
+		var p0 := Vector3(points[i].x, base_y, points[i].z)
+		var p1 := Vector3(points[ni].x, base_y, points[ni].z)
+		var t0 := Vector3(inner_points[i].x, lower_y, inner_points[i].z)
+		var t1 := Vector3(inner_points[ni].x, lower_y, inner_points[ni].z)
+		_add_quad(st, p1, p0, t0, t1)
 
-			# Find closest top polygon vertex to each base vertex
-			var t0 := _find_closest_xz(points[i], top_points)
-			var t1 := _find_closest_xz(points[i + 1], top_points)
-			var tp0 := Vector3(t0.x, top_y, t0.z)
-			var tp1 := Vector3(t1.x, top_y, t1.z)
+	# Upper portion: pyramidal from inner polygon to apex
+	var apex := Vector3(centroid.x, top_y, centroid.z)
+	for i: int in range(n):
+		var ni := (i + 1) % n
+		var t0 := Vector3(inner_points[i].x, lower_y, inner_points[i].z)
+		var t1 := Vector3(inner_points[ni].x, lower_y, inner_points[ni].z)
+		_add_tri(st, t1, t0, apex)
 
-			_add_quad(st, p1, p0, tp0, tp1)
-
-		# Flat top
-		var top_mi := PolygonUtils.build_flat_polygon_mesh(top_points, roof_color, top_y)
-		if top_mi != null:
-			top_mi.name = "RoofTop"
-			var result: Array[Node3D] = []
-			result.append(_make_mesh(st, "Roof"))
-			result.append(top_mi)
-			return result
-
-	# Fallback to pyramidal if shrink fails
-	return _roof_pyramidal(points, base_y, roof_h, roof_color)
-
-func _find_closest_xz(ref: Vector3, candidates: PackedVector3Array) -> Vector3:
-	var best := candidates[0]
-	var best_dist := Vector2(ref.x - best.x, ref.z - best.z).length_squared()
-	for i: int in range(1, candidates.size()):
-		var d := Vector2(ref.x - candidates[i].x, ref.z - candidates[i].z).length_squared()
-		if d < best_dist:
-			best_dist = d
-			best = candidates[i]
-	return best
+	var result: Array[Node3D] = []
+	result.append(_make_mesh(st, "Roof"))
+	return result
 
 # ─── Round roof ──────────────────────────────────────────────────────────────
+# Uses the linear profile approach with a semicircular profile.
+# Profile from UrbanEye3D's LinearProfiles.ROUND (17 sample points).
 
 func _roof_round(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, orientation: String,
 		roof_direction: float = -1.0) -> Array[Node3D]:
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
-	var perp_mid: float = (float(rg["min_perp"]) + float(rg["max_perp"])) / 2.0
+	# Semicircular profile (sampled at 16 points + endpoints)
+	var profile: Array[Vector2] = _make_round_profile(16)
+	return _build_linear_profile_roof(points, base_y, roof_h, roof_color, roof_color,
+		orientation, roof_direction, profile)
 
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var st := _new_st(roof_color)
-	var segments := 8  # number of arc segments
-
-	# For each polygon edge pair, create an arched cross-section (only for side edges)
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-
-		# Only generate arc for side edges (parallel to ridge)
-		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
-		var dot_ridge := absf(edge_dir.dot(ridge_dir))
-		if dot_ridge < 0.5:
-			continue
-
-		# Generate arc vertices for each of the two base points
-		for seg: int in range(segments):
-			var t0 := float(seg) / segments
-			var t1 := float(seg + 1) / segments
-
-			var v00 := _round_roof_vertex(p0, t0, centroid, perp_dir, perp_mid, perp_span, base_y, roof_h)
-			var v01 := _round_roof_vertex(p0, t1, centroid, perp_dir, perp_mid, perp_span, base_y, roof_h)
-			var v10 := _round_roof_vertex(p1, t0, centroid, perp_dir, perp_mid, perp_span, base_y, roof_h)
-			var v11 := _round_roof_vertex(p1, t1, centroid, perp_dir, perp_mid, perp_span, base_y, roof_h)
-
-			_add_quad(st, v00, v10, v11, v01)
-
-	# Gable ends (semicircular)
-	var st_gable := _new_st(roof_color)
-	_add_round_gable_ends(st_gable, points, base_y, roof_h, rg, segments)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
-	result.append(_make_mesh(st_gable, "RoofEnds"))
-	return result
-
-func _round_roof_vertex(base_pt: Vector3, t: float, centroid: Vector3,
-		perp_dir: Vector3, perp_mid: float, perp_span: float,
-		base_y: float, roof_h: float) -> Vector3:
-	# t goes from 0 (one eave) to 1 (other eave) across the arch
-	var angle := t * PI
-	var perp_offset := cos(angle) * perp_span * 0.5
-	var height := sin(angle) * roof_h
-
-	var perp := PolygonUtils.project_xz(base_pt, centroid, perp_dir)
-	# Override: place vertex along the arc
-	var arc_perp := perp_mid + perp_offset
-	var delta_perp := arc_perp - perp
-	return Vector3(
-		base_pt.x + perp_dir.x * delta_perp,
-		base_y + height,
-		base_pt.z + perp_dir.z * delta_perp
-	)
-
-func _add_round_gable_ends(st: SurfaceTool, _points: PackedVector3Array, base_y: float,
-		roof_h: float, rg: Dictionary, segments: int) -> void:
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var _perp_mid: float = (float(rg["min_perp"]) + float(rg["max_perp"])) / 2.0
-	var perp_span := absf(float(rg["max_perp"]) - float(rg["min_perp"]))
-
-	var min_proj_f: float = float(rg["min_proj"])
-	var max_proj_f: float = float(rg["max_proj"])
-	for end_proj: float in [min_proj_f, max_proj_f]:
-		var end_center: Vector3 = centroid + ridge_dir * end_proj
-		end_center.y = base_y
-
-		for seg: int in range(segments):
-			var t0 := float(seg) / segments
-			var t1 := float(seg + 1) / segments
-			var angle0 := t0 * PI
-			var angle1 := t1 * PI
-
-			var v0 := Vector3(
-				end_center.x + perp_dir.x * cos(angle0) * perp_span * 0.5,
-				base_y + sin(angle0) * roof_h,
-				end_center.z + perp_dir.z * cos(angle0) * perp_span * 0.5
-			)
-			var v1 := Vector3(
-				end_center.x + perp_dir.x * cos(angle1) * perp_span * 0.5,
-				base_y + sin(angle1) * roof_h,
-				end_center.z + perp_dir.z * cos(angle1) * perp_span * 0.5
-			)
-			var vc := Vector3(end_center.x, base_y, end_center.z)
-			if end_proj == min_proj_f:
-				_add_tri(st, vc, v1, v0)
-			else:
-				_add_tri(st, vc, v0, v1)
+## Round (semicircular) profile: cos/sin arc from 0 to PI mapped to [0,1] range.
+func _make_round_profile(segments: int) -> Array[Vector2]:
+	var profile: Array[Vector2] = []
+	for i: int in range(segments + 1):
+		var t := float(i) / segments
+		var angle := t * PI
+		# x position across the width [0,1], height follows sin curve
+		profile.append(Vector2(t, sin(angle)))
+	return profile
 
 # ─── Dome roof ───────────────────────────────────────────────────────────────
+# Uses per-vertex centroid scaling (like UrbanEye3D's MesherConicProfile):
+# each polygon vertex is scaled toward the centroid along concentric rings
+# following a dome profile. This naturally handles any polygon shape.
 
 func _roof_dome(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color) -> Array[Node3D]:
 	var centroid := PolygonUtils.polygon_centroid(points)
-	var bounds := PolygonUtils.polygon_bounds_xz(points)
-	var radius_x := (bounds[1] - bounds[0]) / 2.0
-	var radius_z := (bounds[3] - bounds[2]) / 2.0
-
-	var st := _new_st(roof_color)
 	var rings := 8
-	var slices := 16
+	var dome_profile: Array[Vector2] = _make_dome_profile(rings)
 
-	for ring: int in range(rings):
-		var phi0 := (float(ring) / rings) * PI * 0.5
-		var phi1 := (float(ring + 1) / rings) * PI * 0.5
+	return _build_conic_profile_roof(points, base_y, roof_h, roof_color, centroid, dome_profile)
 
-		for slice: int in range(slices):
-			var theta0 := (float(slice) / slices) * TAU
-			var theta1 := (float(slice + 1) / slices) * TAU
+# ─── Conic profile helper (shared by dome, onion, pyramidal) ─────────────────
+# Inspired by UrbanEye3D's MesherConicProfile: creates concentric rings of
+# vertices by scaling each polygon vertex toward the centroid. The profile
+# defines how much to scale (x) and the height (y) at each ring.
+# This works on any polygon shape, not just circles or rectangles.
 
-			var v00 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi0, theta0)
-			var v01 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi0, theta1)
-			var v10 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi1, theta0)
-			var v11 := _dome_vertex(centroid, radius_x, radius_z, roof_h, base_y, phi1, theta1)
+func _build_conic_profile_roof(points: PackedVector3Array, base_y: float, roof_h: float,
+		roof_color: Color, center: Vector3, profile: Array[Vector2]) -> Array[Node3D]:
+	var st := _new_st(roof_color)
+	var n := points.size() - 1  # exclude closing vertex
+	if n < 3:
+		return []
+	var rows := profile.size() - 1
 
-			_add_quad(st, v01, v00, v10, v11)
+	# Build vertex rings: ring 0 = base polygon, ring j = scaled toward center
+	# profile[j].x = scale factor (1.0 at base, 0.0 at apex)
+	# profile[j].y = relative height (0.0 at base, 1.0 at apex)
+	var rings: Array[PackedVector3Array] = []
+	for j: int in range(rows + 1):
+		var ring: PackedVector3Array = []
+		var scale_factor: float = profile[j].x
+		var ring_y := base_y + roof_h * profile[j].y
+		for i: int in range(n):
+			var px := center.x + (points[i].x - center.x) * scale_factor
+			var pz := center.z + (points[i].z - center.z) * scale_factor
+			ring.append(Vector3(px, ring_y, pz))
+		rings.append(ring)
+
+	# Create quad strips between adjacent rings
+	for j: int in range(rows - 1):
+		var lower := rings[j]
+		var upper := rings[j + 1]
+		for i: int in range(n):
+			var ni := (i + 1) % n
+			_add_quad(st, lower[i], lower[ni], upper[ni], upper[i])
+
+	# Top ring to apex: triangles
+	var top_ring := rings[rows - 1]
+	var apex := Vector3(center.x, base_y + roof_h * profile[rows].y, center.z)
+	for i: int in range(n):
+		var ni := (i + 1) % n
+		_add_tri(st, top_ring[i], top_ring[ni], apex)
 
 	var result: Array[Node3D] = []
 	result.append(_make_mesh(st, "Roof"))
 	return result
 
-func _dome_vertex(center: Vector3, rx: float, rz: float, h: float, base_y: float,
-		phi: float, theta: float) -> Vector3:
-	return Vector3(
-		center.x + cos(theta) * sin(phi) * rx,
-		base_y + cos(phi) * h,
-		center.z + sin(theta) * sin(phi) * rz
-	)
+## Dome profile: quarter-circle from base (scale=1, h=0) to apex (scale=0, h=1).
+func _make_dome_profile(rings: int) -> Array[Vector2]:
+	var profile: Array[Vector2] = []
+	for j: int in range(rings + 1):
+		var t := float(j) / rings
+		var angle := t * PI * 0.5
+		# x = scale factor (how much of the base polygon shape to keep)
+		# y = height fraction
+		profile.append(Vector2(cos(angle), sin(angle)))
+	return profile
 
 # ─── Onion dome roof ────────────────────────────────────────────────────────
+# Uses the same conic profile approach as dome: per-vertex centroid scaling
+# with an onion-shaped profile (bulges wider than base, then tapers).
+# Profile control points from UrbanEye3D's MesherConicProfile.
 
 func _roof_onion(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color) -> Array[Node3D]:
 	var centroid := PolygonUtils.polygon_centroid(points)
-	var bounds := PolygonUtils.polygon_bounds_xz(points)
-	var radius_x := (bounds[1] - bounds[0]) / 2.0
-	var radius_z := (bounds[3] - bounds[2]) / 2.0
+	var onion_profile := _make_onion_profile()
 
-	var st := _new_st(roof_color)
-	var rings := 12
-	var slices := 16
+	return _build_conic_profile_roof(points, base_y, roof_h, roof_color, centroid, onion_profile)
 
-	for ring: int in range(rings):
-		var t0 := float(ring) / rings
-		var t1 := float(ring + 1) / rings
-
-		for slice: int in range(slices):
-			var theta0 := (float(slice) / slices) * TAU
-			var theta1 := (float(slice + 1) / slices) * TAU
-
-			var v00 := _onion_vertex(centroid, radius_x, radius_z, roof_h, base_y, t0, theta0)
-			var v01 := _onion_vertex(centroid, radius_x, radius_z, roof_h, base_y, t0, theta1)
-			var v10 := _onion_vertex(centroid, radius_x, radius_z, roof_h, base_y, t1, theta0)
-			var v11 := _onion_vertex(centroid, radius_x, radius_z, roof_h, base_y, t1, theta1)
-
-			_add_quad(st, v00, v01, v11, v10)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
-	return result
-
-func _onion_vertex(center: Vector3, rx: float, rz: float, h: float, base_y: float,
-		t: float, theta: float) -> Vector3:
-	# Onion profile: bulges out wider than base, then tapers to point
-	# t goes from 0 (base) to 1 (apex)
-	var y := base_y + t * h
-	var profile_r: float
-	if t < 0.4:
-		# Bulge outward (wider than base)
-		profile_r = 1.0 + 0.3 * sin(t / 0.4 * PI)
-	else:
-		# Taper to point
-		var tt := (t - 0.4) / 0.6
-		profile_r = (1.0 + 0.3 * sin(PI)) * (1.0 - tt)  # Simplify: just taper from max at 0.4
-		profile_r = 1.3 * (1.0 - tt * tt)  # Smooth taper
-	return Vector3(
-		center.x + cos(theta) * rx * profile_r,
-		y,
-		center.z + sin(theta) * rz * profile_r
-	)
+## Onion profile: bulges outward (wider than base), then tapers to a point.
+## Control points adapted from UrbanEye3D's onionProfile().
+## Vector2(x=scale_factor, y=height_fraction).
+func _make_onion_profile() -> Array[Vector2]:
+	return [
+		Vector2(1.0000, 0.0000),  # base
+		Vector2(1.2971, 0.0999),  # bulge outward
+		Vector2(1.2971, 0.2462),  # max bulge
+		Vector2(1.1273, 0.3608),  # narrowing
+		Vector2(0.6219, 0.4785),  # rapid taper
+		Vector2(0.2131, 0.5984),  # near tip
+		Vector2(0.1003, 0.7243),  # close to tip
+		Vector2(0.0000, 1.0000),  # apex
+	]
 
 # ─── Saltbox roof ────────────────────────────────────────────────────────────
+# Uses the linear profile approach with an asymmetric profile (ridge at 1/3).
+# Profile from UrbanEye3D's LinearProfiles.SALTBOX.
 
 func _roof_saltbox(points: PackedVector3Array, base_y: float, roof_h: float,
 		roof_color: Color, wall_color: Color, orientation: String,
 		roof_direction: float = -1.0) -> Array[Node3D]:
-	# Saltbox: asymmetric gable - ridge is off-center, one slope longer than the other
-	var rg := _compute_ridge_geometry(points, base_y, roof_h, orientation, roof_direction)
-	var ridge_dir: Vector3 = rg["ridge_dir"]
-	var perp_dir: Vector3 = rg["perp_dir"]
-	var centroid: Vector3 = rg["centroid"]
-	var ridge_start: Vector3 = rg["ridge_start"]
-	var ridge_end: Vector3 = rg["ridge_end"]
-	var min_proj: float = rg["min_proj"]
-	var max_proj: float = rg["max_proj"]
-	var proj_span := max_proj - min_proj
-	var min_perp: float = rg["min_perp"]
-	var max_perp: float = rg["max_perp"]
-	var perp_span := absf(max_perp - min_perp)
-	var _perp_mid: float = (min_perp + max_perp) / 2.0
-
-	# Ridge offset: 1/3 from one side (offset toward max_perp side)
-	var ridge_perp_offset := perp_span * 0.17
-	# Shift the ridge line in the perp direction
-	var ridge_offset_vec := perp_dir * ridge_perp_offset
-	var offset_ridge_start := ridge_start + ridge_offset_vec
-	var offset_ridge_end := ridge_end + ridge_offset_vec
-
-	var st := _new_st(roof_color)
-	var st_gable := _new_st(wall_color)
-
-	for i: int in range(points.size() - 1):
-		var p0 := points[i]
-		var p1 := points[i + 1]
-
-		# Check if this edge is roughly parallel to the ridge (side edge = roof slope)
-		var edge_dir := (Vector3(p1.x, 0, p1.z) - Vector3(p0.x, 0, p0.z)).normalized()
-		var dot_ridge := absf(edge_dir.dot(ridge_dir))
-
-		if dot_ridge > 0.5:
-			var eave0 := Vector3(p0.x, base_y, p0.z)
-			var eave1 := Vector3(p1.x, base_y, p1.z)
-
-			# Project eave points onto the offset ridge line
-			var proj0 := clampf(PolygonUtils.project_xz(p0, centroid, ridge_dir), min_proj, max_proj)
-			var proj1 := clampf(PolygonUtils.project_xz(p1, centroid, ridge_dir), min_proj, max_proj)
-			var t0 := clampf((proj0 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var t1 := clampf((proj1 - min_proj) / maxf(proj_span, 0.001), 0.0, 1.0)
-			var ridge0: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t0)
-			var ridge1: Vector3 = offset_ridge_start.lerp(offset_ridge_end, t1)
-
-			_add_quad(st, eave1, eave0, ridge0, ridge1)
-
-	_add_gable_ends(st_gable, points, base_y, rg)
-
-	var result: Array[Node3D] = []
-	result.append(_make_mesh(st, "Roof"))
-	result.append(_make_mesh(st_gable, "Gables"))
-	return result
+	return _build_linear_profile_roof(points, base_y, roof_h, roof_color, wall_color,
+		orientation, roof_direction,
+		# Saltbox profile: peak at 1/3 from one side
+		[Vector2(0.0, 0.0), Vector2(0.3333, 1.0), Vector2(1.0, 0.0)])
 
 # ─── Sawtooth roof ───────────────────────────────────────────────────────────
 
