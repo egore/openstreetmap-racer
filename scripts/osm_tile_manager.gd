@@ -16,7 +16,10 @@ signal tile_unloaded(tile_key: Vector2i)
 @export var unload_radius: int = 3    # tiles beyond this are freed
 ## Number of grid cells per tile edge when building displaced terrain from a
 ## DEM. Higher = smoother slopes but more vertices. Ignored when terrain is flat.
-@export var terrain_subdivisions: int = 16
+## At 32 (cell ≈ tile_size/32 ≈ 6 m for a 200 m tile) the triangulated surface
+## stays close to the underlying bilinear DEM, so the mesh-draped features
+## (roads/areas) and the visible terrain agree to within a few centimetres.
+@export var terrain_subdivisions: int = 32
 
 var _osm_data: OSMParser.OSMData = null
 var _spatial_index: Dictionary = {}   # Vector2i tile_key -> { ways: [], nodes: [], relations: [] }
@@ -68,6 +71,10 @@ func _load_osm_data() -> void:
 	# Pass terrain parameters to builders for draped meshes and subdivided ribbons.
 	if _has_terrain():
 		var grid_step := tile_size / float(max(1, terrain_subdivisions))
+		# Bind the height field to the exact terrain-mesh grid so draped features
+		# can sample the triangulated surface (sample_mesh_height) instead of the
+		# smoother raw bilinear field and thus sit flush on the built terrain.
+		_osm_data.height_provider.set_mesh_grid(tile_size, terrain_subdivisions)
 		_relation_builder.height_provider = _osm_data.height_provider
 		_relation_builder.terrain_grid_step = grid_step
 		_way_builder.height_provider = _osm_data.height_provider

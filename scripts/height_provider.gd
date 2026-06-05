@@ -67,6 +67,26 @@ var _max_y: int = 0                   # _height - 1
 
 var _source: String = ""
 
+# Terrain-mesh grid description. The visible/collision terrain is built as a
+# regular grid of quads (see OSMTileManager._build_terrain_ground): tiles are
+# tile_size meters wide with origins at integer multiples of tile_size, each
+# tile subdivided into `subs` cells per edge. sample_mesh_height() reproduces
+# that grid's triangle surface exactly so draped features (roads, ribbons) sit
+# on the mesh instead of on the smoother raw bilinear field.
+var _grid_tile_size: float = 0.0   # meters per tile edge (0 = grid not configured)
+var _grid_step: float = 0.0        # meters per cell edge = tile_size / subs
+var _inv_grid_step: float = 0.0    # 1 / _grid_step
+
+
+## Bind the terrain-mesh grid so sample_mesh_height() matches the built terrain.
+## Call with the same tile_size / subdivisions OSMTileManager uses to build the
+## ground. When unset, sample_mesh_height() falls back to plain bilinear.
+func set_mesh_grid(tile_size: float, subdivisions: int) -> void:
+	var subs: int = max(1, subdivisions)
+	_grid_tile_size = tile_size
+	_grid_step = tile_size / float(subs)
+	_inv_grid_step = 1.0 / _grid_step if _grid_step > 0.0 else 0.0
+
 
 ## True when a heightmap is loaded and elevation queries are non-trivial.
 func is_ready() -> bool:
@@ -171,6 +191,54 @@ func sample_local_xz(x: float, z: float) -> float:
 	var lon := _ref_lon + x * _inv_m_per_deg_lon
 	var lat := _ref_lat - z * _inv_m_per_deg_lat
 	return sample_latlon(lat, lon)
+
+
+## Elevation (meters) on the *terrain mesh surface* at a local-meter XZ point.
+##
+## sample_local_xz/sample_latlon return the smooth bilinear DEM field. The terrain
+## the car drives on, however, is a triangulated grid: its corner vertices are
+## bilinear DEM samples, but each quad interior is a flat triangle, not the curved
+## bilinear surface. A road draped with sample_local_xz therefore floats above or
+## sinks below the mesh mid-cell (worst on slopes). This function reproduces the
+## mesh's per-triangle plane exactly so draped geometry lies on the mesh.
+##
+## The grid (origin, tile size, cell step, diagonal split) must mirror
+## OSMTileManager._build_terrain_ground; configure it via set_mesh_grid().
+## Falls back to bilinear when the grid is unconfigured or the map is flat.
+func sample_mesh_height(x: float, z: float) -> float:
+	if not _ready:
+		return 0.0
+	if _grid_step <= 0.0:
+		return sample_local_xz(x, z)
+
+	# Locate the cell (gx,gz) containing (x,z) in the global grid. The grid is
+	# continuous across tile boundaries: cell origins are integer multiples of
+	# _grid_step regardless of which tile they fall in.
+	var fx := x * _inv_grid_step
+	var fz := z * _inv_grid_step
+	var cell_x := floori(fx)
+	var cell_z := floori(fz)
+	var u := fx - float(cell_x)   # 0..1 east fraction within the cell
+	var v := fz - float(cell_z)   # 0..1 south fraction within the cell
+
+	# Cell corner world coords, then their bilinear DEM heights — identical to the
+	# vertices _build_terrain_ground emits for this cell.
+	var x0 := float(cell_x) * _grid_step
+	var z0 := float(cell_z) * _grid_step
+	var x1 := x0 + _grid_step
+	var z1 := z0 + _grid_step
+	var h00 := sample_local_xz(x0, z0)   # NW (gx,   gz)
+	var h10 := sample_local_xz(x1, z0)   # NE (gx+1, gz)
+	var h01 := sample_local_xz(x0, z1)   # SW (gx,   gz+1)
+	var h11 := sample_local_xz(x1, z1)   # SE (gx+1, gz+1)
+
+	# The cell is split along the i00–i11 diagonal into:
+	#   triangle (i00,i10,i11) covering u >= v
+	#   triangle (i00,i11,i01) covering v >  u
+	# Each branch is the exact barycentric plane of that triangle.
+	if u >= v:
+		return h00 + u * (h10 - h00) + v * (h11 - h10)
+	return h00 + v * (h01 - h00) + u * (h11 - h01)
 
 
 ## Elevation (meters) at a geographic coordinate, with bilinear interpolation.
