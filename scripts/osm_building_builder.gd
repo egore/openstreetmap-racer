@@ -649,7 +649,15 @@ func _add_gable_ends(st: SurfaceTool, points: PackedVector3Array, base_y: float,
 				return PolygonUtils.project_xz(a, centroid, perp_dir) < PolygonUtils.project_xz(b, centroid, perp_dir))
 			var left := gable_verts[0]
 			var right := gable_verts[gable_verts.size() - 1]
-			var ridge_pt := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
+			# The roof slope quads place their ridge vertices on the ridge LINE
+			# (centroid + ridge_dir * proj), i.e. at the centroid's perpendicular
+			# offset. The gable apex must land on that same line, otherwise the
+			# triangle's peak floats away from where the two slopes meet. Project
+			# the corner midpoint onto the ridge line instead of using its raw
+			# perpendicular position.
+			var mid := (Vector3(left.x, 0, left.z) + Vector3(right.x, 0, right.z)) / 2.0
+			var mid_proj := PolygonUtils.project_xz(mid, centroid, ridge_dir)
+			var ridge_pt := centroid + ridge_dir * mid_proj
 			ridge_pt.y = ridge_y
 			var bl := Vector3(left.x, base_y, left.z)
 			var br := Vector3(right.x, base_y, right.z)
