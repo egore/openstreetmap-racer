@@ -402,7 +402,7 @@ func _create_building_label(text: String, points: PackedVector3Array, height: fl
 	label.modulate = Color.WHITE
 	label.outline_modulate = Color(0.1, 0.1, 0.1, 0.8)
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
+	label.no_depth_test = false
 	var centroid := PolygonUtils.polygon_centroid(points)
 	label.position = Vector3(centroid.x, BUILDING_Y + height + 1.0, centroid.z)
 	return label
