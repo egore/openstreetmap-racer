@@ -1,17 +1,12 @@
-extends SceneTree
+extends GdUnitTestSuite
 
-## Headless unit tests for HeightProvider DEM sampling.
+## Unit tests for HeightProvider DEM sampling.
 ##
 ## These pin the contract the offline DEM baker (tools/bake_dem.py) and the
 ## runtime sampler agree on: a 16-bit heightmap normalizes elevation across
 ## [min_elev, max_elev], image row 0 is the north edge, and the local-meter
 ## inverse projection lines up with OSMParser's forward projection. A synthetic
 ## gradient heightmap is generated at runtime so the test needs no DEM asset.
-##
-## Run with:
-##   godot --headless --path . --script res://tests/test_height_provider.gd
-##
-## Exits with code 0 when all tests pass, 1 otherwise (CI-friendly).
 
 const HeightProvider := preload("res://scripts/height_provider.gd")
 
@@ -24,37 +19,18 @@ const MAX_LAT := 49.02
 const MIN_ELEV := 100.0
 const MAX_ELEV := 200.0
 
-var _failures: int = 0
-var _checks: int = 0
 var _tmp_png := "user://_test_dem.png"
 var _tmp_json := "user://_test_dem.json"
 
 
-func _init() -> void:
+# ─── Lifecycle ───────────────────────────────────────────────────────────────
+
+func before() -> void:
 	_write_fixture()
-	_run_all()
+
+
+func after() -> void:
 	_cleanup()
-	if _failures == 0:
-		print("PASS: all %d checks passed" % _checks)
-		quit(0)
-	else:
-		print("FAIL: %d of %d checks failed" % [_failures, _checks])
-		quit(1)
-
-
-# ─── Assertion helpers ───────────────────────────────────────────────────────
-
-func _check(condition: bool, message: String) -> void:
-	_checks += 1
-	if not condition:
-		_failures += 1
-		push_error("CHECK FAILED: %s" % message)
-		print("  FAIL: %s" % message)
-
-
-func _check_near(actual: float, expected: float, tol: float, message: String) -> void:
-	_check(absf(actual - expected) <= tol,
-		"%s (got %.4f, want %.4f +-%.4f)" % [message, actual, expected, tol])
 
 
 # ─── Fixture ─────────────────────────────────────────────────────────────────
@@ -93,60 +69,60 @@ func _load() -> HeightProvider:
 	var ref_lat := (MIN_LAT + MAX_LAT) / 2.0
 	var ref_lon := (MIN_LON + MAX_LON) / 2.0
 	var ok := hp.load_from_files(ref_lat, ref_lon, _tmp_png, _tmp_json)
-	_check(ok, "load_from_files succeeds with a valid fixture")
+	assert_bool(ok) \
+		.override_failure_message("load_from_files succeeds with a valid fixture").is_true()
 	return hp
 
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
-func _run_all() -> void:
-	_test_missing_files_flat()
-	_test_corner_elevations()
-	_test_bilinear_center()
-	_test_out_of_bounds_clamps()
-	_test_local_xz_matches_latlon()
-
-
 ## With no DEM present, the provider stays flat and reports not-ready.
-func _test_missing_files_flat() -> void:
+func test_missing_files_flat() -> void:
 	var hp := HeightProvider.new()
 	var ok := hp.load_from_files(49.0, 8.0, "user://nope.png", "user://nope.json")
-	_check(not ok, "load fails when files are missing")
-	_check(not hp.is_ready(), "provider not ready without a heightmap")
-	_check_near(hp.sample_latlon(49.0, 8.0), 0.0, 0.0001, "flat sample is 0")
+	assert_bool(ok).override_failure_message("load fails when files are missing").is_false()
+	assert_bool(hp.is_ready()) \
+		.override_failure_message("provider not ready without a heightmap").is_false()
+	assert_float(hp.sample_latlon(49.0, 8.0)) \
+		.override_failure_message("flat sample is 0").is_equal_approx(0.0, 0.0001)
 
 
 ## The west edge decodes to MIN_ELEV, the east edge to MAX_ELEV.
-func _test_corner_elevations() -> void:
+func test_corner_elevations() -> void:
 	var hp := _load()
 	# Sample slightly inside the edges to avoid landing exactly between texels.
-	_check_near(hp.sample_latlon(49.01, MIN_LON), MIN_ELEV, 0.5,
-		"west edge decodes to min elevation")
-	_check_near(hp.sample_latlon(49.01, MAX_LON), MAX_ELEV, 0.5,
-		"east edge decodes to max elevation")
+	assert_float(hp.sample_latlon(49.01, MIN_LON)) \
+		.override_failure_message("west edge decodes to min elevation") \
+		.is_equal_approx(MIN_ELEV, 0.5)
+	assert_float(hp.sample_latlon(49.01, MAX_LON)) \
+		.override_failure_message("east edge decodes to max elevation") \
+		.is_equal_approx(MAX_ELEV, 0.5)
 
 
 ## Center longitude => normalized 0.5 => midpoint elevation.
-func _test_bilinear_center() -> void:
+func test_bilinear_center() -> void:
 	var hp := _load()
 	var mid_lon := (MIN_LON + MAX_LON) / 2.0
 	var mid_elev := (MIN_ELEV + MAX_ELEV) / 2.0
-	_check_near(hp.sample_latlon(49.01, mid_lon), mid_elev, 1.0,
-		"center longitude interpolates to mid elevation")
+	assert_float(hp.sample_latlon(49.01, mid_lon)) \
+		.override_failure_message("center longitude interpolates to mid elevation") \
+		.is_equal_approx(mid_elev, 1.0)
 
 
 ## Coordinates beyond the bounds clamp to the nearest edge rather than wrapping.
-func _test_out_of_bounds_clamps() -> void:
+func test_out_of_bounds_clamps() -> void:
 	var hp := _load()
-	_check_near(hp.sample_latlon(49.01, MIN_LON - 1.0), MIN_ELEV, 0.5,
-		"far west clamps to min elevation")
-	_check_near(hp.sample_latlon(49.01, MAX_LON + 1.0), MAX_ELEV, 0.5,
-		"far east clamps to max elevation")
+	assert_float(hp.sample_latlon(49.01, MIN_LON - 1.0)) \
+		.override_failure_message("far west clamps to min elevation") \
+		.is_equal_approx(MIN_ELEV, 0.5)
+	assert_float(hp.sample_latlon(49.01, MAX_LON + 1.0)) \
+		.override_failure_message("far east clamps to max elevation") \
+		.is_equal_approx(MAX_ELEV, 0.5)
 
 
 ## sample_local_xz must invert OSMParser's projection: feeding the local meters
 ## for a known lat/lon back in yields the same elevation as sample_latlon.
-func _test_local_xz_matches_latlon() -> void:
+func test_local_xz_matches_latlon() -> void:
 	var hp := _load()
 	var ref_lat := (MIN_LAT + MAX_LAT) / 2.0
 	var ref_lon := (MIN_LON + MAX_LON) / 2.0
@@ -159,4 +135,6 @@ func _test_local_xz_matches_latlon() -> void:
 	var z := -(lat - ref_lat) * m_per_deg_lat
 	var via_xz := hp.sample_local_xz(x, z)
 	var via_latlon := hp.sample_latlon(lat, lon)
-	_check_near(via_xz, via_latlon, 0.5, "local XZ sampling matches lat/lon sampling")
+	assert_float(via_xz) \
+		.override_failure_message("local XZ sampling matches lat/lon sampling") \
+		.is_equal_approx(via_latlon, 0.5)

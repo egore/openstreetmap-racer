@@ -1,6 +1,6 @@
-extends SceneTree
+extends GdUnitTestSuite
 
-## Headless unit tests for the OSM way-handler registry.
+## Unit tests for the OSM way-handler registry.
 ##
 ## The way-rendering dispatch moved from a central if-elif chain in
 ## OSMTileManager to an ordered list of OSMWayHandler objects (first match
@@ -12,14 +12,8 @@ extends SceneTree
 ##      matched before the generic area handler". Reordering the registry would
 ##      silently regress these, so we assert against an explicit ordered list
 ##      that mirrors OSMTileManager._way_handlers.
-##
-## Run with:
-##   godot --headless --path . --script res://tests/test_way_handlers.gd
 
 const OSMParser := preload("res://scripts/osm_parser.gd")
-
-var _failures: int = 0
-var _checks: int = 0
 
 # Mirror of OSMTileManager._way_handlers — keep in sync. The test exists
 # precisely to catch accidental reordering, so this list is the contract.
@@ -34,34 +28,6 @@ var _handlers: Array[OSMWayHandler] = [
 	ParkingHandler.new(),
 	AreaHandler.new(),
 ]
-
-
-func _init() -> void:
-	_run_all()
-	if _failures == 0:
-		print("PASS: all %d checks passed" % _checks)
-		quit(0)
-	else:
-		print("FAIL: %d of %d checks failed" % [_failures, _checks])
-		quit(1)
-
-
-func _run_all() -> void:
-	_test_basic_classification()
-	_test_closed_power_ring_is_area_not_power_line()
-	_test_parking_beats_generic_area()
-	_test_underground_waterway_unmatched()
-	_test_untagged_way_unmatched()
-
-
-# ─── Assertion helpers ───────────────────────────────────────────────────────
-
-func _check(condition: bool, message: String) -> void:
-	_checks += 1
-	if not condition:
-		_failures += 1
-		push_error("CHECK FAILED: %s" % message)
-		print("  FAIL: %s" % message)
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -91,53 +57,53 @@ func _classify(way: OSMParser.OSMWay) -> String:
 
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
-func _test_basic_classification() -> void:
-	_check(_classify(_way({"highway": "residential"}, false)) == "road",
-		"highway way -> road")
-	_check(_classify(_way({"railway": "tram"}, false)) == "railway",
-		"railway=tram -> railway")
-	_check(_classify(_way({"power": "line"}, false)) == "power_line",
-		"open power=line -> power_line")
-	_check(_classify(_way({"man_made": "gantry"}, false)) == "gantry",
-		"open man_made=gantry -> gantry")
-	_check(_classify(_way({"waterway": "river"}, false)) == "waterway",
-		"waterway=river -> waterway")
-	_check(_classify(_way({"building": "yes"})) == "building",
-		"building=yes -> building")
-	_check(_classify(_way({"barrier": "fence"}, false)) == "barrier",
-		"barrier=fence -> barrier")
-	_check(_classify(_way({"landuse": "forest"})) == "area",
-		"landuse=forest -> area")
+func test_basic_classification() -> void:
+	assert_str(_classify(_way({"highway": "residential"}, false))) \
+		.override_failure_message("highway way -> road").is_equal("road")
+	assert_str(_classify(_way({"railway": "tram"}, false))) \
+		.override_failure_message("railway=tram -> railway").is_equal("railway")
+	assert_str(_classify(_way({"power": "line"}, false))) \
+		.override_failure_message("open power=line -> power_line").is_equal("power_line")
+	assert_str(_classify(_way({"man_made": "gantry"}, false))) \
+		.override_failure_message("open man_made=gantry -> gantry").is_equal("gantry")
+	assert_str(_classify(_way({"waterway": "river"}, false))) \
+		.override_failure_message("waterway=river -> waterway").is_equal("waterway")
+	assert_str(_classify(_way({"building": "yes"}))) \
+		.override_failure_message("building=yes -> building").is_equal("building")
+	assert_str(_classify(_way({"barrier": "fence"}, false))) \
+		.override_failure_message("barrier=fence -> barrier").is_equal("barrier")
+	assert_str(_classify(_way({"landuse": "forest"}))) \
+		.override_failure_message("landuse=forest -> area").is_equal("area")
 
 
-func _test_closed_power_ring_is_area_not_power_line() -> void:
+func test_closed_power_ring_is_area_not_power_line() -> void:
 	# A closed power ring (substation outline) must NOT match power_line; it
 	# falls through to area. This is the canonical precedence rule the ordered
 	# registry preserves from the old if-elif chain.
 	var ring := _way({"power": "generator"})
-	_check(_classify(ring) == "area",
-		"closed power ring -> area (not power_line)")
+	assert_str(_classify(ring)) \
+		.override_failure_message("closed power ring -> area (not power_line)").is_equal("area")
 	# And an OPEN power line still resolves to power_line.
-	_check(_classify(_way({"power": "line"}, false)) == "power_line",
-		"open power line still -> power_line")
+	assert_str(_classify(_way({"power": "line"}, false))) \
+		.override_failure_message("open power line still -> power_line").is_equal("power_line")
 
 
-func _test_parking_beats_generic_area() -> void:
+func test_parking_beats_generic_area() -> void:
 	# amenity=parking is also a closed amenity ring that area would otherwise
 	# claim; parking must win because it is registered first.
 	var parking := _way({"amenity": "parking"})
-	_check(_classify(parking) == "parking",
-		"amenity=parking -> parking (before area)")
+	assert_str(_classify(parking)) \
+		.override_failure_message("amenity=parking -> parking (before area)").is_equal("parking")
 
 
-func _test_underground_waterway_unmatched() -> void:
+func test_underground_waterway_unmatched() -> void:
 	# Tunneled waterways are intentionally skipped by the waterway predicate and
 	# carry no other renderable tag, so nothing should claim them.
 	var culvert := _way({"waterway": "stream", "tunnel": "culvert"}, false)
-	_check(_classify(culvert) == "",
-		"tunneled waterway claimed by no handler")
+	assert_str(_classify(culvert)) \
+		.override_failure_message("tunneled waterway claimed by no handler").is_equal("")
 
 
-func _test_untagged_way_unmatched() -> void:
-	_check(_classify(_way({}, false)) == "",
-		"untagged way claimed by no handler")
+func test_untagged_way_unmatched() -> void:
+	assert_str(_classify(_way({}, false))) \
+		.override_failure_message("untagged way claimed by no handler").is_equal("")
