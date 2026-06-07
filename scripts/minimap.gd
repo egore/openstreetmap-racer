@@ -13,8 +13,9 @@ var _car: VehicleBody3D = null
 var _tile_manager: OSMTileManager = null
 var _osm_data: OSMParser.OSMData = null
 
-# Cached draw data for roads/buildings within a large radius
+# Cached draw data for roads/waterways/buildings within a large radius
 var _cached_road_segments: Array = []   # Array of { points: PackedVector3Array, highway: String }
+var _cached_waterway_segments: Array = []  # Array of { points: PackedVector3Array, waterway: String }
 var _cached_building_outlines: Array = []  # Array of PackedVector3Array
 var _cache_center: Vector3 = Vector3.ZERO
 
@@ -26,11 +27,22 @@ const BG_COLOR := Color(0.15, 0.18, 0.15, 0.85)
 const ROAD_COLOR := Color(0.85, 0.82, 0.75, 0.9)
 const MAJOR_ROAD_COLOR := Color(0.95, 0.9, 0.8, 1.0)
 const BUILDING_FILL := Color(0.45, 0.42, 0.38, 0.7)
+const WATERWAY_COLOR := Color(0.2, 0.5, 0.9, 0.95)
 const CAR_COLOR := Color(0.95, 0.3, 0.2, 1.0)
 const BORDER_COLOR := Color(0.3, 0.35, 0.3, 0.9)
 
 const MAJOR_HIGHWAYS := ["motorway", "trunk", "primary", "secondary", "tertiary",
 	"motorway_link", "trunk_link", "primary_link"]
+
+# Minimap line widths per waterway type (wider features draw thicker).
+const WATERWAY_WIDTHS := {
+	"river": 3.0,
+	"canal": 2.5,
+	"stream": 1.5,
+	"ditch": 1.0,
+	"drain": 1.0,
+}
+const WATERWAY_DEFAULT_WIDTH := 1.5
 
 const CLIP_CIRCLE_SEGMENTS := 48
 
@@ -86,6 +98,7 @@ func _rebuild_cache(center: Vector3) -> void:
 	_cache_center = center
 	var cache_radius := map_radius * 3.0
 	_cached_road_segments.clear()
+	_cached_waterway_segments.clear()
 	_cached_building_outlines.clear()
 
 	if _osm_data == null:
@@ -108,6 +121,11 @@ func _rebuild_cache(center: Vector3) -> void:
 			_cached_road_segments.append({
 				"points": points,
 				"highway": way.tags.get("highway", "unclassified"),
+			})
+		elif WaterwayHandler.is_waterway(way):
+			_cached_waterway_segments.append({
+				"points": points,
+				"waterway": way.tags.get("waterway", "stream"),
 			})
 		elif way.tags.has("building"):
 			_cached_building_outlines.append(points)
@@ -146,6 +164,11 @@ func _draw() -> void:
 	# Draw buildings (clipped to circle)
 	for outline: PackedVector3Array in _cached_building_outlines:
 		_draw_polygon_on_map(outline, car_pos, car_angle, scale_factor, radius, BUILDING_FILL)
+
+	# Draw waterways (below roads, like the 3D world)
+	for seg: Dictionary in _cached_waterway_segments:
+		var width: float = WATERWAY_WIDTHS.get(seg["waterway"], WATERWAY_DEFAULT_WIDTH)
+		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, WATERWAY_COLOR, width)
 
 	# Draw roads: minor first, then major on top
 	for seg: Dictionary in _cached_road_segments:
