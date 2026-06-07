@@ -9,3 +9,9 @@
 # Generated data
 /data/*.dem.png
 /data/*.dem.json
+
+# Godot specific
+/addons
+
+# gdUnit4 test reports
+/reports

@@ -115,21 +115,27 @@ count for slope smoothness.
 
 ## Testing
 
-Headless GDScript unit tests live in `tests/`. They require no external test
-framework — each suite is a `SceneTree` script that exits with a non-zero code
-on failure, making it CI-friendly.
+Unit tests live in `tests/` and run on [gdUnit4](https://github.com/MikeSchulze/gdUnit4)
+(vendored in `addons/gdUnit4/`). Each suite extends `GdUnitTestSuite`; the
+command-line runner exits with a non-zero code on failure, making it CI-friendly.
 
-Run the whole suite:
+Run the whole suite (set `GODOT` if `godot` isn't on your `PATH`):
 
 ```sh
 tests/run_tests.sh
 ```
 
-Or run a single suite directly (set `GODOT` if `godot` isn't on your `PATH`):
+That wraps the gdUnit4 command-line runner:
 
 ```sh
-godot --headless --path . --script res://tests/test_polygon_utils.gd
+godot --headless --path . \
+  -s addons/gdUnit4/bin/GdUnitCmdTool.gd \
+  --ignoreHeadlessMode \
+  -a tests
 ```
+
+Pass a single file to `-a` (e.g. `-a tests/test_polygon_utils.gd`) to run one
+suite. gdUnit4 writes XML/HTML results under `reports/` (gitignored).
 
 `test_polygon_utils.gd` pins the winding-order logic in `PolygonUtils` — the
 CW/CCW normalization OSM data depends on — so refactors can't silently invert
