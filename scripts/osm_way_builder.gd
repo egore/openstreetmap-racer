@@ -156,10 +156,20 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 			# Clamp miter length to prevent extreme spikes at sharp angles
 			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
 			offset = miter_dir * miter_len
-		# Carry the node's terrain elevation (pt.y) so the road follows the DEM,
-		# floating ROAD_Y above it. When no DEM is loaded pt.y is 0 (flat world).
-		left_edge.append(Vector3(pt.x - offset.x, pt.y + ROAD_Y, pt.z - offset.z))
-		right_edge.append(Vector3(pt.x + offset.x, pt.y + ROAD_Y, pt.z + offset.z))
+		# Drape each edge vertex on the terrain at its OWN XZ position rather than
+		# copying the centerline elevation (pt.y). The lateral offset only moves
+		# in XZ, so on a cross-slope the two edges land at different elevations;
+		# re-sampling here keeps the uphill edge from sinking into the terrain and
+		# the downhill edge from floating above it. When no DEM is loaded the
+		# sampler is absent and pt.y (== 0, flat world) is used.
+		var lx := pt.x - offset.x
+		var lz := pt.z - offset.z
+		var rx := pt.x + offset.x
+		var rz := pt.z + offset.z
+		var ly := _edge_height(lx, lz, pt.y) + ROAD_Y
+		var ry := _edge_height(rx, rz, pt.y) + ROAD_Y
+		left_edge.append(Vector3(lx, ly, lz))
+		right_edge.append(Vector3(rx, ry, rz))
 
 	for i: int in range(n_pts - 1):
 		var v0: Vector3 = left_edge[i]
@@ -201,6 +211,17 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 	mesh_instance.mesh = mesh
 	return mesh_instance
+
+## Terrain elevation (meters) for a ribbon edge vertex at (x, z).
+##
+## When a height provider is ready we re-sample the terrain *mesh* surface at the
+## edge's own XZ position so each edge drapes independently (the fix for roads
+## sinking into / floating over cross-slopes). Without a DEM we fall back to the
+## supplied centerline elevation, which is 0 in the flat world.
+func _edge_height(x: float, z: float, fallback_y: float) -> float:
+	if height_provider != null and height_provider.is_ready():
+		return height_provider.sample_mesh_height(x, z)
+	return fallback_y
 
 const WATERWAY_WIDTHS := {
 	"river": 12.0,
@@ -408,10 +429,15 @@ func _build_ribbon_edges(points: PackedVector3Array, half_w: float, y: float) ->
 				miter_len = half_w / d
 			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
 			offset = miter_dir * miter_len
-		# Carry the node's terrain elevation (pt.y); y is the small float offset
-		# above ground. Flat world keeps pt.y == 0.
-		left_edge.append(Vector3(pt.x - offset.x, pt.y + y, pt.z - offset.z))
-		right_edge.append(Vector3(pt.x + offset.x, pt.y + y, pt.z + offset.z))
+		# Drape each edge vertex on the terrain at its own XZ position (see
+		# _edge_height); y is the small float offset above ground. Flat world
+		# falls back to pt.y == 0.
+		var lx := pt.x - offset.x
+		var lz := pt.z - offset.z
+		var rx := pt.x + offset.x
+		var rz := pt.z + offset.z
+		left_edge.append(Vector3(lx, _edge_height(lx, lz, pt.y) + y, lz))
+		right_edge.append(Vector3(rx, _edge_height(rx, rz, pt.y) + y, rz))
 	return { "left": left_edge, "right": right_edge }
 
 func _get_sidewalk_sides(tags: Dictionary) -> Dictionary:
