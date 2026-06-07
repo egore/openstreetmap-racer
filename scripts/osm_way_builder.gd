@@ -36,28 +36,33 @@ const ROAD_WIDTHS := {
 	"track": 3.0,
 }
 
+# Asphalt tones. Real asphalt is a dark, slightly warm neutral grey (~0.12–0.22),
+# not the pale concrete-grey these used to be. Larger/faster roads read a touch
+# darker and cooler (fresh tarmac); smaller residential/service roads are a hair
+# lighter and warmer (aged, sun-bleached). Unpaved footway/path/track lean brown
+# (dirt/gravel) and cycleways keep a faint blue tint.
 const ROAD_COLORS := {
-	"motorway": Color(0.4, 0.4, 0.45),
-	"motorway_link": Color(0.4, 0.4, 0.45),
-	"trunk": Color(0.42, 0.42, 0.44),
-	"trunk_link": Color(0.42, 0.42, 0.44),
-	"primary": Color(0.45, 0.44, 0.42),
-	"primary_link": Color(0.45, 0.44, 0.42),
-	"secondary": Color(0.5, 0.5, 0.48),
-	"secondary_link": Color(0.5, 0.5, 0.48),
-	"tertiary": Color(0.52, 0.52, 0.5),
-	"tertiary_link": Color(0.52, 0.52, 0.5),
-	"residential": Color(0.55, 0.55, 0.53),
-	"living_street": Color(0.6, 0.58, 0.55),
-	"service": Color(0.58, 0.57, 0.55),
-	"footway": Color(0.65, 0.6, 0.5),
-	"cycleway": Color(0.5, 0.55, 0.6),
-	"path": Color(0.6, 0.55, 0.45),
-	"pedestrian": Color(0.62, 0.6, 0.55),
+	"motorway": Color(0.15, 0.15, 0.17),
+	"motorway_link": Color(0.15, 0.15, 0.17),
+	"trunk": Color(0.16, 0.16, 0.17),
+	"trunk_link": Color(0.16, 0.16, 0.17),
+	"primary": Color(0.17, 0.17, 0.18),
+	"primary_link": Color(0.17, 0.17, 0.18),
+	"secondary": Color(0.18, 0.18, 0.19),
+	"secondary_link": Color(0.18, 0.18, 0.19),
+	"tertiary": Color(0.19, 0.19, 0.19),
+	"tertiary_link": Color(0.19, 0.19, 0.19),
+	"residential": Color(0.2, 0.2, 0.2),
+	"living_street": Color(0.21, 0.205, 0.2),
+	"service": Color(0.2, 0.195, 0.19),
+	"footway": Color(0.32, 0.27, 0.21),
+	"cycleway": Color(0.2, 0.22, 0.26),
+	"path": Color(0.3, 0.25, 0.19),
+	"pedestrian": Color(0.24, 0.23, 0.22),
 }
 
 const DEFAULT_WIDTH := 4.0
-const DEFAULT_COLOR := Color(0.5, 0.5, 0.5)
+const DEFAULT_COLOR := Color(0.19, 0.19, 0.2)
 const ROAD_Y := 0.02  # slightly above ground
 const SIDEWALK_WIDTH := 1.5
 const SIDEWALK_HEIGHT := 0.10
@@ -97,8 +102,10 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
+	# Asphalt for paved roads (procedural noise grain + faked normal bump),
+	# matte fallback for unpaved/soft surfaces. The shader samples noise in
+	# world-space XZ, so no per-vertex UVs are required on the ribbon.
+	var mat := RoadMaterialFactory.create_road_material(highway_type, color)
 	st.set_material(mat)
 
 	var sidewalk_st := SurfaceTool.new()
