@@ -327,6 +327,135 @@ static func subdivide_polyline_to_terrain(
 	return result
 
 
+# ─── Terrain-conforming ribbon quad ──────────────────────────────────────────
+
+## Emit a road/ribbon quad so that its surface conforms EXACTLY to the terrain
+## mesh, leaving no gap for the ground to poke through.
+##
+## A flat quad spanning a terrain cell sits below any fold (the cell diagonal or
+## a neighbouring cell's slope change) that crosses it, so the terrain pierces up
+## through the road on bumpy ground. To prevent this we clip the quad against the
+## terrain's own triangulation: for every terrain triangle the quad overlaps we
+## intersect the quad with that triangle (Sutherland–Hodgman) and emit the
+## clipped piece draped on the terrain. Because each emitted triangle lies within
+## a single terrain triangle, the road surface and the terrain surface coincide
+## there — the road can never dip below the ground, and adds only as much
+## geometry as the terrain detail under it requires.
+##
+## The terrain grid mirrors HeightProvider.sample_mesh_height: square cells of
+## edge `grid_step` with origins at integer multiples of grid_step from the world
+## origin, each split into two triangles along the cell's NW–SE diagonal.
+## Vertices are draped with sample_mesh_height and lifted by `y_offset`.
+##
+## quad: 4 XZ corners (Vector2(x, z)) in order around the quad (winding is
+## normalized internally). hp must be ready; grid_step must be > 0.
+static func emit_terrain_conforming_quad(
+		st: SurfaceTool,
+		quad: PackedVector2Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float,
+) -> void:
+	if quad.size() < 3 or hp == null or not hp.is_ready() or grid_step <= 0.0:
+		return
+
+	# Bounding cell range the quad can touch.
+	var minx := INF
+	var maxx := -INF
+	var minz := INF
+	var maxz := -INF
+	for p: Vector2 in quad:
+		minx = minf(minx, p.x)
+		maxx = maxf(maxx, p.x)
+		minz = minf(minz, p.y)
+		maxz = maxf(maxz, p.y)
+	var cx0 := floori(minx / grid_step)
+	var cx1 := floori(maxx / grid_step)
+	var cz0 := floori(minz / grid_step)
+	var cz1 := floori(maxz / grid_step)
+
+	var quad_arr: Array[Vector2] = []
+	for p: Vector2 in quad:
+		quad_arr.append(p)
+
+	for cx: int in range(cx0, cx1 + 1):
+		for cz: int in range(cz0, cz1 + 1):
+			var x0 := float(cx) * grid_step
+			var z0 := float(cz) * grid_step
+			var x1 := x0 + grid_step
+			var z1 := z0 + grid_step
+			# The two terrain triangles of this cell. sample_mesh_height splits on
+			# u >= v (east fraction >= south fraction): triangle (NW, NE, SE) and
+			# triangle (NW, SE, SW).
+			var tri_a: Array[Vector2] = [
+				Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1)
+			]
+			var tri_b: Array[Vector2] = [
+				Vector2(x0, z0), Vector2(x1, z1), Vector2(x0, z1)
+			]
+			for tri: Array in [tri_a, tri_b]:
+				var piece := _clip_poly_to_triangle(quad_arr, tri)
+				if piece.size() < 3:
+					continue
+				# Fan-triangulate the clipped piece, draping each vertex.
+				var o := piece[0]
+				var o3 := Vector3(o.x, hp.sample_mesh_height(o.x, o.y) + y_offset, o.y)
+				for k: int in range(1, piece.size() - 1):
+					var p1: Vector2 = piece[k]
+					var p2: Vector2 = piece[k + 1]
+					var v1 := Vector3(p1.x, hp.sample_mesh_height(p1.x, p1.y) + y_offset, p1.y)
+					var v2 := Vector3(p2.x, hp.sample_mesh_height(p2.x, p2.y) + y_offset, p2.y)
+					# Wind o, v2, v1 so the face normal points up (matches the
+					# road's Vector3.UP convention).
+					st.set_normal(Vector3.UP); st.add_vertex(o3)
+					st.set_normal(Vector3.UP); st.add_vertex(v2)
+					st.set_normal(Vector3.UP); st.add_vertex(v1)
+
+
+## Clip a convex polygon (Array[Vector2]) to a triangle via Sutherland–Hodgman,
+## returning the (possibly empty) intersection polygon. Coordinates are XZ
+## (Vector2.x = world X, Vector2.y = world Z).
+static func _clip_poly_to_triangle(poly: Array[Vector2], tri: Array[Vector2]) -> Array[Vector2]:
+	var result: Array[Vector2] = poly.duplicate()
+	for e: int in range(3):
+		if result.size() < 3:
+			return []
+		var p0: Vector2 = tri[e]
+		var p1: Vector2 = tri[(e + 1) % 3]
+		var third: Vector2 = tri[(e + 2) % 3]
+		# Inward half-plane normal for this edge; flip so the triangle interior
+		# (the third vertex) satisfies dot(n, p) <= c.
+		var edge := p1 - p0
+		var nrm := Vector2(-edge.y, edge.x)
+		var c := nrm.x * p0.x + nrm.y * p0.y
+		if nrm.x * third.x + nrm.y * third.y - c > 0.0:
+			nrm = -nrm
+			c = -c
+		result = _clip_poly_to_halfplane(result, nrm, c)
+	return result
+
+
+## Keep the part of `poly` on the inside of the half-plane dot(n, p) <= c.
+static func _clip_poly_to_halfplane(poly: Array[Vector2], n: Vector2, c: float) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var cnt := poly.size()
+	if cnt < 3:
+		return out
+	for i: int in range(cnt):
+		var cur: Vector2 = poly[i]
+		var nxt: Vector2 = poly[(i + 1) % cnt]
+		var d_cur := n.x * cur.x + n.y * cur.y - c
+		var d_nxt := n.x * nxt.x + n.y * nxt.y - c
+		var cur_in := d_cur <= 1e-9
+		var nxt_in := d_nxt <= 1e-9
+		if cur_in:
+			out.append(cur)
+		if cur_in != nxt_in:
+			var t := d_cur / (d_cur - d_nxt)
+			out.append(cur.lerp(nxt, t))
+	return out
+
+
 # ─── Terrain-draped polygon mesh ─────────────────────────────────────────────
 
 ## Build a polygon mesh that conforms to the terrain grid by subdividing the

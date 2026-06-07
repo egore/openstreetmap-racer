@@ -115,83 +115,66 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	var has_right_sidewalk: bool = sidewalk_sides["right"]
 	var miter_limit := 2.0  # clamp miter to avoid spikes on very sharp turns
 
-	# Pre-compute the left and right edge vertices for each point using miter joins.
-	# At interior points the miter bisects the angle between adjacent segments so that
-	# both segments share the same edge vertices, eliminating gaps and overlaps.
+	# Pre-compute, for every point, the miter offset vector that reaches the
+	# RIGHT edge (the left edge is its negation). At interior points the miter
+	# bisects the angle between adjacent segments so both segments share the same
+	# edge vertices, eliminating gaps and overlaps.
 	var n_pts := points.size()
+	var miter_offsets: Array[Vector3] = []
+	miter_offsets.resize(n_pts)
+	for i: int in range(n_pts):
+		miter_offsets[i] = _miter_offset(points, i, half_w, miter_limit)
+
+	# Edge vertices (left/right) per point, each draped on the terrain at its own
+	# XZ. These define the road footprint and drive the sidewalks.
 	var left_edge: Array = []
 	var right_edge: Array = []
-
+	left_edge.resize(n_pts)
+	right_edge.resize(n_pts)
 	for i: int in range(n_pts):
 		var pt := points[i]
-		var offset: Vector3
-		if i == 0:
-			# First point: use the direction of the first segment
-			var fwd := (points[1] - points[0]).normalized()
-			var lateral := Vector3(-fwd.z, 0.0, fwd.x).normalized()
-			offset = lateral * half_w
-		elif i == n_pts - 1:
-			# Last point: use the direction of the last segment
-			var fwd := (points[i] - points[i - 1]).normalized()
-			var lateral := Vector3(-fwd.z, 0.0, fwd.x).normalized()
-			offset = lateral * half_w
-		else:
-			# Interior point: compute miter join
-			var fwd_prev := (points[i] - points[i - 1]).normalized()
-			var fwd_next := (points[i + 1] - points[i]).normalized()
-			var lat_prev := Vector3(-fwd_prev.z, 0.0, fwd_prev.x).normalized()
-			var lat_next := Vector3(-fwd_next.z, 0.0, fwd_next.x).normalized()
-			# Miter direction is the average of the two lateral directions
-			var miter_dir := (lat_prev + lat_next)
-			if miter_dir.length_squared() < 0.0001:
-				# Segments are nearly antiparallel (U-turn) — fall back to previous lateral
-				miter_dir = lat_prev
-			else:
-				miter_dir = miter_dir.normalized()
-			# Scale miter to maintain correct width: half_w / dot(miter, lateral)
-			var d := miter_dir.dot(lat_prev)
-			var miter_len := half_w
-			if absf(d) > 0.0001:
-				miter_len = half_w / d
-			# Clamp miter length to prevent extreme spikes at sharp angles
-			miter_len = clampf(miter_len, half_w, half_w * miter_limit)
-			offset = miter_dir * miter_len
-		# Drape each edge vertex on the terrain at its OWN XZ position rather than
-		# copying the centerline elevation (pt.y). The lateral offset only moves
-		# in XZ, so on a cross-slope the two edges land at different elevations;
-		# re-sampling here keeps the uphill edge from sinking into the terrain and
-		# the downhill edge from floating above it. When no DEM is loaded the
-		# sampler is absent and pt.y (== 0, flat world) is used.
-		var lx := pt.x - offset.x
-		var lz := pt.z - offset.z
-		var rx := pt.x + offset.x
-		var rz := pt.z + offset.z
-		var ly := _edge_height(lx, lz, pt.y) + ROAD_Y
-		var ry := _edge_height(rx, rz, pt.y) + ROAD_Y
-		left_edge.append(Vector3(lx, ly, lz))
-		right_edge.append(Vector3(rx, ry, rz))
+		var off := miter_offsets[i]
+		var lx := pt.x - off.x
+		var lz := pt.z - off.z
+		var rx := pt.x + off.x
+		var rz := pt.z + off.z
+		left_edge[i] = Vector3(lx, _edge_height(lx, lz, pt.y) + ROAD_Y, lz)
+		right_edge[i] = Vector3(rx, _edge_height(rx, rz, pt.y) + ROAD_Y, rz)
 
+	# Whether to conform the surface to the terrain triangulation. Even with the
+	# edges draped, a flat quad spanning a cell sits below terrain folds crossing
+	# it (a "hill in the middle of the street"). When a DEM is present we clip
+	# each segment quad against the terrain mesh so the surface coincides with
+	# the ground exactly; flat worlds keep the cheap single quad.
+	var conform := height_provider != null and height_provider.is_ready() \
+		and terrain_grid_step > 0.0
+
+	# Emit the road surface, one segment quad at a time.
 	for i: int in range(n_pts - 1):
-		var v0: Vector3 = left_edge[i]
-		var v1: Vector3 = right_edge[i]
-		var v2: Vector3 = right_edge[i + 1]
-		var v3: Vector3 = left_edge[i + 1]
+		var l0: Vector3 = left_edge[i]
+		var r0: Vector3 = right_edge[i]
+		var r1: Vector3 = right_edge[i + 1]
+		var l1: Vector3 = left_edge[i + 1]
 
-		# Triangle 1
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v0)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v2)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v1)
-
-		# Triangle 2
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v0)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v3)
-		st.set_normal(Vector3.UP)
-		st.add_vertex(v2)
+		if conform:
+			# Clip this segment's footprint to the terrain triangles and drape.
+			var quad := PackedVector2Array([
+				Vector2(l0.x, l0.z),
+				Vector2(r0.x, r0.z),
+				Vector2(r1.x, r1.z),
+				Vector2(l1.x, l1.z),
+			])
+			PolygonUtils.emit_terrain_conforming_quad(
+				st, quad, height_provider, terrain_grid_step, ROAD_Y)
+		else:
+			# Flat world: a single quad. Winding matches the original
+			# (left,right,right / left,left,right) with an upward normal.
+			st.set_normal(Vector3.UP); st.add_vertex(l0)
+			st.set_normal(Vector3.UP); st.add_vertex(r1)
+			st.set_normal(Vector3.UP); st.add_vertex(r0)
+			st.set_normal(Vector3.UP); st.add_vertex(l0)
+			st.set_normal(Vector3.UP); st.add_vertex(l1)
+			st.set_normal(Vector3.UP); st.add_vertex(r1)
 
 		if has_left_sidewalk:
 			# Left edge outward direction: points away from road center (leftward)
@@ -222,6 +205,38 @@ func _edge_height(x: float, z: float, fallback_y: float) -> float:
 	if height_provider != null and height_provider.is_ready():
 		return height_provider.sample_mesh_height(x, z)
 	return fallback_y
+
+
+## Miter-joined offset vector from the centerline to the RIGHT edge at point i
+## (the left edge is the negation). Bisects the bend angle at interior points so
+## adjacent segments share edge vertices, with a miter-length clamp to avoid
+## spikes at sharp turns. Pure XZ (the Y/drape is applied by the caller).
+func _miter_offset(points: PackedVector3Array, i: int, half_w: float, miter_limit: float) -> Vector3:
+	var n_pts := points.size()
+	if i == 0:
+		var fwd := (points[1] - points[0]).normalized()
+		return Vector3(-fwd.z, 0.0, fwd.x).normalized() * half_w
+	if i == n_pts - 1:
+		var fwd := (points[i] - points[i - 1]).normalized()
+		return Vector3(-fwd.z, 0.0, fwd.x).normalized() * half_w
+	# Interior point: average the two segments' lateral directions.
+	var fwd_prev := (points[i] - points[i - 1]).normalized()
+	var fwd_next := (points[i + 1] - points[i]).normalized()
+	var lat_prev := Vector3(-fwd_prev.z, 0.0, fwd_prev.x).normalized()
+	var lat_next := Vector3(-fwd_next.z, 0.0, fwd_next.x).normalized()
+	var miter_dir := (lat_prev + lat_next)
+	if miter_dir.length_squared() < 0.0001:
+		# Nearly antiparallel (U-turn) — fall back to the previous lateral.
+		miter_dir = lat_prev
+	else:
+		miter_dir = miter_dir.normalized()
+	# Scale to keep the perpendicular width correct: half_w / dot(miter, lateral).
+	var d := miter_dir.dot(lat_prev)
+	var miter_len := half_w
+	if absf(d) > 0.0001:
+		miter_len = half_w / d
+	miter_len = clampf(miter_len, half_w, half_w * miter_limit)
+	return miter_dir * miter_len
 
 const WATERWAY_WIDTHS := {
 	"river": 12.0,

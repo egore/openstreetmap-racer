@@ -308,6 +308,8 @@ func _add_debug_label_at(parent: Node3D, def: Dictionary, tags: Dictionary, pos:
 	label.font_size = 32
 	label.pixel_size = 0.01
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	# Respect scene depth so labels are occluded by buildings/terrain in front
+	# of them instead of shining through. Disabling this draws on top of all geometry.
 	label.no_depth_test = false
 	label.modulate = Color(1.0, 1.0, 1.0, 0.9)
 	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.8)
