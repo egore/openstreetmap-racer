@@ -1,10 +1,10 @@
 [gd_scene format=3 uid="uid://ismyghiir7xr"]
 
-[ext_resource type="Script" uid="uid://dq5ns5ug81q20" path="res://scripts/main.gd" id="1_main"]
-[ext_resource type="Script" uid="uid://cu7o55x3fvo1w" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
-[ext_resource type="Script" uid="uid://cr3dpxilqptpj" path="res://scripts/car_controller.gd" id="3_car"]
-[ext_resource type="PackedScene" uid="uid://b00lb7g7x54e1" path="res://scenes/models/car.blend" id="4_jyhfs"]
-[ext_resource type="Script" uid="uid://drws5mjbb5co7" path="res://scripts/minimap.gd" id="5_minimap"]
+[ext_resource type="Script" uid="uid://bmi3hy6idhvw7" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://7keje0ccjo55" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
+[ext_resource type="Script" uid="uid://bh3w0a8jfro5n" path="res://scripts/car_controller.gd" id="3_car"]
+[ext_resource type="PackedScene" uid="uid://napy0x6ewlh2" path="res://scenes/models/car.blend" id="4_jyhfs"]
+[ext_resource type="Script" uid="uid://dryhfw53b8v1j" path="res://scripts/minimap.gd" id="5_minimap"]
 
 [sub_resource type="Environment" id="Environment_main"]
 background_mode = 1
