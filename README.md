@@ -2,6 +2,8 @@
 
 A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environments.
 
+![Screenshot](docs/screenshot.png)
+
 ## How It Works
 
 ### Architecture
