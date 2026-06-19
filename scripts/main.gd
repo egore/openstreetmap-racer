@@ -15,6 +15,7 @@ extends Node3D
 @onready var sky_controller: SkyController = $SkyController
 @onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
 @onready var headlights: Headlights = $Car/Headlights
+@onready var street_lamp_lights: StreetLampLights = $StreetLampLights
 
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
@@ -62,11 +63,15 @@ func _ready() -> void:
 	_update_day_night_label(sky_controller.is_day())
 	day_night_toggle.toggled.connect(_on_day_night_toggled)
 
-	# Headlights follow the time of day automatically: on after dark, off by day.
-	# The car owns the lights; the sky controller decides when it's dark. Wiring
-	# them here keeps both of them ignorant of each other (composition root).
+	# Headlights and street lamps both follow the time of day automatically: on
+	# after dark, off by day. Each owns its own lights; the sky controller decides
+	# when it's dark. Wiring them here keeps all three ignorant of each other
+	# (composition root). The lamp controller is driven through the same signal
+	# even though its lights stream in and out with the tiles — it lights whatever
+	# is registered at the time.
 	sky_controller.day_night_changed.connect(_on_day_night_changed)
 	headlights.set_on(not sky_controller.is_day())
+	street_lamp_lights.set_on(not sky_controller.is_day())
 
 func _process(_delta: float) -> void:
 	# Escape toggles the pause state.
@@ -141,9 +146,11 @@ func _update_day_night_label(is_day: bool) -> void:
 	day_night_toggle.text = "Daytime" if is_day else "Nighttime"
 
 ## The sky controller changed the time of day (from the menu or otherwise):
-## switch the headlights on when it's dark and off when it's light.
+## switch the headlights and street lamps on when it's dark and off when it's
+## light.
 func _on_day_night_changed(is_day: bool) -> void:
 	headlights.set_on(not is_day)
+	street_lamp_lights.set_on(not is_day)
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
 	speed_label.text = "%d km/h" % int(speed_kmh)
