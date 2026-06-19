@@ -225,9 +225,9 @@ func _build_support_post(xz: Vector3, base_y: float, top_y: float, color: Color)
 		var b: Vector3 = corners[(i + 1) % 4]
 		var bl := Vector3(a.x, base_y, a.z)
 		var br := Vector3(b.x, base_y, b.z)
-		var tr := Vector3(b.x, top_y, b.z)
+		var top_r := Vector3(b.x, top_y, b.z)
 		var tl := Vector3(a.x, top_y, a.z)
-		RoofGeometry.add_quad(st, bl, br, tr, tl)
+		RoofGeometry.add_quad(st, bl, br, top_r, tl)
 	return RoofGeometry.make_mesh(st, "Support")
 
 ## Build a flat roof as a solid slab with thickness (top, bottom, and side faces).
@@ -256,9 +256,9 @@ func _build_roof_slab(points: PackedVector3Array, base_y: float, thickness: floa
 		var p1 := points[i + 1]
 		var bl := Vector3(p0.x, base_y, p0.z)
 		var br := Vector3(p1.x, base_y, p1.z)
-		var tr := Vector3(p1.x, top_y, p1.z)
+		var top_r := Vector3(p1.x, top_y, p1.z)
 		var tl := Vector3(p0.x, top_y, p0.z)
-		RoofGeometry.add_quad(st, bl, br, tr, tl)
+		RoofGeometry.add_quad(st, bl, br, top_r, tl)
 	return RoofGeometry.make_mesh(st, "Roof")
 
 ## Parse a height string value to meters. Handles:
