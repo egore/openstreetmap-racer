@@ -9,10 +9,23 @@ extends RefCounted
 # If "scene" is set, that PackedScene is instanced instead of a placeholder box.
 
 var _scene_cache: Dictionary = {}  # path -> PackedScene
+
+## The world's street-lamp light controller. Injected by OSMTileManager. When
+## present, street lamps are built with a real emissive bulb + OmniLight3D and
+## registered here so they switch on after dark; when null (e.g. unit tests that
+## exercise the placer in isolation) lamps fall back to the plain placeholder
+## pole and emit no light. Optional so the placer has no hard dependency on the
+## day/night system.
+var lamp_lights: StreetLampLights = null
+
+# A street lamp emits light from its head, so it can't be a flat placeholder box
+# like the other point assets. `light` flags the def for the dedicated build path
+# in place_assets_batched() (bulb mesh + OmniLight3D), bypassing MultiMesh
+# batching the same way `scene` assets do.
 const ASSET_DEFS := {
 	"highway": {
 		"traffic_signals": { "color": Color(0.1, 0.7, 0.1), "size": Vector3(0.3, 3.0, 0.3), "y_offset": 1.5, "label": "Traffic Light", "scene": "res://scenes/models/traffic_light.blend" },
-		"street_lamp": { "color": Color(0.8, 0.8, 0.2), "size": Vector3(0.15, 4.0, 0.15), "y_offset": 2.0, "label": "Street Lamp" },
+		"street_lamp": { "color": Color(0.25, 0.22, 0.12), "size": Vector3(0.15, 4.0, 0.15), "y_offset": 2.0, "label": "Street Lamp", "light": true },
 		"bus_stop": { "color": Color(0.2, 0.4, 0.8), "size": Vector3(0.8, 2.5, 0.3), "y_offset": 1.25, "label": "Bus Stop", "scene": "res://scenes/models/bus_stop.blend" },
 		"crossing": { "color": Color(1.0, 1.0, 1.0), "size": Vector3(2.0, 0.05, 2.0), "y_offset": 0.025, "label": "Crossing" },
 		"stop": { "color": Color(0.9, 0.1, 0.1), "size": Vector3(0.5, 2.0, 0.05), "y_offset": 1.0, "label": "Stop Sign" },
@@ -84,9 +97,21 @@ func place_assets_batched(nodes: Array) -> Node3D:
 	# identical assets land in the same MultiMesh.
 	var box_groups: Dictionary = {}  # group_key -> { def, transforms: Array[Transform3D] }
 
+	# Street lamps build a real light each, so they're collected into one group
+	# per tile and registered with the lamp controller in a single call below.
+	var lamp_group := StreetLampLights.LampGroup.new()
+
 	for node: OSMParser.OSMNode in nodes:
 		var def := _find_asset_def(node.tags)
 		if def.is_empty():
+			continue
+
+		if def.get("light", false):
+			# Street lamps: emissive pole + bulb + point light, not a flat box.
+			var lamp := _build_street_lamp(def, node, lamp_group)
+			if lamp != null:
+				root.add_child(lamp)
+				_add_debug_label_at(root, def, node.tags, node.local_pos)
 			continue
 
 		if def.has("scene"):
@@ -128,6 +153,14 @@ func place_assets_batched(nodes: Array) -> Node3D:
 	if root.get_child_count() == 0:
 		root.free()
 		return null
+
+	# Hand this tile's street lamps to the controller keyed by the Assets root,
+	# so it can both light them at the current time of day now and drop them when
+	# the tile unloads. Registering after the empty-tile guard means a tile with
+	# no lamps never registers an empty group.
+	if lamp_lights != null and not lamp_group.lights.is_empty():
+		lamp_lights.register_tile(root, lamp_group)
+
 	return root
 
 
@@ -171,6 +204,89 @@ func _build_box_multimesh(def: Dictionary, transforms: Array) -> MultiMeshInstan
 	mmi.name = "%s_x%d" % [def["label"].replace(" ", ""), transforms.size()]
 	mmi.multimesh = multimesh
 	return mmi
+
+
+# ─── Street lamps ────────────────────────────────────────────────────────────
+
+## Warm colour of the bulb glow and the pool of light it casts. A slightly
+## orange sodium-vapour tint reads as "street lamp" far more than plain white.
+const _LAMP_LIGHT_COLOR := Color(1.0, 0.85, 0.55)
+## OmniLight3D energy each lamp reaches when fully on. Tuned to drop a visible
+## pool on the road at night without washing the scene out; lamps are dense, so
+## modest per-lamp energy still adds up to a lit street.
+const _LAMP_LIGHT_ENERGY := 3.0
+## How far (metres) each lamp's light reaches. Roughly the pole height plus a few
+## metres of spill onto the road around its base.
+const _LAMP_LIGHT_RANGE := 12.0
+## Emission multiplier of the bulb head when fully on (the visible glow of the
+## bulb itself, separate from the light it casts).
+const _LAMP_GLOW_ENERGY := 6.0
+
+## Builds one street lamp: a dark pole, a glowing bulb head at the top, and an
+## OmniLight3D that pools light on the road below. The bulb material and light
+## are appended to `group` (not switched on here) so the StreetLampLights
+## controller drives them with the rest of the world's lamps; a fresh lamp starts
+## dark and the controller brings it to the current time-of-day brightness when
+## the tile is registered.
+func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetLampLights.LampGroup) -> Node3D:
+	var size: Vector3 = def["size"]
+	var y_offset: float = def["y_offset"]
+
+	var root := Node3D.new()
+	root.name = "%s_%d" % [def["label"].replace(" ", ""), node.id]
+	root.position = node.local_pos
+
+	# Pole: a thin dark post. Reuses the def size/colour (now an unlit metal grey)
+	# so the lamp body is visible by day without pretending to glow.
+	var pole := MeshInstance3D.new()
+	pole.name = "Pole"
+	var pole_mesh := BoxMesh.new()
+	pole_mesh.size = size
+	pole.mesh = pole_mesh
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = def["color"]
+	pole.material_override = pole_mat
+	pole.position.y = y_offset
+	root.add_child(pole)
+
+	# Bulb head: a small box at the top of the pole carrying its own emissive
+	# material. The material is made unique per lamp and handed to the controller
+	# so toggling the glow on one lamp never bleeds into a shared resource.
+	var head_y := y_offset + size.y * 0.5
+	var bulb := MeshInstance3D.new()
+	bulb.name = "Bulb"
+	var bulb_mesh := BoxMesh.new()
+	bulb_mesh.size = Vector3(0.3, 0.18, 0.3)
+	bulb.mesh = bulb_mesh
+	var bulb_mat := StandardMaterial3D.new()
+	bulb_mat.albedo_color = _LAMP_LIGHT_COLOR
+	bulb_mat.emission = _LAMP_LIGHT_COLOR
+	# Start dark; the controller fades emission in after dusk.
+	bulb_mat.emission_enabled = false
+	bulb_mat.emission_energy_multiplier = 0.0
+	bulb.material_override = bulb_mat
+	bulb.position.y = head_y
+	root.add_child(bulb)
+
+	# Point light: sits just under the bulb so the lamp casts down onto the road
+	# rather than lighting its own head. Shadows are off — dozens of shadow-
+	# casting point lights would tank performance and add little at night.
+	var light := OmniLight3D.new()
+	light.name = "Light"
+	light.light_color = _LAMP_LIGHT_COLOR
+	light.light_energy = 0.0          # controller fades this in
+	light.omni_range = _LAMP_LIGHT_RANGE
+	light.shadow_enabled = false
+	light.visible = false             # off until the controller turns it on
+	light.position.y = head_y - 0.2
+	root.add_child(light)
+
+	group.lights.append(light)
+	group.materials.append(bulb_mat)
+	group.light_energy = _LAMP_LIGHT_ENERGY
+	group.glow_energy = _LAMP_GLOW_ENERGY
+
+	return root
 
 
 func place_asset(node: OSMParser.OSMNode) -> Node3D:

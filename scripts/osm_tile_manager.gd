@@ -20,6 +20,10 @@ signal tile_unloaded(tile_key: Vector2i)
 ## stays close to the underlying bilinear DEM, so the mesh-draped features
 ## (roads/areas) and the visible terrain agree to within a few centimetres.
 @export var terrain_subdivisions: int = 32
+## The world's street-lamp light controller. Wired in the scene so the asset
+## placer can register each tile's lamps with it (and the manager can drop them
+## on unload). Optional: when unset, street lamps render as unlit poles.
+@export var street_lamp_lights_path: NodePath
 
 var _osm_data: OSMParser.OSMData = null
 var _spatial_index: Dictionary = {}   # Vector2i tile_key -> { ways: [], nodes: [], relations: [] }
@@ -45,6 +49,11 @@ func _ready() -> void:
 	_infrastructure_builder = OSMInfrastructureBuilder.new()
 	_building_builder = OSMBuildingBuilder.new()
 	_asset_placer = OSMAssetPlacer.new()
+	# Hand the asset placer the street-lamp controller so the lamps it builds are
+	# registered for day/night switching. Resolved from a NodePath (not a typed
+	# export) so the .tscn wires it reliably; left null when the scene has no
+	# controller, in which case lamps stay unlit poles.
+	_asset_placer.lamp_lights = get_node_or_null(street_lamp_lights_path) as StreetLampLights
 	_relation_builder = OSMRelationBuilder.new()
 
 	_way_handlers = [
@@ -320,6 +329,15 @@ func _make_tile_context(tkey: Vector2i, suppressed_building_ids: Dictionary) -> 
 func _unload_tile(tkey: Vector2i) -> void:
 	var tile_node: Node3D = _loaded_tiles[tkey]
 	if tile_node != null:
+		# Drop this tile's street lamps from the light controller before freeing
+		# the node, so it never drives lights that are about to be torn down. The
+		# lamps live under an "Assets" child (the key the placer registered), so
+		# look it up rather than passing the tile root. Harmless no-op for tiles
+		# with no lamps.
+		if _asset_placer != null and _asset_placer.lamp_lights != null:
+			var assets := tile_node.get_node_or_null("Assets")
+			if assets != null:
+				_asset_placer.lamp_lights.unregister_tile(assets)
 		tile_node.queue_free()
 	_loaded_tiles.erase(tkey)
 	tile_unloaded.emit(tkey)

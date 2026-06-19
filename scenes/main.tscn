@@ -8,6 +8,7 @@
 [ext_resource type="Shader" path="res://scripts/shaders/sky.gdshader" id="6_sky"]
 [ext_resource type="Script" path="res://scripts/sky_controller.gd" id="7_skyctl"]
 [ext_resource type="Script" path="res://scripts/headlights.gd" id="8_headlights"]
+[ext_resource type="Script" path="res://scripts/street_lamp_lights.gd" id="9_lamps"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -47,7 +48,7 @@ fog_aerial_perspective = 0.5
 size = Vector3(1.8, 1, 4.1)
 
 [sub_resource type="StandardMaterial3D" id="Material_lamp"]
-albedo_color = Color(1, 0.97, 0.85, 1)
+albedo_color = Color(0, 0, 0, 1)
 emission_enabled = true
 emission = Color(1, 0.95, 0.8, 1)
 emission_energy_multiplier = 0.0
@@ -82,8 +83,12 @@ world_environment_path = NodePath("../WorldEnvironment")
 sun_light_path = NodePath("../DirectionalLight3D")
 start_in_day = true
 
+[node name="StreetLampLights" type="Node" parent="." unique_id=1042673342]
+script = ExtResource("9_lamps")
+
 [node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
 script = ExtResource("2_tile")
+street_lamp_lights_path = NodePath("../StreetLampLights")
 
 [node name="Car" type="VehicleBody3D" parent="." unique_id=1077184071]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)

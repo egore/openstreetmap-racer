@@ -18,7 +18,7 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 5. **Building Builder** (`scripts/osm_building_builder.gd`) — Extrudes 3D buildings from OSM way outlines tagged with `building=*`. Height is determined from `height`, `building:levels` tags, or a default. Supports `roof:shape` with 12 roof types (flat, gabled, hipped, pyramidal, skillion, half-hipped, gambrel, mansard, round, dome, onion, saltbox, sawtooth) plus `roof:height`, `roof:colour`, `roof:levels`, and `roof:orientation` tags.
 
-6. **Asset Placer** (`scripts/osm_asset_placer.gd`) — Places colored placeholder boxes for point features (nodes with tags): traffic lights (green box), trees (green box), benches (brown box), street lamps (yellow pole), bus stops (blue box), etc. **Edit the `ASSET_DEFS` dictionary to add more asset types.**
+6. **Asset Placer** (`scripts/osm_asset_placer.gd`) — Places colored placeholder boxes for point features (nodes with tags): traffic lights (green box), trees (green box), benches (brown box), bus stops (blue box), etc. Street lamps are a special case — instead of a flat box they get a pole, a glowing emissive bulb and an `OmniLight3D` that turns on after dark (see *Street Lamp Lights* below). **Edit the `ASSET_DEFS` dictionary to add more asset types.**
 
 7. **Relation Builder** (`scripts/osm_relation_builder.gd`) — Handles OSM relations, primarily `type=multipolygon` for complex buildings and land areas.
 
@@ -29,6 +29,8 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 10. **Sky Controller** (`scripts/sky_controller.gd`) — Owns the sky and key lighting, and blends between a **day** and a **night** preset on demand. A procedural sky shader (`scripts/shaders/sky.gdshader`) renders a gradient dome, a sun disk with atmospheric glow, and drifting fractal-noise clouds. The controller keeps the sky shader, the `DirectionalLight3D` (sun/moon), and the environment's fog and ambient light in agreement, and animates a smooth crossfade when toggled. Edit the `DAY` and `NIGHT` dictionaries to retune either palette.
 
 11. **Headlights** (`scripts/headlights.gd`) — A self-contained component under the car holding two forward-facing `SpotLight3D` beams and the glowing lamp faces. It exposes a single `set_on(bool)` intent and fades the beams + lamp emission up/down like real bulbs. `main.gd` (the composition root) connects the sky controller's `day_night_changed` signal to it, so the headlights **switch on automatically after dark and off by day** — the car owns the lights, the sky controller decides when it's dark, and neither knows about the other.
+
+12. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
 
 ### Dynamic Loading
 
@@ -120,8 +122,9 @@ count for slope smoothness.
 - **Escape** — Pause / resume (frees the mouse for the menu)
 
 The pause menu has a **Day / Night** toggle that crossfades the sky, sun, clouds,
-fog and shadows between the two presets. The car's **headlights turn on and off
-automatically** with the time of day — no manual control needed.
+fog and shadows between the two presets. The car's **headlights and the street
+lamps turn on and off automatically** with the time of day — no manual control
+needed.
 
 ## Testing
 
@@ -196,6 +199,14 @@ The car's headlights live under `Car/Headlights` in `main.tscn` (two
 `lamp_glow_energy` on the `Headlights` node for brightness, or adjust each
 `SpotLight3D`'s `spot_range` / `spot_angle` for beam reach and spread. They are
 driven entirely by the day/night state — no manual toggle.
+
+Street lamps (`highway=street_lamp` nodes) light up the same way, driven by the
+`StreetLampLights` node in `main.tscn`. Their look is tuned by the
+`_LAMP_LIGHT_*` / `_LAMP_GLOW_*` constants in `scripts/osm_asset_placer.gd`
+(bulb colour, cast energy, range and bulb glow) and the `FADE_TIME` in
+`scripts/street_lamp_lights.gd` (how quickly a street eases on at dusk). The
+point lights cast no shadows by design — a dense network of shadow-casting lamps
+would be costly and adds little at night.
 
 ### Scaling Up
 
