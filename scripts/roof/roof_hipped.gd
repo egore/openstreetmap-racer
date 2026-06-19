@@ -188,15 +188,15 @@ static func half_hipped(points: PackedVector3Array, base_y: float, roof_h: float
 		if ry0 > base_y + 0.01 or ry1 > base_y + 0.01:
 			var bl := Vector3(p0.x, base_y, p0.z)
 			var br := Vector3(p1.x, base_y, p1.z)
-			var tr := Vector3(p1.x, ry1, p1.z)
+			var top_r := Vector3(p1.x, ry1, p1.z)
 			var tl := Vector3(p0.x, ry0, p0.z)
 			if ry0 <= base_y + 0.01:
-				RoofGeometry.add_tri(st_gable, bl, tr, br)
+				RoofGeometry.add_tri(st_gable, bl, top_r, br)
 			elif ry1 <= base_y + 0.01:
 				RoofGeometry.add_tri(st_gable, bl, tl, br)
 			else:
-				RoofGeometry.add_tri(st_gable, bl, tr, br)
-				RoofGeometry.add_tri(st_gable, bl, tl, tr)
+				RoofGeometry.add_tri(st_gable, bl, top_r, br)
+				RoofGeometry.add_tri(st_gable, bl, tl, top_r)
 
 	var result: Array[Node3D] = []
 	result.append(RoofGeometry.make_mesh(st_roof, "Roof"))

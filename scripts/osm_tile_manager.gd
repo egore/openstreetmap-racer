@@ -309,7 +309,7 @@ func _make_tile_context(tkey: Vector2i, suppressed_building_ids: Dictionary) -> 
 	ctx.tile_size = tile_size
 	ctx.has_terrain = _has_terrain()
 	ctx.grid_step = tile_size / float(max(1, terrain_subdivisions)) if ctx.has_terrain else 0.0
-	ctx.tile_clip = _tile_clip_rect(tkey) if ctx.has_terrain else null
+	ctx.tile_clip = (_tile_clip_rect(tkey) as Variant) if ctx.has_terrain else null
 	ctx.suppressed_building_ids = suppressed_building_ids
 	ctx.way_builder = _way_builder
 	ctx.infrastructure_builder = _infrastructure_builder
