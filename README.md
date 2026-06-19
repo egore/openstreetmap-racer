@@ -26,6 +26,10 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 9. **Height Provider** (`scripts/height_provider.gd`) — Samples terrain elevation from a pre-baked DEM heightmap (Copernicus GLO-30 or NASA SRTM). When present, OSM nodes are lifted onto the terrain and the ground becomes a displaced mesh. Degrades to a flat world when no DEM is baked.
 
+10. **Sky Controller** (`scripts/sky_controller.gd`) — Owns the sky and key lighting, and blends between a **day** and a **night** preset on demand. A procedural sky shader (`scripts/shaders/sky.gdshader`) renders a gradient dome, a sun disk with atmospheric glow, and drifting fractal-noise clouds. The controller keeps the sky shader, the `DirectionalLight3D` (sun/moon), and the environment's fog and ambient light in agreement, and animates a smooth crossfade when toggled. Edit the `DAY` and `NIGHT` dictionaries to retune either palette.
+
+11. **Headlights** (`scripts/headlights.gd`) — A self-contained component under the car holding two forward-facing `SpotLight3D` beams and the glowing lamp faces. It exposes a single `set_on(bool)` intent and fades the beams + lamp emission up/down like real bulbs. `main.gd` (the composition root) connects the sky controller's `day_night_changed` signal to it, so the headlights **switch on automatically after dark and off by day** — the car owns the lights, the sky controller decides when it's dark, and neither knows about the other.
+
 ### Dynamic Loading
 
 The tile manager tracks which tile the camera is in. When the camera crosses into a new tile, it:
@@ -113,7 +117,11 @@ count for slope smoothness.
 
 - **W / S** — Accelerate / Brake
 - **A / D** — Steer left / right
-- **Escape** — Toggle mouse capture
+- **Escape** — Pause / resume (frees the mouse for the menu)
+
+The pause menu has a **Day / Night** toggle that crossfades the sky, sun, clouds,
+fog and shadows between the two presets. The car's **headlights turn on and off
+automatically** with the time of day — no manual control needed.
 
 ## Testing
 
@@ -168,6 +176,26 @@ In the scene inspector or in `osm_tile_manager.gd`:
 - `tile_size` — Size of each tile in meters (default: 200)
 - `load_radius` — How many tiles to keep loaded around camera (default: 2)
 - `unload_radius` — Distance at which tiles are freed (default: 3)
+
+### Sky & Day/Night
+
+The look of each time of day lives in the `DAY` and `NIGHT` constant
+dictionaries in `scripts/sky_controller.gd` — sky gradient colours, sun/moon
+angle and brightness, cloud tint and coverage, fog, and ambient light. Tune a
+field there and both the sky shader and the scene lighting follow it.
+
+Cloud shape and motion are driven by the `sky.gdshader` uniforms (set on the
+`ShaderMaterial` in `main.tscn`): `cloud_scale`, `cloud_softness` and
+`cloud_wind` control puff size, edge sharpness and drift speed.
+
+The scene starts in daytime; flip `start_in_day` on the `SkyController` node to
+start at night.
+
+The car's headlights live under `Car/Headlights` in `main.tscn` (two
+`SpotLight3D` beams + two emissive lamp boxes). Tune `beam_energy` and
+`lamp_glow_energy` on the `Headlights` node for brightness, or adjust each
+`SpotLight3D`'s `spot_range` / `spot_angle` for beam reach and spread. They are
+driven entirely by the day/night state — no manual toggle.
 
 ### Scaling Up
 

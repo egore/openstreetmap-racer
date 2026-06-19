@@ -12,6 +12,9 @@ extends Node3D
 @onready var pause_menu: CanvasLayer = $PauseMenu
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/QuitButton
+@onready var sky_controller: SkyController = $SkyController
+@onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
+@onready var headlights: Headlights = $Car/Headlights
 
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
@@ -52,6 +55,18 @@ func _ready() -> void:
 	# Wire up the pause menu buttons.
 	resume_button.pressed.connect(_set_paused.bind(false))
 	quit_button.pressed.connect(_on_quit_pressed)
+
+	# Day/night toggle: reflect the controller's starting state in the checkbox,
+	# then let the user flip it. The controller owns the actual transition.
+	day_night_toggle.button_pressed = sky_controller.is_day()
+	_update_day_night_label(sky_controller.is_day())
+	day_night_toggle.toggled.connect(_on_day_night_toggled)
+
+	# Headlights follow the time of day automatically: on after dark, off by day.
+	# The car owns the lights; the sky controller decides when it's dark. Wiring
+	# them here keeps both of them ignorant of each other (composition root).
+	sky_controller.day_night_changed.connect(_on_day_night_changed)
+	headlights.set_on(not sky_controller.is_day())
 
 func _process(_delta: float) -> void:
 	# Escape toggles the pause state.
@@ -115,6 +130,20 @@ func _raycast_ground_y(xz: Vector3, approx_y: float) -> float:
 
 func _on_quit_pressed() -> void:
 	get_tree().quit()
+
+## Menu toggle flipped: tell the sky controller which way to fade and relabel the
+## checkbox. The controller animates the actual sky/light/fog transition.
+func _on_day_night_toggled(is_day: bool) -> void:
+	sky_controller.set_day(is_day)
+	_update_day_night_label(is_day)
+
+func _update_day_night_label(is_day: bool) -> void:
+	day_night_toggle.text = "Daytime" if is_day else "Nighttime"
+
+## The sky controller changed the time of day (from the menu or otherwise):
+## switch the headlights on when it's dark and off when it's light.
+func _on_day_night_changed(is_day: bool) -> void:
+	headlights.set_on(not is_day)
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
 	speed_label.text = "%d km/h" % int(speed_kmh)
