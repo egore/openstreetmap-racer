@@ -5,10 +5,35 @@
 [ext_resource type="Script" uid="uid://bh3w0a8jfro5n" path="res://scripts/car_controller.gd" id="3_car"]
 [ext_resource type="PackedScene" uid="uid://napy0x6ewlh2" path="res://scenes/models/car.blend" id="4_jyhfs"]
 [ext_resource type="Script" uid="uid://dryhfw53b8v1j" path="res://scripts/minimap.gd" id="5_minimap"]
+[ext_resource type="Shader" path="res://scripts/shaders/sky.gdshader" id="6_sky"]
+[ext_resource type="Script" path="res://scripts/sky_controller.gd" id="7_skyctl"]
+[ext_resource type="Script" path="res://scripts/headlights.gd" id="8_headlights"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
+shader = ExtResource("6_sky")
+shader_parameter/zenith_color = Color(0.18, 0.4, 0.72, 1)
+shader_parameter/horizon_color = Color(0.66, 0.78, 0.9, 1)
+shader_parameter/ground_color = Color(0.34, 0.36, 0.38, 1)
+shader_parameter/horizon_falloff = 4.0
+shader_parameter/sun_direction = Vector3(-0.4, -0.82, -0.4)
+shader_parameter/sun_color = Color(1, 0.95, 0.85, 1)
+shader_parameter/sun_size = 0.03
+shader_parameter/sun_glow_size = 0.25
+shader_parameter/sun_energy = 1.0
+shader_parameter/cloud_color = Color(1, 1, 1, 1)
+shader_parameter/cloud_shadow_color = Color(0.62, 0.66, 0.72, 1)
+shader_parameter/cloud_coverage = 0.5
+shader_parameter/cloud_softness = 0.25
+shader_parameter/cloud_scale = 2.0
+shader_parameter/cloud_wind = Vector2(0.01, 0.006)
+shader_parameter/cloud_opacity = 1.0
+
+[sub_resource type="Sky" id="Sky_main"]
+sky_material = SubResource("ShaderMaterial_sky")
 
 [sub_resource type="Environment" id="Environment_main"]
-background_mode = 1
-background_color = Color(0.55, 0.75, 0.95, 1)
+background_mode = 2
+sky = SubResource("Sky_main")
 ambient_light_source = 2
 ambient_light_color = Color(0.6, 0.65, 0.7, 1)
 ambient_light_energy = 0.5
@@ -21,6 +46,16 @@ fog_aerial_perspective = 0.5
 [sub_resource type="BoxShape3D" id="BoxShape_car"]
 size = Vector3(1.8, 1, 4.1)
 
+[sub_resource type="StandardMaterial3D" id="Material_lamp"]
+albedo_color = Color(1, 0.97, 0.85, 1)
+emission_enabled = true
+emission = Color(1, 0.95, 0.8, 1)
+emission_energy_multiplier = 0.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_lamp"]
+material = SubResource("Material_lamp")
+size = Vector3(0.28, 0.16, 0.06)
+
 [node name="Main" type="Node3D" unique_id=923917518]
 script = ExtResource("1_main")
 
@@ -28,7 +63,7 @@ script = ExtResource("1_main")
 environment = SubResource("Environment_main")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=382649534]
-transform = Transform3D(0.866, -0.354, 0.354, 0, 0.707, 0.707, -0.5, -0.612, 0.612, 0, 50, 0)
+transform = Transform3D(0.86582, -0.353805, 0.353805, 0, 0.707107, 0.707107, -0.500356, -0.612227, 0.612227, 0, 50, 0)
 shadow_enabled = true
 shadow_bias = 0.05
 shadow_normal_bias = 1.5
@@ -41,6 +76,12 @@ directional_shadow_blend_splits = true
 directional_shadow_fade_start = 0.85
 directional_shadow_max_distance = 250.0
 
+[node name="SkyController" type="Node" parent="." unique_id=1042673341]
+script = ExtResource("7_skyctl")
+world_environment_path = NodePath("../WorldEnvironment")
+sun_light_path = NodePath("../DirectionalLight3D")
+start_in_day = true
+
 [node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
 script = ExtResource("2_tile")
 
@@ -52,6 +93,39 @@ script = ExtResource("3_car")
 
 [node name="CarMesh" parent="Car" unique_id=1017002161 instance=ExtResource("4_jyhfs")]
 transform = Transform3D(0.59999996, 0, 0, 0, 0.59999996, 0, 0, 0, 0.59999996, 0, 0.5864136, 0)
+
+[node name="Headlights" type="Node3D" parent="Car" unique_id=300200001]
+script = ExtResource("8_headlights")
+
+[node name="LeftBeam" type="SpotLight3D" parent="Car/Headlights" unique_id=300200002]
+transform = Transform3D(-1, 0, 0, 0, 0.978148, 0.207912, 0, 0.207912, -0.978148, 0.62, 0.55, 2.05)
+visible = false
+light_color = Color(1, 0.96, 0.85, 1)
+light_energy = 0.0
+light_specular = 0.5
+shadow_enabled = true
+spot_range = 35.0
+spot_angle = 28.0
+spot_angle_attenuation = 1.2
+
+[node name="RightBeam" type="SpotLight3D" parent="Car/Headlights" unique_id=300200003]
+transform = Transform3D(-1, 0, 0, 0, 0.978148, 0.207912, 0, 0.207912, -0.978148, -0.62, 0.55, 2.05)
+visible = false
+light_color = Color(1, 0.96, 0.85, 1)
+light_energy = 0.0
+light_specular = 0.5
+shadow_enabled = true
+spot_range = 35.0
+spot_angle = 28.0
+spot_angle_attenuation = 1.2
+
+[node name="LeftLamp" type="MeshInstance3D" parent="Car/Headlights" unique_id=300200004]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.62, 0.55, 2.0)
+mesh = SubResource("BoxMesh_lamp")
+
+[node name="RightLamp" type="MeshInstance3D" parent="Car/Headlights" unique_id=300200005]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.62, 0.55, 2.0)
+mesh = SubResource("BoxMesh_lamp")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Car" unique_id=2096323148]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.82, 0)
@@ -160,6 +234,13 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 40
 text = "Paused"
 horizontal_alignment = 1
+
+[node name="DayNightToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100008]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+button_pressed = true
+text = "Daytime"
 
 [node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100006]
 custom_minimum_size = Vector2(0, 48)
