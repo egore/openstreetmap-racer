@@ -271,6 +271,19 @@ const _LAMP_GLOW_ENERGY := 6.0
 ## scene lamps.
 const _LAMP_HEAD_MESH_NAME := "light"
 
+## Upper bound on `light:count=*`. Real masts top out at a handful of heads; this
+## caps a typo (light:count=999) from spawning hundreds of lights and tanking the
+## frame rate. One light minimum so a plain lamp always lights.
+const _LAMP_COUNT_MAX := 8
+## Horizontal half-spacing (metres) between adjacent bulbs on a multi-head mast.
+## The ring radius is derived from this so neighbours sit ~2× this apart on the
+## circle regardless of how many there are — more heads simply widen the ring
+## rather than crowding together.
+const _LAMP_BULB_SPACING := 0.45
+## Side length of one placeholder bulb box. Also the floor on the ring radius so
+## a 2-head lamp's bulbs don't intersect.
+const _LAMP_BULB_SIZE := 0.3
+
 ## Builds one street lamp and wires its glowing head + cast light into `group`
 ## (not switched on here) so the StreetLampLights controller drives it with the
 ## rest of the world's lamps. A fresh lamp starts dark; the controller brings it
@@ -290,11 +303,15 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 	group.light_energy = _LAMP_LIGHT_ENERGY
 	group.glow_energy = _LAMP_GLOW_ENERGY
 	group.color = _resolve_lamp_color(node.tags)
+	var count := _resolve_lamp_count(node.tags)
 
 	if def.has("scene"):
-		_build_scene_lamp_body(def, root, group)
+		# Scene models carry their own authored head(s), so light:count only
+		# shapes the placeholder; the count is still passed down so the model's
+		# missing-asset fallbacks honour it.
+		_build_scene_lamp_body(def, root, group, count)
 	else:
-		_build_placeholder_lamp_body(def, root, group)
+		_build_placeholder_lamp_body(def, root, group, count)
 
 	return root
 
@@ -322,15 +339,28 @@ func _resolve_lamp_color(tags: Dictionary) -> Color:
 	return _LAMP_LIGHT_COLOR
 
 
+## Resolves how many bulbs/lights a lamp head carries from `light:count=*`,
+## clamped to 1.._LAMP_COUNT_MAX. Defaults to 1 when the tag is missing or not a
+## positive integer, so a plain lamp is unchanged and bad data degrades to a
+## single head rather than nothing (or a swarm).
+func _resolve_lamp_count(tags: Dictionary) -> int:
+	if not tags.has("light:count"):
+		return 1
+	var raw: String = str(tags["light:count"]).strip_edges()
+	if not raw.is_valid_int():
+		return 1
+	return clampi(raw.to_int(), 1, _LAMP_COUNT_MAX)
+
+
 ## Bent-mast (and any future model-backed) lamp body: instance the model and use
 ## its built-in "light" mesh as the glowing head, dropping a point light at the
 ## head's centre. Falls back to the placeholder body if the model is missing or
 ## has no head mesh, so a bad/absent asset degrades to a working lamp instead of
 ## a dark, light-less one.
-func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup) -> void:
+func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup, count: int = 1) -> void:
 	var scene := _load_scene(def["scene"])
 	if scene == null:
-		_build_placeholder_lamp_body(def, root, group)
+		_build_placeholder_lamp_body(def, root, group, count)
 		return
 	var model := scene.instantiate()
 	root.add_child(model)
@@ -338,7 +368,7 @@ func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLigh
 	var head := _find_node_by_name(model, _LAMP_HEAD_MESH_NAME) as MeshInstance3D
 	if head == null:
 		push_warning("OSMAssetPlacer: street-lamp model %s has no '%s' mesh; using placeholder light" % [def["scene"], _LAMP_HEAD_MESH_NAME])
-		_build_placeholder_lamp_body(def, root, group)
+		_build_placeholder_lamp_body(def, root, group, count)
 		return
 
 	# Drive the model's own head material as the bulb glow. Make it unique per
@@ -360,10 +390,15 @@ func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLigh
 	_add_lamp_light(root, group, head_center)
 
 
-## Default placeholder body: a dark pole with a small emissive box bulb on top
-## and a light beneath it. Used when no model is specified (plain street_lamp) or
-## as the graceful fallback when a model can't be loaded.
-func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup) -> void:
+## Default placeholder body: a dark pole carrying `count` small emissive box bulbs
+## on top, each with its own cast light. Used when no model is specified (plain
+## street_lamp) or as the graceful fallback when a model can't be loaded.
+##
+## A single bulb sits dead-centre on the pole top (the classic lamp). With more
+## than one (`light:count`), the bulbs spread evenly around a horizontal ring —
+## count=4 lands them at 0°/90°/180°/270° — and the ring widens with the count so
+## neighbours keep their spacing instead of crowding the post.
+func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup, count: int = 1) -> void:
 	var size: Vector3 = def["size"]
 	var y_offset: float = def["y_offset"]
 
@@ -380,13 +415,31 @@ func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLa
 	pole.position.y = y_offset
 	root.add_child(pole)
 
-	# Bulb head: a small box at the top of the pole carrying its own emissive
-	# material, made unique per lamp and handed to the controller.
+	# Ring radius: zero for a lone bulb (sits on the pole axis), otherwise sized
+	# so adjacent bulbs are ~2×_LAMP_BULB_SPACING apart along the circle, floored
+	# at the bulb's own width so two heads never intersect. chord = 2r·sin(π/n).
 	var head_y := y_offset + size.y * 0.5
+	var radius := 0.0
+	if count > 1:
+		radius = maxf(_LAMP_BULB_SIZE, _LAMP_BULB_SPACING / sin(PI / count))
+
+	for i: int in range(count):
+		var offset := Vector3.ZERO
+		if count > 1:
+			var angle := TAU * float(i) / float(count)
+			offset = Vector3(cos(angle) * radius, 0.0, sin(angle) * radius)
+		_add_placeholder_bulb(root, group, head_y, offset, i)
+
+
+## Builds one placeholder bulb (emissive box + the OmniLight3D beneath it) at
+## `offset` from the pole top and registers both with the group, so the
+## controller drives every head on a multi-head mast together. `index` only
+## names the nodes for inspector readability.
+func _add_placeholder_bulb(root: Node3D, group: StreetLampLights.LampGroup, head_y: float, offset: Vector3, index: int) -> void:
 	var bulb := MeshInstance3D.new()
-	bulb.name = "Bulb"
+	bulb.name = "Bulb%d" % index
 	var bulb_mesh := BoxMesh.new()
-	bulb_mesh.size = Vector3(0.3, 0.18, 0.3)
+	bulb_mesh.size = Vector3(_LAMP_BULB_SIZE, 0.18, _LAMP_BULB_SIZE)
 	bulb.mesh = bulb_mesh
 	var bulb_mat := StandardMaterial3D.new()
 	bulb_mat.albedo_color = group.color
@@ -394,11 +447,11 @@ func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLa
 	bulb_mat.emission_enabled = false
 	bulb_mat.emission_energy_multiplier = 0.0
 	bulb.material_override = bulb_mat
-	bulb.position.y = head_y
+	bulb.position = Vector3(offset.x, head_y, offset.z)
 	root.add_child(bulb)
 	group.materials.append(bulb_mat)
 
-	_add_lamp_light(root, group, Vector3(0.0, head_y - 0.2, 0.0))
+	_add_lamp_light(root, group, Vector3(offset.x, head_y - 0.2, offset.z))
 
 
 ## Adds the OmniLight3D that pools light on the road below a lamp head and
