@@ -58,6 +58,18 @@ var _transmission := Transmission.new()
 ## Last gear we emitted, so gear_changed only fires on an actual shift.
 var _current_gear: int = Transmission.GEAR_NEUTRAL
 
+## Surface detection: determines whether each wheel is on road or grass.
+var _surface_detector := SurfaceDetector.new()
+## Per-wheel particle emitters for off-road effects (grass spray).
+var _wheel_particles: Array[WheelParticles] = []
+## Cached surface per wheel (indexed same as _wheel_particles). Updated every
+## _SURFACE_CHECK_INTERVAL physics frames to keep the cost down.
+var _wheel_surfaces: Array[SurfaceDetector.Surface] = []
+## Physics-frame counter for throttling surface detection (checking hundreds of
+## road AABBs 4× per frame at 60 Hz is wasteful; every 3rd frame is plenty).
+var _surface_tick: int = 0
+const _SURFACE_CHECK_INTERVAL := 3
+
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	# Drop the centre of mass well below the wheel mounts (wheels sit at ~Y 0.32).
@@ -71,6 +83,7 @@ func _ready() -> void:
 	# Pre-compute the gear speed bands from this car's top speed so the very first
 	# gear lookup is cheap and the HUD can show a gear immediately.
 	_transmission.build_for_max_speed(max_speed * 3.6)
+	_setup_wheel_particles()
 
 
 func _cache_wheel_mesh_rotations() -> void:
@@ -110,6 +123,19 @@ func _setup_wheels() -> void:
 
 	# Remember the rear grip so the handbrake can drop it for a drift and restore it.
 	_rear_grip_normal = rear_left_wheel.wheel_friction_slip
+
+
+func _setup_wheel_particles() -> void:
+	_surface_detector.init(get_tree())
+	# Create one particle emitter per wheel, parented to the car so they move
+	# with it but emit in world space (local_coords = false in WheelParticles).
+	for wheel: VehicleWheel3D in [front_left_wheel, front_right_wheel,
+			rear_left_wheel, rear_right_wheel]:
+		var wp := WheelParticles.new()
+		wp.name = "Particles_%s" % wheel.name
+		add_child(wp)
+		_wheel_particles.append(wp)
+		_wheel_surfaces.append(SurfaceDetector.Surface.GRASS)
 
 
 func _set_rear_friction(lowered: bool) -> void:
@@ -168,6 +194,7 @@ func _physics_process(_delta: float) -> void:
 	_sync_wheel_meshes()
 	_update_camera_pivot(_delta)
 
+	_update_wheel_particles()
 	_broadcast_speed()
 	_update_gear(forward_speed)
 
@@ -188,6 +215,27 @@ func _apply_anti_roll(_delta: float) -> void:
 	var roll_rate := angular_velocity.dot(global_transform.basis.z)
 	var torque := global_transform.basis.z * (-correction * anti_roll_strength - roll_rate * anti_roll_strength * 0.15)
 	apply_torque(torque)
+
+
+func _update_wheel_particles() -> void:
+	var car_speed := linear_velocity.length()
+	var wheels: Array[VehicleWheel3D] = [
+		front_left_wheel, front_right_wheel,
+		rear_left_wheel, rear_right_wheel,
+	]
+	# Throttle the expensive AABB scan: only re-detect surfaces every few frames.
+	# The cached result is used in between, which is visually imperceptible since
+	# particle lifetimes are ~0.6 s (much longer than the ~50 ms skip window).
+	var do_detect := _surface_tick % _SURFACE_CHECK_INTERVAL == 0
+	_surface_tick += 1
+	for i: int in range(wheels.size()):
+		var wheel := wheels[i]
+		# Compute the wheel's world-space contact point: the bottom of the tyre.
+		var wheel_global := global_transform * wheel.transform
+		var contact_pos := wheel_global.origin - Vector3(0, wheel.wheel_radius, 0)
+		if do_detect:
+			_wheel_surfaces[i] = _surface_detector.detect(contact_pos)
+		_wheel_particles[i].update_particles(contact_pos, _wheel_surfaces[i], car_speed)
 
 
 func _sync_wheel_meshes() -> void:

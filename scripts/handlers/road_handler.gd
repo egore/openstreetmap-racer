@@ -16,4 +16,9 @@ func matches(way: OSMParser.OSMWay, _ctx: OSMTileContext) -> bool:
 
 
 func build(way: OSMParser.OSMWay, ctx: OSMTileContext) -> Node3D:
-	return ctx.way_builder.build_road(way, ctx.osm_data)
+	var node := ctx.way_builder.build_road(way, ctx.osm_data)
+	if node != null:
+		# Tag the mesh so SurfaceDetector can find road surfaces quickly via
+		# the scene-tree group instead of walking every tile child.
+		node.add_to_group(&"road_surface")
+	return node
