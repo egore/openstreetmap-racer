@@ -258,6 +258,14 @@ func _load_tile(tkey: Vector2i) -> void:
 				if _point_in_polygon_xz(part_centroid, bld_points):
 					suppressed_building_ids[way.id] = true
 
+	# Collect way IDs that are members of relations the relation builder will
+	# render (multipolygon buildings/areas, type=building). These ways carry
+	# relation-level semantics (e.g. the relation has building=yes, but the
+	# member way only has styling tags like colour/roof:shape). The relation
+	# builder merges the parent tags and renders them; the per-way loop must
+	# skip them to avoid "Skipping way" noise or double rendering.
+	var relation_way_ids := _collect_relation_way_ids(bucket["relations"])
+
 	# Process ways (roads, buildings from ways, etc.) via the handler registry.
 	# Each way is offered to handlers in priority order; the first match builds
 	# it. This replaces the central if-elif dispatch — feature-specific logic now
@@ -268,6 +276,8 @@ func _load_tile(tkey: Vector2i) -> void:
 		if processed_way_ids.has(way.id):
 			continue
 		processed_way_ids[way.id] = true
+		if relation_way_ids.has(way.id):
+			continue
 
 		var handled := false
 		for handler: OSMWayHandler in _way_handlers:
@@ -499,6 +509,62 @@ func _add_terrain_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> vo
 ## becoming a way handler.
 func _is_building_part(way: OSMParser.OSMWay) -> bool:
 	return way.tags.has("building:part")
+
+## Collect way IDs that are members of relations the relation builder will
+## render AND that lack their own independent renderable feature tags. These
+## ways get their semantics (building=*, landuse=*, etc.) from the parent
+## relation, so the per-way handler loop should skip them — the relation
+## builder renders them with the merged tag set.
+##
+## Ways that DO carry their own feature tags (e.g. a highway=* way reused as
+## the outer ring of a landuse multipolygon) are NOT suppressed: they need
+## independent rendering as roads/railways/etc.
+func _collect_relation_way_ids(relations: Array) -> Dictionary:
+	var ids := {}
+	for rel: OSMParser.OSMRelation in relations:
+		if not _relation_renders_ways(rel):
+			continue
+		for member: Dictionary in rel.members:
+			if member["type"] != "way":
+				continue
+			var way_id: int = member["ref"]
+			if not _osm_data.ways.has(way_id):
+				continue
+			var way: OSMParser.OSMWay = _osm_data.ways[way_id]
+			# Only suppress the way if no handler would independently claim it
+			# based on its own tags. If it has highway/railway/barrier/etc. tags,
+			# it needs to be rendered both as that feature AND as part of the
+			# relation (the relation builder handles the latter).
+			if not _way_has_own_feature(way):
+				ids[way_id] = true
+	return ids
+
+## True when the relation builder will produce geometry that includes member
+## ways (multipolygon buildings/areas, type=building). Route, boundary, and
+## other relation types are skipped by the builder and their member ways need
+## independent handling.
+static func _relation_renders_ways(rel: OSMParser.OSMRelation) -> bool:
+	var rel_type: String = rel.tags.get("type", "")
+	if rel_type == "building":
+		return true
+	if rel_type == "multipolygon":
+		if rel.tags.has("building") or rel.tags.has("landuse") \
+				or rel.tags.has("natural") or rel.tags.has("leisure"):
+			return true
+	return false
+
+## True when a way's own tags contain a primary feature key that a handler
+## would independently claim (highway, building, railway, waterway, barrier,
+## landuse, natural, leisure, amenity, power). Ways with only styling tags
+## (colour, roof:shape, etc.) return false — their meaning comes from a
+## parent relation.
+static func _way_has_own_feature(way: OSMParser.OSMWay) -> bool:
+	return way.tags.has("highway") or way.tags.has("building") \
+		or way.tags.has("building:part") or way.tags.has("railway") \
+		or way.tags.has("waterway") or way.tags.has("barrier") \
+		or way.tags.has("landuse") or way.tags.has("natural") \
+		or way.tags.has("leisure") or way.tags.has("amenity") \
+		or way.tags.has("power") or way.tags.has("man_made")
 
 ## Ways we deliberately do not render: untagged ring members consumed by their
 ## parent relation, explicitly removed features, and abstract man_made outlines
