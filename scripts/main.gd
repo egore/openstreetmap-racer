@@ -100,6 +100,9 @@ func _process(_delta: float) -> void:
 func _set_paused(paused: bool) -> void:
 	get_tree().paused = paused
 	pause_menu.visible = paused
+	# Silence the car audio immediately so the engine doesn't drone through the
+	# menu. Un-muting lets the sounds restart naturally on the next physics frame.
+	car.set_engine_muted(paused)
 	# Free the cursor for the menu while paused, recapture it on resume.
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if paused else Input.MOUSE_MODE_CAPTURED)
 
