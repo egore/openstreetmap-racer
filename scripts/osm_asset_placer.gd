@@ -25,7 +25,18 @@ var lamp_lights: StreetLampLights = null
 const ASSET_DEFS := {
 	"highway": {
 		"traffic_signals": { "color": Color(0.1, 0.7, 0.1), "size": Vector3(0.3, 3.0, 0.3), "y_offset": 1.5, "label": "Traffic Light", "scene": "res://scenes/models/traffic_light.blend" },
-		"street_lamp": { "color": Color(0.25, 0.22, 0.12), "size": Vector3(0.15, 4.0, 0.15), "y_offset": 2.0, "label": "Street Lamp", "light": true },
+		# Street lamps always emit light (`light: true`). The optional `support`
+		# subtag refines the *body*: a bent-mast lamp swaps the placeholder pole
+		# for a custom model whose built-in "light" mesh becomes the glowing head.
+		# `support` variants inherit the base fields and override only what they
+		# name, so they keep `light: true` and the head offsets without repeating
+		# them. Add a new mast style by dropping a model in and adding one entry.
+		"street_lamp": {
+			"color": Color(0.25, 0.22, 0.12), "size": Vector3(0.15, 4.0, 0.15), "y_offset": 2.0, "label": "Street Lamp", "light": true,
+			"support": {
+				"bent_mast": { "scene": "res://scenes/models/street_lamp-bent_mast.blend" },
+			},
+		},
 		"bus_stop": { "color": Color(0.2, 0.4, 0.8), "size": Vector3(0.8, 2.5, 0.3), "y_offset": 1.25, "label": "Bus Stop", "scene": "res://scenes/models/bus_stop.blend" },
 		"crossing": { "color": Color(1.0, 1.0, 1.0), "size": Vector3(2.0, 0.05, 2.0), "y_offset": 0.025, "label": "Crossing" },
 		"stop": { "color": Color(0.9, 0.1, 0.1), "size": Vector3(0.5, 2.0, 0.05), "y_offset": 1.0, "label": "Stop Sign" },
@@ -222,21 +233,86 @@ const _LAMP_LIGHT_RANGE := 12.0
 ## bulb itself, separate from the light it casts).
 const _LAMP_GLOW_ENERGY := 6.0
 
-## Builds one street lamp: a dark pole, a glowing bulb head at the top, and an
-## OmniLight3D that pools light on the road below. The bulb material and light
-## are appended to `group` (not switched on here) so the StreetLampLights
-## controller drives them with the rest of the world's lamps; a fresh lamp starts
-## dark and the controller brings it to the current time-of-day brightness when
-## the tile is registered.
-func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetLampLights.LampGroup) -> Node3D:
-	var size: Vector3 = def["size"]
-	var y_offset: float = def["y_offset"]
+## Name of the emissive lamp-head mesh inside a street-lamp model (e.g. the
+## bent-mast .blend). Its material is driven as the glowing bulb and the cast
+## light is placed at its centre, so the model author controls *where* the head
+## is just by naming the mesh — the script never hard-codes a head position for
+## scene lamps.
+const _LAMP_HEAD_MESH_NAME := "light"
 
+## Builds one street lamp and wires its glowing head + cast light into `group`
+## (not switched on here) so the StreetLampLights controller drives it with the
+## rest of the world's lamps. A fresh lamp starts dark; the controller brings it
+## to the current time-of-day brightness when the tile is registered.
+##
+## Two body styles share this path:
+##   - a custom model (def has `scene`, e.g. support=bent_mast), whose built-in
+##     "light" mesh becomes the head; or
+##   - the default placeholder pole with a small box bulb on top.
+## Either way the light/glow plumbing is identical, so the controller treats all
+## lamps the same.
+func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetLampLights.LampGroup) -> Node3D:
 	var root := Node3D.new()
 	root.name = "%s_%d" % [def["label"].replace(" ", ""), node.id]
 	root.position = node.local_pos
 
-	# Pole: a thin dark post. Reuses the def size/colour (now an unlit metal grey)
+	group.light_energy = _LAMP_LIGHT_ENERGY
+	group.glow_energy = _LAMP_GLOW_ENERGY
+
+	if def.has("scene"):
+		_build_scene_lamp_body(def, root, group)
+	else:
+		_build_placeholder_lamp_body(def, root, group)
+
+	return root
+
+
+## Bent-mast (and any future model-backed) lamp body: instance the model and use
+## its built-in "light" mesh as the glowing head, dropping a point light at the
+## head's centre. Falls back to the placeholder body if the model is missing or
+## has no head mesh, so a bad/absent asset degrades to a working lamp instead of
+## a dark, light-less one.
+func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup) -> void:
+	var scene := _load_scene(def["scene"])
+	if scene == null:
+		_build_placeholder_lamp_body(def, root, group)
+		return
+	var model := scene.instantiate()
+	root.add_child(model)
+
+	var head := _find_node_by_name(model, _LAMP_HEAD_MESH_NAME) as MeshInstance3D
+	if head == null:
+		push_warning("OSMAssetPlacer: street-lamp model %s has no '%s' mesh; using placeholder light" % [def["scene"], _LAMP_HEAD_MESH_NAME])
+		_build_placeholder_lamp_body(def, root, group)
+		return
+
+	# Drive the model's own head material as the bulb glow. Make it unique per
+	# instance first so toggling one lamp's glow never bleeds into the shared
+	# imported material (every bent-mast lamp would otherwise glow together).
+	var head_mat := head.get_active_material(0)
+	if head_mat is StandardMaterial3D:
+		var unique := (head_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+		unique.emission = _LAMP_LIGHT_COLOR
+		unique.emission_enabled = false
+		unique.emission_energy_multiplier = 0.0
+		head.set_surface_override_material(0, unique)
+		group.materials.append(unique)
+
+	# Cast the pooled light from the head's centre (in root space). The bent mast
+	# reaches out horizontally, so the head sits off the pole's base — using the
+	# mesh AABB centre keeps the light under the actual lamp, not the post.
+	var head_center := _node_aabb_center_in(head, root)
+	_add_lamp_light(root, group, head_center)
+
+
+## Default placeholder body: a dark pole with a small emissive box bulb on top
+## and a light beneath it. Used when no model is specified (plain street_lamp) or
+## as the graceful fallback when a model can't be loaded.
+func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup) -> void:
+	var size: Vector3 = def["size"]
+	var y_offset: float = def["y_offset"]
+
+	# Pole: a thin dark post. Reuses the def size/colour (an unlit metal grey)
 	# so the lamp body is visible by day without pretending to glow.
 	var pole := MeshInstance3D.new()
 	pole.name = "Pole"
@@ -250,8 +326,7 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 	root.add_child(pole)
 
 	# Bulb head: a small box at the top of the pole carrying its own emissive
-	# material. The material is made unique per lamp and handed to the controller
-	# so toggling the glow on one lamp never bleeds into a shared resource.
+	# material, made unique per lamp and handed to the controller.
 	var head_y := y_offset + size.y * 0.5
 	var bulb := MeshInstance3D.new()
 	bulb.name = "Bulb"
@@ -261,32 +336,64 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 	var bulb_mat := StandardMaterial3D.new()
 	bulb_mat.albedo_color = _LAMP_LIGHT_COLOR
 	bulb_mat.emission = _LAMP_LIGHT_COLOR
-	# Start dark; the controller fades emission in after dusk.
 	bulb_mat.emission_enabled = false
 	bulb_mat.emission_energy_multiplier = 0.0
 	bulb.material_override = bulb_mat
 	bulb.position.y = head_y
 	root.add_child(bulb)
+	group.materials.append(bulb_mat)
 
-	# Point light: sits just under the bulb so the lamp casts down onto the road
-	# rather than lighting its own head. Shadows are off — dozens of shadow-
-	# casting point lights would tank performance and add little at night.
+	_add_lamp_light(root, group, Vector3(0.0, head_y - 0.2, 0.0))
+
+
+## Adds the OmniLight3D that pools light on the road below a lamp head and
+## registers it with the group. Starts off (energy 0, hidden); the controller
+## fades it in after dusk. Shadows are off — dozens of shadow-casting point
+## lights would tank performance and add little at night.
+func _add_lamp_light(root: Node3D, group: StreetLampLights.LampGroup, local_pos: Vector3) -> void:
 	var light := OmniLight3D.new()
 	light.name = "Light"
 	light.light_color = _LAMP_LIGHT_COLOR
-	light.light_energy = 0.0          # controller fades this in
+	light.light_energy = 0.0
 	light.omni_range = _LAMP_LIGHT_RANGE
 	light.shadow_enabled = false
-	light.visible = false             # off until the controller turns it on
-	light.position.y = head_y - 0.2
+	light.visible = false
+	light.position = local_pos
 	root.add_child(light)
-
 	group.lights.append(light)
-	group.materials.append(bulb_mat)
-	group.light_energy = _LAMP_LIGHT_ENERGY
-	group.glow_energy = _LAMP_GLOW_ENERGY
 
-	return root
+
+## Depth-first search for the first descendant (or `node` itself) whose name
+## matches `name`, case-insensitively. Imported meshes may carry suffixes or
+## differ in case from the Blender object name, so an exact match would be
+## brittle; this tolerates "light", "Light", "light2" → matched on the stem.
+func _find_node_by_name(node: Node, target: String) -> Node:
+	if node.name.to_lower().begins_with(target.to_lower()):
+		return node
+	for child in node.get_children():
+		var found := _find_node_by_name(child, target)
+		if found != null:
+			return found
+	return null
+
+
+## AABB centre of a MeshInstance3D expressed in the space of an ancestor
+## `relative_to`. Used to place a lamp's light under its head when the head is
+## offset from the pole base (bent mast).
+##
+## Deliberately composes the chain of *local* transforms from `mesh` up to
+## `relative_to` instead of using global_transform: this runs while the lamp
+## subtree is still detached (built before being added to the tile), where
+## global_transform is invalid and would both error and return identity.
+func _node_aabb_center_in(mesh: MeshInstance3D, relative_to: Node3D) -> Vector3:
+	var center := mesh.get_aabb().get_center()
+	var xform := Transform3D.IDENTITY
+	var n: Node = mesh
+	while n != null and n != relative_to:
+		if n is Node3D:
+			xform = (n as Node3D).transform * xform
+		n = n.get_parent()
+	return xform * center
 
 
 func place_asset(node: OSMParser.OSMNode) -> Node3D:
@@ -459,8 +566,35 @@ func _find_asset_def(tags: Dictionary) -> Dictionary:
 				var wall_value: String = tags["wall"]
 				if sub.has(wall_value):
 					return sub[wall_value]
+			var base: Dictionary = {}
 			if sub.has(tag_value):
-				return sub[tag_value]
+				base = sub[tag_value]
 			elif sub.has("*"):
-				return sub["*"]
+				base = sub["*"]
+			if not base.is_empty():
+				return _apply_support_variant(base, tags)
 	return {}
+
+
+## If a def carries a `support` variant map and the node has a matching
+## `support=*` tag, merge that variant over the base def and return the result.
+## Variants override only the keys they name (e.g. add a `scene`) and inherit
+## everything else (`light`, `label`, head offsets), so a bent-mast lamp stays a
+## light-emitting street lamp. The `support` key itself is stripped from the
+## returned def so downstream code never sees the variant table. Returns the base
+## unchanged when there is no variant table or no matching support value.
+func _apply_support_variant(base: Dictionary, tags: Dictionary) -> Dictionary:
+	if not base.has("support") or not tags.has("support"):
+		return base
+	var variants: Dictionary = base["support"]
+	var support_value: String = tags["support"]
+	if not variants.has(support_value):
+		# Unknown support style: fall back to the base lamp, minus the table.
+		var fallback := base.duplicate()
+		fallback.erase("support")
+		return fallback
+	var merged := base.duplicate()
+	merged.erase("support")
+	for key: String in variants[support_value]:
+		merged[key] = variants[support_value][key]
+	return merged

@@ -30,7 +30,7 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 11. **Headlights** (`scripts/headlights.gd`) — A self-contained component under the car holding two forward-facing `SpotLight3D` beams and the glowing lamp faces. It exposes a single `set_on(bool)` intent and fades the beams + lamp emission up/down like real bulbs. `main.gd` (the composition root) connects the sky controller's `day_night_changed` signal to it, so the headlights **switch on automatically after dark and off by day** — the car owns the lights, the sky controller decides when it's dark, and neither knows about the other.
 
-12. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
+12. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. A lamp's body can be refined by the OSM `support=*` subtag: `support=bent_mast` swaps the placeholder pole for the `street_lamp-bent_mast.blend` model, whose built-in mesh named `light` becomes the glowing head (its material is driven for the glow and the cast light is placed at that mesh's centre, so the bent arm is correctly lit out over the road). Unknown or absent `support` values fall back to the placeholder pole. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
 
 ### Dynamic Loading
 
@@ -207,6 +207,16 @@ Street lamps (`highway=street_lamp` nodes) light up the same way, driven by the
 `scripts/street_lamp_lights.gd` (how quickly a street eases on at dusk). The
 point lights cast no shadows by design — a dense network of shadow-casting lamps
 would be costly and adds little at night.
+
+To give a lamp style its own model, add a `support` variant to the `street_lamp`
+entry in `ASSET_DEFS`. Each variant maps an OSM `support=*` value to a partial
+def that overrides only the fields it names (typically just a `scene`) and
+inherits the rest — so it stays a light-emitting lamp without repeating
+`light`/`label`. The model needs a mesh named `light`: its material is driven as
+the glowing bulb and the cast light is placed at that mesh's centre, so the head
+is positioned by the model, not hard-coded. `support=bent_mast` →
+`street_lamp-bent_mast.blend` ships as the first example; unknown or missing
+`support` values fall back to the placeholder pole.
 
 ### Scaling Up
 
