@@ -38,6 +38,10 @@ class LampGroup:
 	var light_energy: float = 0.0
 	## Emission multiplier each bulb material reaches when fully on.
 	var glow_energy: float = 0.0
+	## Tint of this group's cast light and bulb glow, resolved from the lamp's OSM
+	## tags (light:colour / lamp_type) at build time so a sodium street glows
+	## orange while an LED street stays white. White by default.
+	var color: Color = Color.WHITE
 
 ## Live groups, keyed by the tile root Node they belong to. Keyed by the node so
 ## a tile unloading can drop its group in O(1) without scanning, and freed tiles
@@ -107,9 +111,11 @@ func _apply_to_group(group: LampGroup, level: float) -> void:
 	var lit := level > 0.001
 	for light in group.lights:
 		if is_instance_valid(light):
+			light.light_color = group.color
 			light.light_energy = group.light_energy * level
 			light.visible = lit
 	for mat in group.materials:
+		mat.emission = group.color
 		mat.emission_enabled = lit
 		mat.emission_energy_multiplier = group.glow_energy * level
 

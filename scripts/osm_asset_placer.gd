@@ -227,7 +227,32 @@ func _build_box_multimesh(def: Dictionary, transforms: Array) -> MultiMeshInstan
 
 ## Warm colour of the bulb glow and the pool of light it casts. A slightly
 ## orange sodium-vapour tint reads as "street lamp" far more than plain white.
+## Used as the fallback when a lamp's tags name no recognisable colour or type.
 const _LAMP_LIGHT_COLOR := Color(1.0, 0.85, 0.55)
+
+## Named values for OSM `light:colour=*`. The wiki lists white / warm_white /
+## orange / yellow as the common values; anything else falls through to a hex
+## parse (e.g. light:colour=#ffcc88) and then to _LAMP_LIGHT_COLOR.
+const _LAMP_COLOUR_BY_NAME := {
+	"white": Color(1.0, 0.97, 0.9),
+	"warm_white": Color(1.0, 0.9, 0.72),
+	"yellow": Color(1.0, 0.85, 0.45),
+	"orange": Color(1.0, 0.6, 0.25),
+}
+
+## Fallback tint by `lamp_type` / `light:method` when no explicit light:colour is
+## given. Follows the wiki's "Typische Lichtfarbe" column so a sodium street
+## glows orange and an LED street stays white without any colour tag.
+const _LAMP_COLOUR_BY_TYPE := {
+	"led": Color(1.0, 0.97, 0.9),
+	"fluorescent": Color(1.0, 0.97, 0.9),
+	"metal_halide": Color(0.92, 0.95, 1.0),
+	"mercury": Color(0.9, 0.95, 1.0),
+	"high_pressure_sodium": Color(1.0, 0.6, 0.25),
+	"sodium": Color(1.0, 0.55, 0.15),
+	"incandescent": Color(1.0, 0.88, 0.68),
+	"gaslight": Color(1.0, 0.82, 0.55),
+}
 ## OmniLight3D energy each lamp reaches when fully on. Tuned to drop a visible
 ## pool on the road at night without washing the scene out; lamps are dense, so
 ## modest per-lamp energy still adds up to a lit street.
@@ -264,6 +289,7 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 
 	group.light_energy = _LAMP_LIGHT_ENERGY
 	group.glow_energy = _LAMP_GLOW_ENERGY
+	group.color = _resolve_lamp_color(node.tags)
 
 	if def.has("scene"):
 		_build_scene_lamp_body(def, root, group)
@@ -271,6 +297,29 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 		_build_placeholder_lamp_body(def, root, group)
 
 	return root
+
+
+## Resolves a lamp's tint from its OSM tags. `light:colour=*` wins (a named value
+## like "orange" or a hex literal like "#ffcc88"); failing that the lamp's
+## `lamp_type`/`light:method` maps to a typical colour (sodium → orange, LED →
+## white); failing that we fall back to the default warm tint. Matching is
+## case-insensitive and tolerant of stray whitespace, as OSM data is hand-tagged.
+func _resolve_lamp_color(tags: Dictionary) -> Color:
+	if tags.has("light:colour"):
+		var raw: String = str(tags["light:colour"]).strip_edges().to_lower()
+		if _LAMP_COLOUR_BY_NAME.has(raw):
+			return _LAMP_COLOUR_BY_NAME[raw]
+		# Hex literal (#rgb / #rrggbb), the other common light:colour form.
+		if raw.begins_with("#") and raw.is_valid_html_color():
+			return Color.html(raw)
+
+	for type_key: String in ["lamp_type", "light:method"]:
+		if tags.has(type_key):
+			var type_value: String = str(tags[type_key]).strip_edges().to_lower()
+			if _LAMP_COLOUR_BY_TYPE.has(type_value):
+				return _LAMP_COLOUR_BY_TYPE[type_value]
+
+	return _LAMP_LIGHT_COLOR
 
 
 ## Bent-mast (and any future model-backed) lamp body: instance the model and use
@@ -298,7 +347,7 @@ func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLigh
 	var head_mat := head.get_active_material(0)
 	if head_mat is StandardMaterial3D:
 		var unique := (head_mat as StandardMaterial3D).duplicate() as StandardMaterial3D
-		unique.emission = _LAMP_LIGHT_COLOR
+		unique.emission = group.color
 		unique.emission_enabled = false
 		unique.emission_energy_multiplier = 0.0
 		head.set_surface_override_material(0, unique)
@@ -340,8 +389,8 @@ func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLa
 	bulb_mesh.size = Vector3(0.3, 0.18, 0.3)
 	bulb.mesh = bulb_mesh
 	var bulb_mat := StandardMaterial3D.new()
-	bulb_mat.albedo_color = _LAMP_LIGHT_COLOR
-	bulb_mat.emission = _LAMP_LIGHT_COLOR
+	bulb_mat.albedo_color = group.color
+	bulb_mat.emission = group.color
 	bulb_mat.emission_enabled = false
 	bulb_mat.emission_energy_multiplier = 0.0
 	bulb.material_override = bulb_mat
@@ -359,7 +408,7 @@ func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLa
 func _add_lamp_light(root: Node3D, group: StreetLampLights.LampGroup, local_pos: Vector3) -> void:
 	var light := OmniLight3D.new()
 	light.name = "Light"
-	light.light_color = _LAMP_LIGHT_COLOR
+	light.light_color = group.color
 	light.light_energy = 0.0
 	light.omni_range = _LAMP_LIGHT_RANGE
 	light.shadow_enabled = false
