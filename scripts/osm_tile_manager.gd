@@ -66,6 +66,7 @@ func _ready() -> void:
 		BarrierHandler.new(),
 		ParkingHandler.new(),
 		AreaHandler.new(),
+		SurfaceHandler.new(),
 	]
 
 	_load_osm_data()
