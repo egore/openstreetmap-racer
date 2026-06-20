@@ -9,6 +9,9 @@ extends Node3D
 @onready var speed_label: Label = $HUD/SpeedLabel
 @onready var gear_label: Label = $HUD/GearLabel
 @onready var info_label: Label = $HUD/InfoLabel
+@onready var kudos_label: Label = $HUD/KudosLabel
+@onready var combo_label: Label = $HUD/ComboLabel
+@onready var kudos_popup: Label = $HUD/KudosPopup
 @onready var pause_menu: CanvasLayer = $PauseMenu
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/QuitButton
@@ -17,6 +20,10 @@ extends Node3D
 @onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
 @onready var headlights: Headlights = $Car/Headlights
 @onready var street_lamp_lights: StreetLampLights = $StreetLampLights
+
+## Active tween for the centre kudos popup's pop-and-fade, kept so a new event can
+## kill the in-flight animation before starting its own (avoids stacked tweens).
+var _kudos_popup_tween: Tween = null
 
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
@@ -28,6 +35,8 @@ func _ready() -> void:
 	# Dependency injection: the car broadcasts its speed and gear, the HUD reacts.
 	car.speed_changed.connect(_on_car_speed_changed)
 	car.gear_changed.connect(_on_car_gear_changed)
+	car.kudos_changed.connect(_on_car_kudos_changed)
+	car.kudos_event.connect(_on_car_kudos_event)
 
 	# React to tile streaming instead of polling a private field every frame.
 	tile_manager.tile_loaded.connect(_on_tiles_changed)
@@ -171,6 +180,45 @@ func _on_car_speed_changed(speed_kmh: float) -> void:
 
 func _on_car_gear_changed(gear: int) -> void:
 	gear_label.text = Transmission.gear_label(gear)
+
+## Running kudos total changed: update the persistent score readout and the combo
+## multiplier line. The combo line is hidden at x1 to keep the HUD quiet during
+## ordinary driving and only shouts once the player is stringing moves together.
+func _on_car_kudos_changed(total: int, combo: float) -> void:
+	kudos_label.text = "KUDOS %d" % total
+	if combo > 1.01:
+		combo_label.text = "x%.1f COMBO" % combo
+	else:
+		combo_label.text = ""
+
+## A discrete style moment or mistake fired: flash it in the centre of the screen.
+## Cool moves are gold, mistakes red. Each event restarts the pop-and-fade tween
+## so rapid-fire events always show the latest one cleanly.
+func _on_car_kudos_event(label: String, amount: int, is_penalty: bool) -> void:
+	var sign_str := "+" if amount >= 0 else ""
+	kudos_popup.text = "%s  %s%d" % [label, sign_str, amount]
+	kudos_popup.add_theme_color_override(
+		"font_color",
+		Color(1.0, 0.3, 0.25) if is_penalty else Color(1.0, 0.85, 0.2)
+	)
+	_play_kudos_popup()
+
+## Pop-and-fade animation for the centre kudos popup: snap to full opacity at a
+## slightly enlarged scale, then settle and fade out. A fresh tween is created
+## each time (and the previous one killed) so overlapping events don't stack.
+func _play_kudos_popup() -> void:
+	if _kudos_popup_tween != null and _kudos_popup_tween.is_valid():
+		_kudos_popup_tween.kill()
+	# Scale around the label's centre so it grows in place rather than off-corner.
+	kudos_popup.pivot_offset = kudos_popup.size * 0.5
+	kudos_popup.modulate.a = 1.0
+	kudos_popup.scale = Vector2(1.3, 1.3)
+	_kudos_popup_tween = create_tween()
+	_kudos_popup_tween.set_parallel(true)
+	_kudos_popup_tween.tween_property(kudos_popup, "scale", Vector2.ONE, 0.18) \
+		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_kudos_popup_tween.tween_property(kudos_popup, "modulate:a", 0.0, 0.9) \
+		.set_delay(0.35)
 
 func _on_tiles_changed(_tile_key: Vector2i) -> void:
 	_update_info_label()

@@ -191,6 +191,58 @@ offset_bottom = 90.0
 theme_override_font_sizes/font_size = 16
 text = "Loading..."
 
+[node name="KudosLabel" type="Label" parent="HUD" unique_id=153076300]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 16.0
+offset_right = 200.0
+offset_bottom = 70.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 40
+text = "KUDOS 0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="ComboLabel" type="Label" parent="HUD" unique_id=153076301]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 62.0
+offset_right = 200.0
+offset_bottom = 92.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.55, 0.1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="KudosPopup" type="Label" parent="HUD" unique_id=153076302]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 120.0
+offset_right = 300.0
+offset_bottom = 180.0
+grow_horizontal = 2
+modulate = Color(1, 1, 1, 0)
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 44
+text = ""
+horizontal_alignment = 1
+vertical_alignment = 1
+
 [node name="Minimap" type="Control" parent="HUD" unique_id=150620465]
 layout_mode = 3
 anchors_preset = 3

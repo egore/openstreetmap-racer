@@ -77,20 +77,20 @@ func is_on() -> bool:
 
 ## Registers one tile's lamp lights and brings them straight to the current
 ## brightness, so a tile streaming in at night (or mid-fade) is already correctly
-## lit instead of popping on a frame later. The group is keyed by `owner` (the
-## tile root) so unregister_tile() can drop it when the tile unloads.
-func register_tile(owner: Node, group: LampGroup) -> void:
-	if owner == null or group == null:
+## lit instead of popping on a frame later. The group is keyed by `tile_root`
+## so unregister_tile() can drop it when the tile unloads.
+func register_tile(tile_root: Node, group: LampGroup) -> void:
+	if tile_root == null or group == null:
 		return
-	_groups[owner] = group
+	_groups[tile_root] = group
 	_apply_to_group(group, _level)
 
 
 ## Drops a tile's lamp lights when its tile unloads. Safe to call for a tile that
 ## was never registered (a tile with no street lamps), which keeps the tile
 ## manager's unload path branch-free.
-func unregister_tile(owner: Node) -> void:
-	_groups.erase(owner)
+func unregister_tile(tile_root: Node) -> void:
+	_groups.erase(tile_root)
 
 
 # --- Internals -------------------------------------------------------------
@@ -101,8 +101,8 @@ func unregister_tile(owner: Node) -> void:
 func _set_level(level: float) -> void:
 	_level = level
 	_prune_freed()
-	for owner: Node in _groups:
-		_apply_to_group(_groups[owner], level)
+	for tile_root: Node in _groups:
+		_apply_to_group(_groups[tile_root], level)
 
 
 ## Drives one group's lights and bulb glow to the given level. level 0 also
@@ -125,8 +125,8 @@ func _apply_to_group(group: LampGroup, level: float) -> void:
 ## dangling light.
 func _prune_freed() -> void:
 	var dead: Array[Node] = []
-	for owner: Node in _groups:
-		if not is_instance_valid(owner):
-			dead.append(owner)
-	for owner: Node in dead:
-		_groups.erase(owner)
+	for tile_root: Node in _groups:
+		if not is_instance_valid(tile_root):
+			dead.append(tile_root)
+	for tile_root: Node in dead:
+		_groups.erase(tile_root)
