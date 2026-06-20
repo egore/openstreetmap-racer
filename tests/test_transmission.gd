@@ -161,3 +161,68 @@ func test_gear_label_forward_gears() -> void:
 	for g in range(1, Transmission.FORWARD_GEAR_COUNT + 1):
 		assert_str(Transmission.gear_label(g)) \
 			.override_failure_message("gear %d -> \"%d\"" % [g, g]).is_equal(str(g))
+
+
+# ─── Gear ratio (engine sound pitch input) ──────────────────────────────────
+
+func test_gear_ratio_zero_in_neutral() -> void:
+	var tx := _make()
+	assert_float(tx.gear_ratio_for_speed(0.0, MAX_SPEED)) \
+		.override_failure_message("stationary -> ratio 0").is_equal(0.0)
+
+
+func test_gear_ratio_zero_in_reverse() -> void:
+	var tx := _make()
+	assert_float(tx.gear_ratio_for_speed(-50.0, MAX_SPEED)) \
+		.override_failure_message("reverse -> ratio 0").is_equal(0.0)
+
+
+func test_gear_ratio_zero_at_bottom_of_first() -> void:
+	var tx := _make()
+	# At the very threshold (bottom of 1st gear) ratio should be ~0.
+	var ratio := tx.gear_ratio_for_speed(tx.neutral_speed_threshold, MAX_SPEED)
+	assert_float(ratio) \
+		.override_failure_message("bottom of 1st gear -> ratio near 0") \
+		.is_less(0.1)
+
+
+func test_gear_ratio_one_at_top_of_gear() -> void:
+	var tx := _make()
+	# At max speed we're at the top of 6th gear, so ratio should be 1.
+	assert_float(tx.gear_ratio_for_speed(MAX_SPEED, MAX_SPEED)) \
+		.override_failure_message("top of top gear -> ratio 1.0").is_equal(1.0)
+
+
+func test_gear_ratio_clamped_above_max() -> void:
+	var tx := _make()
+	# Overspeed should not produce ratio > 1.
+	assert_float(tx.gear_ratio_for_speed(MAX_SPEED * 2.0, MAX_SPEED)) \
+		.override_failure_message("overspeed -> ratio clamped to 1.0").is_equal(1.0)
+
+
+func test_gear_ratio_rises_within_each_gear() -> void:
+	var tx := _make()
+	# Sweeping speed through each gear, the ratio should rise monotonically
+	# from ~0 to ~1. Test this for a mid gear (3rd) using two probe points.
+	# First find speeds that land in 3rd gear.
+	var low_3rd := -1.0
+	var high_3rd := -1.0
+	var speed := 0.0
+	while speed <= MAX_SPEED:
+		if tx.gear_for_speed(speed, MAX_SPEED) == 3:
+			if low_3rd < 0:
+				low_3rd = speed
+			high_3rd = speed
+		speed += 0.5
+	assert_float(low_3rd) \
+		.override_failure_message("found lower bound of 3rd gear").is_greater(0.0)
+	var ratio_low := tx.gear_ratio_for_speed(low_3rd, MAX_SPEED)
+	var ratio_high := tx.gear_ratio_for_speed(high_3rd, MAX_SPEED)
+	assert_float(ratio_high) \
+		.override_failure_message("ratio rises across 3rd gear band") \
+		.is_greater(ratio_low)
+	# Low end should be near 0, high end near 1.
+	assert_float(ratio_low) \
+		.override_failure_message("low end of 3rd gear ratio < 0.15").is_less(0.15)
+	assert_float(ratio_high) \
+		.override_failure_message("high end of 3rd gear ratio > 0.85").is_greater(0.85)

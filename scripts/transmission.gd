@@ -27,7 +27,7 @@ const GEAR_NEUTRAL := 0
 ## would give evenly-sized bands; >1.0 makes the lower gears progressively
 ## shorter and the top gears longer, which is what gives that familiar
 ## "quick through the low gears, long pull in top" feel.
-var gear_spacing: float = 1.28
+var gear_spacing: float = 1.15
 
 ## Below this speed (km/h) the car is treated as in neutral so the HUD shows "N"
 ## instead of flickering into 1st while sitting still.
@@ -89,6 +89,24 @@ func gear_for_speed(forward_speed_kmh: float, max_speed_kmh: float) -> int:
 		if forward_speed_kmh <= _upshift_points[i]:
 			return i + 1
 	return FORWARD_GEAR_COUNT
+
+
+## Returns 0..1 indicating how far through the current gear band the car
+## is.  0 = bottom of the gear (just shifted in), 1 = top (about to
+## upshift).  Used by the engine sound to set pitch.  Returns 0 in neutral
+## or reverse.
+func gear_ratio_for_speed(forward_speed_kmh: float, max_speed_kmh: float) -> float:
+	var gear := gear_for_speed(forward_speed_kmh, max_speed_kmh)
+	if gear <= GEAR_NEUTRAL:
+		return 0.0
+	# Lower bound of this gear band (0 for 1st, else previous gear's upper).
+	var lower := 0.0
+	if gear >= 2:
+		lower = _upshift_points[gear - 2]
+	var upper := _upshift_points[gear - 1]
+	if upper <= lower:
+		return 0.0
+	return clampf((forward_speed_kmh - lower) / (upper - lower), 0.0, 1.0)
 
 
 ## Human-readable label for a gear index, for the HUD ("R", "N", "1".."6").

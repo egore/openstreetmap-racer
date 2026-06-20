@@ -59,13 +59,15 @@ var _rear_grip_normal: float = 2.0
 ## Tracks the current rear-grip state so we only write to the wheels on a change.
 var _rear_grip_lowered: bool = false
 
-## Gearbox helper. Maps the car's speed onto a gear for the HUD (and, later, for
-## engine-sound pitch). Purely cosmetic right now — the gear does not feed back
-## into engine_force — but it lives here so the sound system has a single, stable
-## source of "what gear are we in" once audio is wired up.
+## Gearbox helper. Maps the car's speed onto a gear for the HUD and drives the
+## engine sound pitch. Purely cosmetic — the gear does not feed back into
+## engine_force — but it gives the sound system a stable "what gear / RPM" answer.
 var _transmission := Transmission.new()
 ## Last gear we emitted, so gear_changed only fires on an actual shift.
 var _current_gear: int = Transmission.GEAR_NEUTRAL
+
+## Engine audio: loops a single-gear sample and pitch-shifts it by RPM.
+var _engine_sound := EngineSound.new()
 
 ## Surface detection: determines whether each wheel is on road or grass.
 var _surface_detector := SurfaceDetector.new()
@@ -79,6 +81,19 @@ var _wheel_surfaces: Array[SurfaceDetector.Surface] = []
 var _surface_tick: int = 0
 const _SURFACE_CHECK_INTERVAL := 3
 
+## Looping dirt/gravel sound that plays while any wheel is on grass above the
+## particle speed threshold. A single non-3D player is enough because the car is
+## always the listener's focus; volume and pitch scale with speed for feedback.
+var _dirt_sound: AudioStreamPlayer = null
+## Path to the looping gravel sample. Loaded once in _ready.
+const _DIRT_SOUND_PATH := "res://sounds/dirt_driving.ogg"
+## Volume (linear) floor/ceiling for the dirt sound so it blends gently.
+const _DIRT_VOLUME_MIN_DB := -20.0
+const _DIRT_VOLUME_MAX_DB := -6.0
+## Pitch range: slow driving = lower rumble, fast = higher whir.
+const _DIRT_PITCH_MIN := 0.7
+const _DIRT_PITCH_MAX := 1.4
+
 ## Style scorer ("kudos"). Pure logic: every physics frame we hand it a snapshot
 ## of how the car is moving and it integrates a score, reporting drifts, crashes,
 ## near misses, etc. The HUD listens to the signals above; the car never embeds
@@ -90,6 +105,16 @@ var _last_kudos_total: int = -1
 ## How far ahead (m) to probe for obstacles when scoring near misses. Scaled by
 ## speed at query time so fast passes have a longer detection reach.
 const _NEAR_MISS_PROBE_BASE := 6.0
+
+## Silence or restore all car audio (engine loop and dirt driving sound).
+## Called by the main scene when the pause menu opens / closes.
+func set_engine_muted(muted: bool) -> void:
+	_engine_sound.set_muted(muted)
+	if _dirt_sound != null:
+		if muted:
+			_dirt_sound.stop()
+		# Dirt sound restarts naturally via _update_dirt_sound() when un-muted.
+
 
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
@@ -105,6 +130,8 @@ func _ready() -> void:
 	# gear lookup is cheap and the HUD can show a gear immediately.
 	_transmission.build_for_max_speed(max_speed * 3.6)
 	_setup_wheel_particles()
+	_setup_dirt_sound()
+	add_child(_engine_sound)
 
 
 func _cache_wheel_mesh_rotations() -> void:
@@ -157,6 +184,28 @@ func _setup_wheel_particles() -> void:
 		add_child(wp)
 		_wheel_particles.append(wp)
 		_wheel_surfaces.append(SurfaceDetector.Surface.GRASS)
+
+
+func _setup_dirt_sound() -> void:
+	_dirt_sound = AudioStreamPlayer.new()
+	_dirt_sound.name = "DirtDrivingSound"
+	_dirt_sound.bus = &"Master"
+	_dirt_sound.volume_db = _DIRT_VOLUME_MIN_DB
+	# Stop the dirt sound when the scene tree is paused (pause menu).
+	_dirt_sound.process_mode = Node.PROCESS_MODE_PAUSABLE
+	var stream := load(_DIRT_SOUND_PATH)
+	if stream is AudioStreamWAV:
+		# Loop the sample seamlessly so it plays continuously while on grass.
+		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		# loop_begin defaults to 0; loop_end = -1 tells the engine to loop to
+		# the very last sample frame regardless of bit depth or channel count.
+		stream.loop_end = -1
+		_dirt_sound.stream = stream
+	elif stream is AudioStream:
+		_dirt_sound.stream = stream
+	else:
+		push_warning("CarController: could not load dirt sound at %s" % _DIRT_SOUND_PATH)
+	add_child(_dirt_sound)
 
 
 func _set_rear_friction(lowered: bool) -> void:
@@ -258,6 +307,32 @@ func _update_wheel_particles() -> void:
 		if do_detect:
 			_wheel_surfaces[i] = _surface_detector.detect(contact_pos)
 		_wheel_particles[i].update_particles(contact_pos, _wheel_surfaces[i], car_speed)
+	_update_dirt_sound(car_speed)
+
+
+## Play or stop the dirt driving loop based on whether any wheel is on grass
+## above the particle speed threshold. Volume and pitch scale with speed so
+## the sound swells naturally with the particle spray.
+func _update_dirt_sound(car_speed: float) -> void:
+	if _dirt_sound == null or _dirt_sound.stream == null:
+		return
+	var any_on_grass := false
+	for s: SurfaceDetector.Surface in _wheel_surfaces:
+		if s == SurfaceDetector.Surface.GRASS:
+			any_on_grass = true
+			break
+	var should_play: bool = any_on_grass and car_speed > WheelParticles.MIN_SPEED
+	if should_play:
+		var speed_factor := clampf(
+			(car_speed - WheelParticles.MIN_SPEED) / 15.0, 0.0, 1.0
+		)
+		_dirt_sound.volume_db = lerpf(_DIRT_VOLUME_MIN_DB, _DIRT_VOLUME_MAX_DB, speed_factor)
+		_dirt_sound.pitch_scale = lerpf(_DIRT_PITCH_MIN, _DIRT_PITCH_MAX, speed_factor)
+		if not _dirt_sound.playing:
+			_dirt_sound.play()
+	else:
+		if _dirt_sound.playing:
+			_dirt_sound.stop()
 
 
 func _sync_wheel_meshes() -> void:
@@ -294,14 +369,19 @@ func _broadcast_speed() -> void:
 	speed_changed.emit(speed_kmh)
 
 
-## Resolves the current gear from the signed forward speed and emits gear_changed
-## only on a real shift. forward_speed is in m/s (the car's native unit); the
-## transmission works in km/h, so both it and max_speed are converted with *3.6.
+## Resolves the current gear from the signed forward speed, emits gear_changed
+## on a real shift, and feeds the engine sound with the current gear/RPM.
+## forward_speed is in m/s (the car's native unit); the transmission works in
+## km/h, so both it and max_speed are converted with *3.6.
 func _update_gear(forward_speed: float) -> void:
-	var gear := _transmission.gear_for_speed(forward_speed * 3.6, max_speed * 3.6)
+	var speed_kmh := forward_speed * 3.6
+	var max_kmh := max_speed * 3.6
+	var gear := _transmission.gear_for_speed(speed_kmh, max_kmh)
 	if gear != _current_gear:
 		_current_gear = gear
 		gear_changed.emit(gear)
+	var gear_ratio := _transmission.gear_ratio_for_speed(speed_kmh, max_kmh)
+	_engine_sound.update_engine(absf(speed_kmh), gear, gear_ratio)
 
 
 ## Build a telemetry snapshot from the current physics state, feed it to the kudos
