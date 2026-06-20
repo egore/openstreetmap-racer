@@ -118,6 +118,16 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		var parsed := _parse_color(tags["building:color"].strip_edges().to_lower())
 		if parsed != Color.BLACK:
 			wall_color = parsed
+	elif tags.has("colour"):
+		# Bare `colour` tag — used by some building parts in place of the
+		# namespaced `building:colour` key.
+		var parsed := _parse_color(tags["colour"].strip_edges().to_lower())
+		if parsed != Color.BLACK:
+			wall_color = parsed
+	elif tags.has("color"):
+		var parsed := _parse_color(tags["color"].strip_edges().to_lower())
+		if parsed != Color.BLACK:
+			wall_color = parsed
 	elif tags.has("building:material"):
 		var mat_name: String = tags["building:material"].strip_edges().to_lower()
 		if MATERIAL_COLORS.has(mat_name):

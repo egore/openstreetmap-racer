@@ -27,6 +27,7 @@ var _handlers: Array[OSMWayHandler] = [
 	BarrierHandler.new(),
 	ParkingHandler.new(),
 	AreaHandler.new(),
+	SurfaceHandler.new(),
 ]
 
 
@@ -107,3 +108,132 @@ func test_underground_waterway_unmatched() -> void:
 func test_untagged_way_unmatched() -> void:
 	assert_str(_classify(_way({}, false))) \
 		.override_failure_message("untagged way claimed by no handler").is_equal("")
+
+
+# ─── Relation-member way tests ──────────────────────────────────────────────
+# Ways that carry only styling tags (colour, roof:shape, etc.) without their
+# own feature key are NOT claimed by any handler. They get their semantics
+# from a parent relation (e.g. type=building), and the relation builder
+# renders them with the merged tag set. The tile manager skips them in the
+# per-way loop; this test confirms no handler falsely claims them.
+
+func test_bare_styling_tags_unmatched() -> void:
+	# Way 74476348-style tags: colour + roof styling but no building/building:part
+	var w := _way({"colour": "#5c5448", "roof:colour": "#abaaa9", "roof:shape": "gabled"})
+	assert_str(_classify(w)) \
+		.override_failure_message("bare colour + roof styling -> unmatched").is_equal("")
+
+
+func test_bare_colour_unmatched() -> void:
+	var w := _way({"colour": "#5c5448"})
+	assert_str(_classify(w)) \
+		.override_failure_message("bare colour -> unmatched").is_equal("")
+
+
+func test_roof_shape_hipped_without_building_unmatched() -> void:
+	var w := _way({"colour": "#5c5448", "roof:colour": "#abaaa9", "roof:shape": "hipped"})
+	assert_str(_classify(w)) \
+		.override_failure_message("bare hipped roof styling -> unmatched").is_equal("")
+
+
+# ─── Relation-member suppression helpers ─────────────────────────────────────
+
+func test_way_has_own_feature_detects_highway() -> void:
+	var w := _way({"highway": "residential", "colour": "#ff0000"}, false)
+	assert_bool(OSMTileManager._way_has_own_feature(w)) \
+		.override_failure_message("highway way has own feature").is_true()
+
+
+func test_way_has_own_feature_detects_building() -> void:
+	var w := _way({"building": "yes"})
+	assert_bool(OSMTileManager._way_has_own_feature(w)) \
+		.override_failure_message("building way has own feature").is_true()
+
+
+func test_way_has_own_feature_false_for_styling_only() -> void:
+	var w := _way({"colour": "#5c5448", "roof:colour": "#abaaa9", "roof:shape": "gabled"})
+	assert_bool(OSMTileManager._way_has_own_feature(w)) \
+		.override_failure_message("styling-only way has no own feature").is_false()
+
+
+func test_relation_renders_ways_building_type() -> void:
+	var rel := OSMParser.OSMRelation.new()
+	rel.id = 1
+	rel.tags = {"type": "building", "building": "yes"}
+	assert_bool(OSMTileManager._relation_renders_ways(rel)) \
+		.override_failure_message("type=building relation renders ways").is_true()
+
+
+func test_relation_renders_ways_multipolygon_building() -> void:
+	var rel := OSMParser.OSMRelation.new()
+	rel.id = 1
+	rel.tags = {"type": "multipolygon", "building": "yes"}
+	assert_bool(OSMTileManager._relation_renders_ways(rel)) \
+		.override_failure_message("multipolygon building relation renders ways").is_true()
+
+
+func test_relation_renders_ways_multipolygon_landuse() -> void:
+	var rel := OSMParser.OSMRelation.new()
+	rel.id = 1
+	rel.tags = {"type": "multipolygon", "landuse": "forest"}
+	assert_bool(OSMTileManager._relation_renders_ways(rel)) \
+		.override_failure_message("multipolygon landuse relation renders ways").is_true()
+
+
+func test_relation_does_not_render_route() -> void:
+	var rel := OSMParser.OSMRelation.new()
+	rel.id = 1
+	rel.tags = {"type": "route", "route": "bus"}
+	assert_bool(OSMTileManager._relation_renders_ways(rel)) \
+		.override_failure_message("route relation does not render ways").is_false()
+
+
+func test_relation_does_not_render_boundary() -> void:
+	var rel := OSMParser.OSMRelation.new()
+	rel.id = 1
+	rel.tags = {"type": "boundary", "boundary": "administrative"}
+	assert_bool(OSMTileManager._relation_renders_ways(rel)) \
+		.override_failure_message("boundary relation does not render ways").is_false()
+
+
+# ─── Surface area tests ─────────────────────────────────────────────────────
+
+func test_surface_area_is_surface() -> void:
+	# A closed way with area=yes + surface=paving_stones but no feature key.
+	var w := _way({"area": "yes", "surface": "paving_stones"})
+	assert_str(_classify(w)) \
+		.override_failure_message("area=yes + surface=paving_stones -> surface").is_equal("surface")
+
+
+func test_surface_asphalt_is_surface() -> void:
+	var w := _way({"surface": "asphalt"})
+	assert_str(_classify(w)) \
+		.override_failure_message("surface=asphalt closed ring -> surface").is_equal("surface")
+
+
+func test_surface_on_open_way_unmatched() -> void:
+	# An open way with just surface=* is not a surface area.
+	var w := _way({"surface": "concrete"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("surface on open way -> unmatched").is_equal("")
+
+
+func test_surface_with_highway_is_road() -> void:
+	# highway=* ways also carry surface=* but should still match as roads.
+	var w := _way({"highway": "residential", "surface": "asphalt"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("highway + surface -> road").is_equal("road")
+
+
+func test_surface_with_landuse_is_area() -> void:
+	# If a surface way also has landuse, the area handler should win.
+	var w := _way({"landuse": "grass", "surface": "grass"})
+	assert_str(_classify(w)) \
+		.override_failure_message("landuse + surface -> area").is_equal("area")
+
+
+func test_surface_with_amenity_is_area() -> void:
+	# If a surface way also has amenity, the area handler (or parking) should win.
+	var w := _way({"amenity": "school", "surface": "asphalt"})
+	assert_str(_classify(w)) \
+		.override_failure_message("amenity + surface -> area").is_equal("area")
