@@ -361,6 +361,13 @@ func get_terrain_height(world_pos: Vector3) -> float:
 	return _osm_data.height_provider.sample_local_xz(world_pos.x, world_pos.z)
 
 
+## Forwards the debug-labels visibility flag to the asset placer so labels on
+## newly streamed tiles respect the current setting. Already-placed labels are
+## in the "debug_labels" scene-tree group; callers toggle those separately.
+func set_show_debug_labels(enabled: bool) -> void:
+	_asset_placer.show_debug_labels = enabled
+
+
 ## Eagerly load the tiles around a world position without waiting for the camera
 ## to drift into them. Returns true once at least the centering tile is present.
 ## Spawn logic calls this so a ground collider exists before the car is unfrozen,

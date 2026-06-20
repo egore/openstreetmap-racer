@@ -10,6 +10,12 @@ extends RefCounted
 
 var _scene_cache: Dictionary = {}  # path -> PackedScene
 
+## When false (the default) debug labels above assets are created but hidden.
+## The pause-menu toggle flips this and shows/hides every label in the
+## "debug_labels" scene-tree group so the setting takes effect immediately —
+## even for tiles that were already streamed in.
+var show_debug_labels: bool = false
+
 ## The world's street-lamp light controller. Injected by OSMTileManager. When
 ## present, street lamps are built with a real emissive bulb + OmniLight3D and
 ## registered here so they switch on after dark; when null (e.g. unit tests that
@@ -542,7 +548,9 @@ func _add_debug_label_at(parent: Node3D, def: Dictionary, tags: Dictionary, pos:
 	# sinks into the terrain wherever elevation is applied.
 	var label_y: float = pos.y + def["y_offset"] * 2.0 + 1.0
 	label.position = Vector3(pos.x, label_y, pos.z)
+	label.visible = show_debug_labels
 	parent.add_child(label)
+	label.add_to_group("debug_labels")
 
 func _load_scene(path: String) -> PackedScene:
 	if _scene_cache.has(path):
