@@ -14,6 +14,7 @@ extends Node3D
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/QuitButton
 @onready var sky_controller: SkyController = $SkyController
 @onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
+@onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
 @onready var headlights: Headlights = $Car/Headlights
 @onready var street_lamp_lights: StreetLampLights = $StreetLampLights
 
@@ -62,6 +63,12 @@ func _ready() -> void:
 	day_night_toggle.button_pressed = sky_controller.is_day()
 	_update_day_night_label(sky_controller.is_day())
 	day_night_toggle.toggled.connect(_on_day_night_toggled)
+
+	# Debug-labels toggle: off by default. The asset placer creates labels hidden
+	# and adds them to the "debug_labels" group; the toggle flips their visibility
+	# and tells the tile manager so newly streamed tiles match.
+	debug_labels_toggle.button_pressed = false
+	debug_labels_toggle.toggled.connect(_on_debug_labels_toggled)
 
 	# Headlights and street lamps both follow the time of day automatically: on
 	# after dark, off by day. Each owns its own lights; the sky controller decides
@@ -151,6 +158,13 @@ func _update_day_night_label(is_day: bool) -> void:
 func _on_day_night_changed(is_day: bool) -> void:
 	headlights.set_on(not is_day)
 	street_lamp_lights.set_on(not is_day)
+
+## Menu toggle flipped: show or hide every debug label in the world and tell the
+## tile manager so labels on tiles that stream in later match the setting.
+func _on_debug_labels_toggled(enabled: bool) -> void:
+	tile_manager.set_show_debug_labels(enabled)
+	for label: Node in get_tree().get_nodes_in_group("debug_labels"):
+		label.visible = enabled
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
 	speed_label.text = "%d km/h" % int(speed_kmh)
