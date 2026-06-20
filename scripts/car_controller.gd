@@ -10,6 +10,15 @@ signal speed_changed(speed_kmh: float)
 ## The HUD listens to this so it can show the current gear without polling.
 signal gear_changed(gear: int)
 
+## Emitted every physics frame with the running kudos total and the current combo
+## multiplier. The HUD shows the player's style score from this.
+signal kudos_changed(total: int, combo: float)
+
+## Emitted when a discrete style moment or mistake happens (e.g. "DRIFT" +120,
+## "CRASH" -90). The HUD flashes a popup from this. is_penalty marks mistakes so
+## the HUD can colour them red.
+signal kudos_event(label: String, amount: int, is_penalty: bool)
+
 @export var max_speed: float = 55.0
 @export var reverse_max_speed: float = 18.0
 @export var engine_force_value: float = 3200.0
@@ -69,6 +78,18 @@ var _wheel_surfaces: Array[SurfaceDetector.Surface] = []
 ## road AABBs 4× per frame at 60 Hz is wasteful; every 3rd frame is plenty).
 var _surface_tick: int = 0
 const _SURFACE_CHECK_INTERVAL := 3
+
+## Style scorer ("kudos"). Pure logic: every physics frame we hand it a snapshot
+## of how the car is moving and it integrates a score, reporting drifts, crashes,
+## near misses, etc. The HUD listens to the signals above; the car never embeds
+## scoring numbers itself.
+var _kudos := KudosTracker.new()
+## Last kudos total we broadcast, so kudos_changed only fires on a real change
+## (the running total is otherwise unchanged most frames once stationary).
+var _last_kudos_total: int = -1
+## How far ahead (m) to probe for obstacles when scoring near misses. Scaled by
+## speed at query time so fast passes have a longer detection reach.
+const _NEAR_MISS_PROBE_BASE := 6.0
 
 func _ready() -> void:
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
@@ -197,6 +218,7 @@ func _physics_process(_delta: float) -> void:
 	_update_wheel_particles()
 	_broadcast_speed()
 	_update_gear(forward_speed)
+	_update_kudos(_delta, forward_speed)
 
 
 func _apply_anti_roll(_delta: float) -> void:
@@ -280,3 +302,95 @@ func _update_gear(forward_speed: float) -> void:
 	if gear != _current_gear:
 		_current_gear = gear
 		gear_changed.emit(gear)
+
+
+## Build a telemetry snapshot from the current physics state, feed it to the kudos
+## tracker, and broadcast the result. forward_speed is the signed nose-direction
+## speed already computed in _physics_process (m/s), reused here to avoid recomputing.
+func _update_kudos(delta: float, forward_speed: float) -> void:
+	var t := KudosTracker.Telemetry.new()
+	t.forward_speed = forward_speed
+	t.speed = linear_velocity.length()
+	t.slip_angle = _compute_slip_angle()
+	# Yaw rate is rotation about the car's local up axis (rad/s).
+	t.yaw_rate = angular_velocity.dot(global_transform.basis.y)
+	# Uprightness: 1 = level, 0 = on side, -1 = on roof.
+	t.uprightness = global_transform.basis.y.dot(Vector3.UP)
+	t.wheels_on_ground = _count_wheels_on_ground()
+	t.on_road = _majority_on_road()
+	t.nearest_obstacle_dist = _nearest_obstacle_distance(t.speed)
+
+	var events := _kudos.update(t, delta)
+	for ev: KudosTracker.KudosEvent in events:
+		kudos_event.emit(ev.label, ev.amount, ev.is_penalty)
+
+	var total := _kudos.get_kudos()
+	if total != _last_kudos_total:
+		_last_kudos_total = total
+		kudos_changed.emit(total, _kudos.get_combo())
+
+
+## Angle (radians) between where the nose points and where the car is actually
+## travelling, on the horizontal plane. 0 = tracking straight, larger = sliding
+## sideways (a drift). Returns 0 below a crawl so parking jitter doesn't register.
+func _compute_slip_angle() -> float:
+	var vel := linear_velocity
+	vel.y = 0.0
+	if vel.length() < 1.0:
+		return 0.0
+	# The car's forward axis is -basis.z in Godot's convention for a VehicleBody;
+	# we only need the angle magnitude, so either sign of the forward axis works.
+	var forward := global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.0001:
+		return 0.0
+	return absf(vel.normalized().angle_to(forward.normalized()))
+
+
+## How many of the four wheels are currently touching the ground (0..4).
+func _count_wheels_on_ground() -> int:
+	var count := 0
+	for wheel: VehicleWheel3D in [front_left_wheel, front_right_wheel,
+			rear_left_wheel, rear_right_wheel]:
+		if wheel.is_in_contact():
+			count += 1
+	return count
+
+
+## True if at least three of the four wheels are over a road surface. Uses the
+## cached per-wheel surfaces that _update_wheel_particles already maintains, so
+## this is free — no extra AABB scans.
+func _majority_on_road() -> bool:
+	if _wheel_surfaces.is_empty():
+		return true
+	var on_road := 0
+	for s: SurfaceDetector.Surface in _wheel_surfaces:
+		if s == SurfaceDetector.Surface.ROAD:
+			on_road += 1
+	return on_road >= 3
+
+
+## Cast a short ray out to each side of the car (perpendicular to travel) to find
+## the nearest solid obstacle we're brushing past. Returns the closest hit
+## distance, or a large sentinel when nothing is near. Only probes while moving so
+## a parked car next to a wall does not farm near-miss points.
+func _nearest_obstacle_distance(speed: float) -> float:
+	const NO_HIT := 999.0
+	if speed < 5.0:
+		return NO_HIT
+	var space := get_world_3d().direct_space_state
+	# Probe from the car's centre out along its left and right axes. Reach grows
+	# a little with speed so fast passes are easier to register as near misses.
+	var reach: float = _NEAR_MISS_PROBE_BASE + clampf(speed * 0.1, 0.0, 4.0)
+	var origin := global_position + Vector3(0.0, 0.4, 0.0)
+	var right := global_transform.basis.x.normalized()
+	var nearest := NO_HIT
+	for dir: Vector3 in [right, -right]:
+		var query := PhysicsRayQueryParameters3D.create(origin, origin + dir * reach)
+		query.exclude = [get_rid()]
+		# Only solid bodies count; ignore the road/terrain ribbon underfoot.
+		var hit := space.intersect_ray(query)
+		if not hit.is_empty():
+			var d: float = origin.distance_to(hit.position)
+			nearest = minf(nearest, d)
+	return nearest

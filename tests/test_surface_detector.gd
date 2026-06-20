@@ -50,7 +50,7 @@ func test_no_roads_returns_grass() -> void:
 
 
 func test_position_inside_road_returns_road() -> void:
-	var root := auto_free(Node3D.new())
+	var root: Node3D = auto_free(Node3D.new())
 	add_child(root)
 	# Road mesh centred at (10, 0, 10), box of size (6, 0.1, 20).
 	# AABB: x=[7..13], y=[-0.05..0.05], z=[0..20]
@@ -66,7 +66,7 @@ func test_position_inside_road_returns_road() -> void:
 
 
 func test_position_outside_road_returns_grass() -> void:
-	var root := auto_free(Node3D.new())
+	var root: Node3D = auto_free(Node3D.new())
 	add_child(root)
 	_add_road_mesh(root, Vector3(10, 0, 10), Vector3(6.0, 0.1, 20.0))
 
@@ -80,7 +80,7 @@ func test_position_outside_road_returns_grass() -> void:
 
 
 func test_vertical_tolerance_catches_wheel_above_road() -> void:
-	var root := auto_free(Node3D.new())
+	var root: Node3D = auto_free(Node3D.new())
 	add_child(root)
 	# Road at Y=0, tiny vertical extent.
 	_add_road_mesh(root, Vector3(10, 0, 10), Vector3(6.0, 0.04, 20.0))
@@ -95,7 +95,7 @@ func test_vertical_tolerance_catches_wheel_above_road() -> void:
 
 
 func test_position_just_outside_xz_returns_grass() -> void:
-	var root := auto_free(Node3D.new())
+	var root: Node3D = auto_free(Node3D.new())
 	add_child(root)
 	# Road centred at (10, 0, 10), half-width X = 3 → X range [7..13].
 	_add_road_mesh(root, Vector3(10, 0, 10), Vector3(6.0, 0.1, 20.0))
