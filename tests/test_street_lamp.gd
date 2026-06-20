@@ -305,3 +305,124 @@ func test_invalid_count_degrades_to_one() -> void:
 		assert_int(_bulbs(root).size()) \
 			.override_failure_message("light:count=%s degrades to one bulb" % bad).is_equal(1)
 		free_built(built)
+
+
+# ─── height ──────────────────────────────────────────────────────────────────
+
+## Default pole height: the authored 4.0 m from the ASSET_DEFS entry.
+const DEFAULT_HEIGHT := OSMAssetPlacer._LAMP_DEFAULT_HEIGHT
+
+
+## Collects the Pole MeshInstance3D from a lamp root.
+func _pole(root: Node) -> MeshInstance3D:
+	for lamp: Node in root.get_children():
+		for child: Node in lamp.get_children():
+			if child is MeshInstance3D and child.name == "Pole":
+				return child as MeshInstance3D
+	return null
+
+
+## An untagged lamp uses the default 4 m pole height.
+func test_default_height_when_untagged() -> void:
+	var built := _build_lamp({})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	assert_object(pole) \
+		.override_failure_message("a street lamp has a Pole mesh").is_not_null()
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		assert_float(mesh.size.y) \
+			.override_failure_message("untagged lamp pole is the default %.1f m" % DEFAULT_HEIGHT) \
+			.is_equal_approx(DEFAULT_HEIGHT, 0.01)
+	free_built(built)
+
+
+## A height tag in bare metres scales the pole.
+func test_height_tag_bare_metres() -> void:
+	var built := _build_lamp({"height": "8"})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		assert_float(mesh.size.y) \
+			.override_failure_message("height=8 builds an 8 m pole").is_equal_approx(8.0, 0.01)
+	free_built(built)
+
+
+## A height tag with explicit "m" suffix is parsed.
+func test_height_tag_explicit_metres() -> void:
+	var built := _build_lamp({"height": "6 m"})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		assert_float(mesh.size.y) \
+			.override_failure_message("height='6 m' builds a 6 m pole").is_equal_approx(6.0, 0.01)
+	free_built(built)
+
+
+## A height in feet is converted to metres.
+func test_height_tag_feet() -> void:
+	var built := _build_lamp({"height": "20'"})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		var expected := 20.0 * 0.3048
+		assert_float(mesh.size.y) \
+			.override_failure_message("height=20' converts to ~%.1f m" % expected) \
+			.is_equal_approx(expected, 0.05)
+	free_built(built)
+
+
+## The bulb sits atop the pole at the resolved height regardless of scaling.
+func test_bulb_y_tracks_height() -> void:
+	for h: String in ["4", "10"]:
+		var built := _build_lamp({"height": h})
+		var root: Node = built["root"]
+		var bulbs := _bulbs(root)
+		if bulbs.size() > 0:
+			var bulb_y: float = bulbs[0].position.y
+			# The bulb should be at y = pole_height (top of the pole).
+			assert_float(bulb_y) \
+				.override_failure_message("height=%s places bulb at the pole top" % h) \
+				.is_equal_approx(h.to_float(), 0.01)
+		free_built(built)
+
+
+## Height is clamped to 30 m max so a typo can't create a skyscraper lamp.
+func test_height_clamped_to_max() -> void:
+	var built := _build_lamp({"height": "300"})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		assert_float(mesh.size.y) \
+			.override_failure_message("height is clamped to 30 m").is_equal_approx(30.0, 0.01)
+	free_built(built)
+
+
+## Height is clamped to 1 m min so a near-zero tag doesn't bury the lamp.
+func test_height_clamped_to_min() -> void:
+	var built := _build_lamp({"height": "0.1"})
+	var root: Node = built["root"]
+	var pole := _pole(root)
+	if pole != null:
+		var mesh := pole.mesh as BoxMesh
+		assert_float(mesh.size.y) \
+			.override_failure_message("height is clamped to 1 m").is_equal_approx(1.0, 0.01)
+	free_built(built)
+
+
+## Invalid height values degrade to the default pole height.
+func test_invalid_height_degrades_to_default() -> void:
+	for bad: String in ["", "tall", "0", "-5"]:
+		var built := _build_lamp({"height": bad})
+		var root: Node = built["root"]
+		var pole := _pole(root)
+		if pole != null:
+			var mesh := pole.mesh as BoxMesh
+			assert_float(mesh.size.y) \
+				.override_failure_message("height='%s' degrades to default %.1f m" % [bad, DEFAULT_HEIGHT]) \
+				.is_equal_approx(DEFAULT_HEIGHT, 0.01)
+		free_built(built)

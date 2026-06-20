@@ -304,6 +304,7 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 	group.glow_energy = _LAMP_GLOW_ENERGY
 	group.color = _resolve_lamp_color(node.tags)
 	var count := _resolve_lamp_count(node.tags)
+	var height := _resolve_lamp_height(node.tags, def)
 
 	if def.has("scene"):
 		# Scene models carry their own authored head(s), so light:count only
@@ -311,7 +312,7 @@ func _build_street_lamp(def: Dictionary, node: OSMParser.OSMNode, group: StreetL
 		# missing-asset fallbacks honour it.
 		_build_scene_lamp_body(def, root, group, count)
 	else:
-		_build_placeholder_lamp_body(def, root, group, count)
+		_build_placeholder_lamp_body(def, root, group, count, height)
 
 	return root
 
@@ -398,16 +399,20 @@ func _build_scene_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLigh
 ## than one (`light:count`), the bulbs spread evenly around a horizontal ring —
 ## count=4 lands them at 0°/90°/180°/270° — and the ring widens with the count so
 ## neighbours keep their spacing instead of crowding the post.
-func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup, count: int = 1) -> void:
+func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLampLights.LampGroup, count: int = 1, height: float = -1.0) -> void:
 	var size: Vector3 = def["size"]
-	var y_offset: float = def["y_offset"]
+	# Use the resolved height when provided (> 0); otherwise fall back to the
+	# def's authored size.y.  y_offset is always half the pole height so the
+	# mesh sits on the ground with its top at `height`.
+	var pole_height := height if height > 0.0 else size.y
+	var y_offset := pole_height * 0.5
 
 	# Pole: a thin dark post. Reuses the def size/colour (an unlit metal grey)
 	# so the lamp body is visible by day without pretending to glow.
 	var pole := MeshInstance3D.new()
 	pole.name = "Pole"
 	var pole_mesh := BoxMesh.new()
-	pole_mesh.size = size
+	pole_mesh.size = Vector3(size.x, pole_height, size.z)
 	pole.mesh = pole_mesh
 	var pole_mat := StandardMaterial3D.new()
 	pole_mat.albedo_color = def["color"]
@@ -418,7 +423,7 @@ func _build_placeholder_lamp_body(def: Dictionary, root: Node3D, group: StreetLa
 	# Ring radius: zero for a lone bulb (sits on the pole axis), otherwise sized
 	# so adjacent bulbs are ~2×_LAMP_BULB_SPACING apart along the circle, floored
 	# at the bulb's own width so two heads never intersect. chord = 2r·sin(π/n).
-	var head_y := y_offset + size.y * 0.5
+	var head_y := y_offset + pole_height * 0.5
 	var radius := 0.0
 	if count > 1:
 		radius = maxf(_LAMP_BULB_SIZE, _LAMP_BULB_SPACING / sin(PI / count))
@@ -663,6 +668,45 @@ func _load_scene(path: String) -> PackedScene:
 		return scene
 	push_warning("OSMAssetPlacer: Scene not found: %s, using placeholder" % path)
 	return null
+
+## Default pole height (metres) for a street lamp when no `height` tag is
+## present. Matches the authored size.y in the ASSET_DEFS entry: a 4 m pole
+## lifted 2 m off the ground gives a 4 m visible post.
+const _LAMP_DEFAULT_HEIGHT := 4.0
+
+## Resolves the lamp pole height (metres) from the node's `height` tag, falling
+## back to the def's authored size.y when the tag is absent or unparseable.
+## Clamped to a sane 1..30 m range so a typo ("height=300") can't create a
+## skyscraper lamp or a sub-metre stub.
+func _resolve_lamp_height(tags: Dictionary, def: Dictionary) -> float:
+	if tags.has("height"):
+		var h := _parse_height(str(tags["height"]))
+		if h > 0.0:
+			return clampf(h, 1.0, 30.0)
+	return def["size"].y
+
+
+## Parse a height string value to meters. Handles:
+## - bare numbers (assumed meters): "12", "12.5"
+## - explicit meters: "12 m", "12m"
+## - feet: "40'", "40 ft", "40ft"
+## - feet and inches: "40'6\"" (rare but seen in OSM)
+func _parse_height(value: String) -> float:
+	var s := value.strip_edges()
+	if s.is_empty():
+		return 0.0
+	# Check for feet indicator
+	if s.ends_with("'") or s.ends_with("ft"):
+		var num_str := s.replace("ft", "").replace("'", "").strip_edges()
+		var ft := num_str.to_float()
+		return ft * 0.3048
+	# Check for explicit meters suffix
+	if s.ends_with("m"):
+		var num_str := s.left(s.length() - 1).strip_edges()
+		return num_str.to_float()
+	# Bare number (assumed meters)
+	return s.to_float()
+
 
 func _find_asset_def(tags: Dictionary) -> Dictionary:
 	for tag_key: String in ASSET_DEFS:
