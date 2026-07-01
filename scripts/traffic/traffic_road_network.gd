@@ -19,7 +19,15 @@ extends RefCounted
 ## A single drivable road: the ordered world-space centreline points plus the
 ## metadata the traffic manager needs to populate and route it.
 class Road:
-	## OSM way id this road came from (handy for debugging / de-duplication).
+	## Stable unique identity of this drivable segment within the network. Because
+	## a single OSM way is split into one segment per junction-to-junction span
+	## (so a street crossing another street mid-way actually connects to it), the
+	## OSM way id is no longer unique — this is. The manager keys cars, counts, and
+	## O(1) lookups on this. Assigned by build(); -1 for an ad-hoc Road not in a
+	## network (e.g. a test building one directly).
+	var segment_id: int = -1
+	## OSM way id this road came from (handy for debugging / de-duplication). NOT
+	## unique across roads any more — several segments share the parent way id.
 	var way_id: int = 0
 	## Highway class (e.g. "residential", "primary"). Drives width and capacity.
 	var highway_type: String = ""
@@ -94,8 +102,9 @@ const MIN_DRIVABLE_WIDTH := 2.5
 const LANE_WIDTH := 3.5
 
 var _roads: Array[Road] = []
-## way_id -> Road, for O(1) lookup when a car asks to continue onto a specific
-## connected road.
+## segment_id -> Road, for O(1) lookup when a car asks to continue onto a specific
+## connected road. Keyed by the unique per-segment id (a single OSM way splits
+## into several segments at its junctions, so the way id is not unique).
 var _by_way_id: Dictionary = {}
 ## Junction adjacency: OSM node id -> Array[Road] of every road that starts or
 ## ends at that node. This is the road graph — two roads sharing a node key are
@@ -111,12 +120,47 @@ func build(osm_data: OSMParser.OSMData) -> void:
 	_by_node.clear()
 	if osm_data == null:
 		return
+	# Junction nodes must be known *before* splitting: a node is a junction if two
+	# or more drivable ways pass through it (at any position, not just an
+	# endpoint). Without this pre-pass a street that crosses another street in the
+	# *middle* of both ways would never connect — the old code only indexed each
+	# way's first/last node, so most real intersections were invisible and cars
+	# hit a "dead end" at the end of every way and got teleported away. That was
+	# the biggest cause of the wiggling/jumping.
+	var junctions := _find_junction_nodes(osm_data)
+	var next_segment_id := 0
 	for way: OSMParser.OSMWay in osm_data.ways.values():
-		var road := _road_from_way(way, osm_data)
-		if road != null:
+		for road: Road in _roads_from_way(way, osm_data, junctions):
+			road.segment_id = next_segment_id
+			next_segment_id += 1
 			_roads.append(road)
-			_by_way_id[road.way_id] = road
+			_by_way_id[road.segment_id] = road
 	_build_junction_index()
+
+
+## Count how many drivable ways touch each node; any node touched by 2+ ways is a
+## junction where roads must connect, and every way's own two endpoints are also
+## split points. Returns the set of node ids that are junctions (as a Dictionary
+## used as a set for O(1) membership).
+func _find_junction_nodes(osm_data: OSMParser.OSMData) -> Dictionary:
+	var use_count: Dictionary = {}
+	for way: OSMParser.OSMWay in osm_data.ways.values():
+		if not _is_drivable_way(way):
+			continue
+		# A node appearing twice in the same way (e.g. a closed loop) still only
+		# counts once for that way; de-dup per way so a self-touch isn't mistaken
+		# for a two-way junction.
+		var seen: Dictionary = {}
+		for nid: int in way.node_ids:
+			if not osm_data.nodes.has(nid) or seen.has(nid):
+				continue
+			seen[nid] = true
+			use_count[nid] = int(use_count.get(nid, 0)) + 1
+	var junctions: Dictionary = {}
+	for nid: int in use_count:
+		if int(use_count[nid]) >= 2:
+			junctions[nid] = true
+	return junctions
 
 
 ## Index every road by its two endpoint nodes so roads sharing a junction can be
@@ -159,9 +203,11 @@ static func is_drivable(highway_type: String) -> bool:
 	return DRIVABLE_TYPES.has(highway_type)
 
 
-## The road for a given OSM way id, or null if it isn't in the network.
-func find_road(way_id: int) -> Road:
-	return _by_way_id.get(way_id, null)
+## The road for a given segment id, or null if it isn't in the network. The
+## parameter is the unique per-segment id (Road.segment_id), which is what the
+## car carries as its current_way_id(); it is *not* the OSM way id.
+func find_road(segment_id: int) -> Road:
+	return _by_way_id.get(segment_id, null)
 
 
 ## Every road that touches the given junction node (including the caller's own
@@ -229,6 +275,48 @@ func next_road(road: Road, exiting_at_end: bool, rng: RandomNumberGenerator) -> 
 	# they're on, but let a minority turn at real intersections. A weighted pick
 	# on the straightness score does this without hard-coding "go straight".
 	return _weighted_pick(pool, incoming, rng)
+
+
+## Plan a rolling route of up to `steps` continuations starting from `road`
+## (traversed in the given direction), so a car commits to a short *intention*
+## down the road instead of re-deciding at every corner. Returns the ordered list
+## of continuations to take; may be shorter than `steps` if the car reaches a dead
+## end. Empty when there is nowhere to go.
+##
+## This is the "long-term intention" the design asks for: rather than each car
+## independently rolling the dice at each junction (which reads as aimless
+## wiggling), the manager asks for a few segments ahead and drives them in order.
+## Each hop uses the same straightness-weighted next_road, and we avoid
+## immediately bouncing back onto the segment we just left (A→B→A) so a planned
+## route makes forward progress. The manager re-plans when the route runs out or
+## the car is recycled, so this stays cheap and self-correcting.
+func plan_route(road: Road, reversed: bool, steps: int, rng: RandomNumberGenerator) -> Array[Continuation]:
+	var route: Array[Continuation] = []
+	if road == null or steps <= 0:
+		return route
+	var current := road
+	var current_reversed := reversed
+	var prev_segment_id := -1
+	for _i: int in range(steps):
+		# The car exits at the far end of its travel direction: forward traversal
+		# exits at end_node, reversed exits at start_node.
+		var exiting_at_end := not current_reversed
+		var cont := next_road(current, exiting_at_end, rng)
+		if cont == null:
+			break
+		# Avoid an immediate U-turn back onto the segment we just came from; if
+		# that's the only option, re-picking won't help so we stop planning here
+		# and let the manager handle the dead-end recycle.
+		if cont.road.segment_id == prev_segment_id:
+			var retry := next_road(current, exiting_at_end, rng)
+			if retry == null or retry.road.segment_id == prev_segment_id:
+				break
+			cont = retry
+		route.append(cont)
+		prev_segment_id = current.segment_id
+		current = cont.road
+		current_reversed = cont.reversed
+	return route
 
 
 ## Cosine threshold below which a continuation is treated as an illegal U-turn
@@ -315,41 +403,99 @@ static func capacity_for(length: float, width: float) -> int:
 
 # --- Internals -------------------------------------------------------------
 
-## Turn one OSM way into a Road, or null if it isn't a drivable road (or is
-## degenerate). Filters lifecycle-prefixed / area highways so we don't try to
-## drive a car around a pedestrian plaza outline.
-func _road_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Road:
+## Whether an OSM way is a drivable road (tags only — no geometry check). Shared
+## by the junction pre-pass and the segment builder so both agree on which ways
+## count.
+static func _is_drivable_way(way: OSMParser.OSMWay) -> bool:
 	if not way.tags.has("highway"):
-		return null
-	var highway_type: String = way.tags["highway"]
-	if not is_drivable(highway_type):
-		return null
-	# An explicit area=yes highway is a plaza/parking aisle polygon, not a line
-	# to drive down; skip it.
-	if way.tags.get("area", "no") == "yes":
-		return null
+		return false
+	if not is_drivable(String(way.tags["highway"])):
+		return false
+	# An explicit area=yes highway is a plaza/parking aisle polygon, not a line to
+	# drive down; skip it.
+	return way.tags.get("area", "no") != "yes"
 
-	# Keep only node ids that actually resolve to a node, so the retained ids line
-	# up 1:1 with the points way_to_points returns (it silently skips missing
-	# nodes). The first/last of these become the road's junction keys.
+
+## Turn one OSM way into one or more drivable Road *segments*, split at every
+## interior junction node so a way that crosses another way in the middle
+## connects there. Returns an empty array if the way isn't drivable or is
+## degenerate.
+##
+## Why split at junctions rather than keeping the whole way: the road graph
+## connects two roads only where one road's endpoint node equals another's.
+## Real OSM ways routinely run straight through crossings whose node is in the
+## *middle* of the way; unless we cut the way there, that crossing is not a graph
+## node and cars can never turn onto the cross street — they run to the way's far
+## end and get recycled/teleported. Cutting each way into junction-to-junction
+## spans makes every real intersection a first-class graph node.
+func _roads_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData, junctions: Dictionary) -> Array[Road]:
+	var out: Array[Road] = []
+	if not _is_drivable_way(way):
+		return out
+
+	# Keep only node ids that actually resolve to a node, so ids line up 1:1 with
+	# the points (way_to_points silently skips missing nodes).
 	var present_ids: Array[int] = []
 	for nid: int in way.node_ids:
 		if osm_data.nodes.has(nid):
 			present_ids.append(nid)
 	if present_ids.size() < 2:
-		return null
+		return out
 
-	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+	var highway_type: String = String(way.tags["highway"])
+	var width := _width_for_way(way, highway_type)
+	var one_way := _is_one_way(way.tags)
+
+	# Walk the way, cutting a new segment every time we pass an interior junction
+	# node. Each cut node is shared between the segment ending there and the next
+	# segment starting there, so consecutive segments of the same way stay
+	# connected in the graph too.
+	var seg_start := 0
+	for i: int in range(1, present_ids.size()):
+		var is_last := i == present_ids.size() - 1
+		var is_junction: bool = junctions.has(present_ids[i])
+		if is_junction or is_last:
+			var seg := _make_segment(
+				way.id, highway_type, width, one_way,
+				present_ids, seg_start, i, osm_data)
+			if seg != null:
+				out.append(seg)
+			seg_start = i
+	return out
+
+
+## Build a single Road segment spanning present_ids[from..to] (inclusive). Returns
+## null for a degenerate span (< 2 points or zero length).
+func _make_segment(
+		way_id: int, highway_type: String, width: float, one_way: bool,
+		present_ids: Array[int], from: int, to: int,
+		osm_data: OSMParser.OSMData) -> Road:
+	if to - from < 1:
+		return null
+	var span_ids: Array[int] = present_ids.slice(from, to + 1)
+	var points := PolygonUtils.way_to_points(span_ids, osm_data.nodes)
 	if points.size() < 2:
 		return null
-
 	var length := _polyline_length(points)
 	if length <= 0.0:
 		return null
+	var road := Road.new()
+	road.way_id = way_id
+	road.highway_type = highway_type
+	road.points = points
+	road.width = width
+	road.length = length
+	road.one_way = one_way
+	road.capacity = capacity_for(length, width)
+	road.start_node = span_ids[0]
+	road.end_node = span_ids[span_ids.size() - 1]
+	return road
 
+
+## Resolve a way's carriageway width from its highway class, honouring explicit
+## lanes / width tags the same way the visible road builder does.
+static func _width_for_way(way: OSMParser.OSMWay, highway_type: String) -> float:
 	var width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
-	# Honour an explicit lane count the same way the way builder does, so wide
-	# multi-lane roads get realistic width (and thus capacity).
 	if way.tags.has("lanes"):
 		var lanes: int = String(way.tags["lanes"]).to_int()
 		if lanes > 0:
@@ -358,18 +504,7 @@ func _road_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Road:
 		var explicit: float = String(way.tags["width"]).to_float()
 		if explicit > 0.0:
 			width = explicit
-
-	var road := Road.new()
-	road.way_id = way.id
-	road.highway_type = highway_type
-	road.points = points
-	road.width = width
-	road.length = length
-	road.one_way = _is_one_way(way.tags)
-	road.capacity = capacity_for(length, width)
-	road.start_node = present_ids[0]
-	road.end_node = present_ids[present_ids.size() - 1]
-	return road
+	return width
 
 
 ## Total length of an ordered polyline in the XZ meters it's expressed in.

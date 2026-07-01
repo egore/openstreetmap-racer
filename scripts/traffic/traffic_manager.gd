@@ -59,6 +59,17 @@ var _refresh_accum: float = 0.0
 ## Deterministic-ish RNG for speeds and spawn offsets; seeded once so behavior is
 ## reproducible within a run.
 var _rng := RandomNumberGenerator.new()
+## Per-car rolling route plan: car instance id -> Array[Continuation] still to
+## drive. This is the car's *long-term intention* — a few segments planned ahead
+## via TrafficRoadNetwork.plan_route so it commits to a path through junctions
+## instead of re-deciding at every corner (which read as aimless wiggling). The
+## queue is consumed one continuation per junction and refilled when it empties.
+var _routes: Dictionary = {}
+
+## How many segments to plan ahead for each car. Long enough that a car reads as
+## "heading somewhere" through a couple of intersections, short enough that
+## re-planning is cheap and traffic still spreads out over the network.
+const _PLAN_AHEAD := 6
 
 
 func _ready() -> void:
@@ -151,10 +162,12 @@ func _advance_finished_cars() -> void:
 		# to keep flowing across junctions far from the player.
 		if _out_of_range(c.global_position, center, recycle_radius):
 			c.set_route(PackedVector3Array(), 0.0, -1)
+			_routes.erase(c.get_instance_id())
 			continue
 		if not _continue_car(c):
 			# Dead end (or road vanished): drop the route so refresh recycles it.
 			c.set_route(PackedVector3Array(), 0.0, -1)
+			_routes.erase(c.get_instance_id())
 
 
 ## Roll a finished car onto a road connected at its exit junction. Returns false
@@ -167,13 +180,45 @@ func _continue_car(car: TrafficCar) -> bool:
 		return false
 	# The car exits at the far end of its *travel* direction: for a forward
 	# traversal that's the road's end_node, for a reversed one it's the start_node.
-	var exiting_at_end := not car.is_reversed()
-	var cont := _network.next_road(road, exiting_at_end, _rng)
+	# Follow the car's planned route (its long-term intention). Pull the next
+	# planned continuation; if the plan is empty or stale, re-plan from here.
+	var cont := _next_planned_continuation(car, road)
 	if cont == null:
 		return false
 	var path := _reverse_points(cont.road.points) if cont.reversed else cont.road.points
-	car.continue_route(path, car.overshoot(), cont.road.way_id, cont.reversed)
+	car.continue_route(path, car.overshoot(), cont.road.segment_id, cont.reversed)
 	return true
+
+
+## Return the next continuation from the car's planned route, refilling the plan
+## when it runs out. Guards against a stale plan (whose head no longer starts at
+## the junction the car actually reached, e.g. after a recycle) by re-planning.
+## Null means a genuine dead end.
+func _next_planned_continuation(car: TrafficCar, road: TrafficRoadNetwork.Road) -> TrafficRoadNetwork.Continuation:
+	var key := car.get_instance_id()
+	var plan: Array = _routes.get(key, [])
+	# The next hop must start at the junction the car is exiting; if the queued
+	# head doesn't connect to `road`, the plan is stale — drop it and re-plan.
+	if not plan.is_empty():
+		var head: TrafficRoadNetwork.Continuation = plan[0]
+		if not _connects(road, car.is_reversed(), head):
+			plan = []
+	if plan.is_empty():
+		plan = _network.plan_route(road, car.is_reversed(), _PLAN_AHEAD, _rng)
+	if plan.is_empty():
+		_routes.erase(key)
+		return null
+	var cont: TrafficRoadNetwork.Continuation = plan.pop_front()
+	_routes[key] = plan
+	return cont
+
+
+## True when `cont` is a legal next hop out of `road` given the travel direction:
+## the junction `road` exits at must be the entering endpoint of `cont.road`.
+static func _connects(road: TrafficRoadNetwork.Road, reversed: bool, cont: TrafficRoadNetwork.Continuation) -> bool:
+	var junction: int = road.start_node if reversed else road.end_node
+	var enter: int = cont.road.end_node if cont.reversed else cont.road.start_node
+	return junction == enter
 
 
 ## Place a car on a road: orient the polyline for the travel direction, keep the
@@ -191,8 +236,12 @@ func _assign_to_road(car: TrafficCar, road: TrafficRoadNetwork.Road, start_dista
 	# smooth junction crossing.
 	if start_distance <= 0.001:
 		car.cruise_speed = _rng.randf_range(_SPEED_MIN, _SPEED_MAX)
-	car.set_route(path, start_distance, road.way_id, reversed)
+	car.set_route(path, start_distance, road.segment_id, reversed)
 	car.visible = true
+	# Seed a fresh long-term plan from this road/direction so the car has an
+	# intention the moment it's placed (rather than deciding only when it reaches
+	# the first junction).
+	_routes[car.get_instance_id()] = _network.plan_route(road, reversed, _PLAN_AHEAD, _rng)
 
 
 ## Instance a new pooled traffic car and track it.
@@ -225,14 +274,16 @@ func _update_car_lod() -> void:
 		c.set_detailed(dx * dx + dz * dz <= d2)
 
 
-## How many live cars are currently routed on the given road, matched by the OSM
-## way id (a stable identity — the old length-based signature collided between
-## same-length and reversed roads, which made the manager repeatedly "top up"
-## roads it thought were empty and teleport cars around).
+## How many live cars are currently routed on the given road, matched by the
+## unique segment id (a stable identity — the old length-based signature collided
+## between same-length and reversed roads, which made the manager repeatedly "top
+## up" roads it thought were empty and teleport cars around). Note the OSM way id
+## is *not* unique now that ways split into per-junction segments, so we match on
+## segment_id.
 func _count_cars_on_road(road: TrafficRoadNetwork.Road) -> int:
 	var count := 0
 	for c: TrafficCar in _cars:
-		if c.current_way_id() == road.way_id:
+		if c.current_way_id() == road.segment_id:
 			count += 1
 	return count
 
