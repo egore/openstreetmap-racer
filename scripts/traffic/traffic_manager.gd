@@ -47,10 +47,22 @@ extends Node3D
 ## drivable graph is rebuilt around the new position. Keeps the graph following
 ## the player when streaming a country (where the whole map is never resident)
 ## without rebuilding every frame. Zero-cost on the single-file path too.
-const _NETWORK_REBUILD_THRESHOLD := 120.0
+##
+## Tuned against build_radius (~600 m): a larger threshold means successive
+## rebuild regions overlap less, but every overlapping tile is now served from
+## the shared parse cache, so a rebuild only pays for the NEW ring of tiles. At
+## 200 m the recycle radius (340 m) still comfortably covers the gap travelled
+## between rebuilds, so cars never reach an ungraphed edge. Rebuilds also run
+## off-thread, so this only controls how often — not whether it stalls a frame.
+const _NETWORK_REBUILD_THRESHOLD := 200.0
 
 ## Packed scene for a single traffic car (the stub block).
 const TRAFFIC_CAR_SCENE := preload("res://scenes/traffic_car.tscn")
+
+# Preloaded so the tracer resolves regardless of global class_name cache order
+# (headless test discovery can race class_name registration — same reason the
+# tile manager preloads its collaborators).
+const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 
 ## Per-car cruise speed range (m/s) so traffic isn't lock-step. ~18–40 km/h.
 const _SPEED_MIN := 5.0
@@ -59,6 +71,31 @@ const _SPEED_MAX := 11.0
 var _network := TrafficRoadNetwork.new()
 var _car: Node3D = null
 var _tile_manager: OSMTileManager = null
+
+# ─── Async graph rebuild state ────────────────────────────────────────────────
+# Rebuilding the drivable graph (collect_osm_near + TrafficRoadNetwork.build over
+# hundreds of roads) is pure data work but far too heavy for the physics thread —
+# doing it inline froze the frame every ~120 m travelled. Cars keep driving the
+# CURRENT graph until the fresh one is ready, then it's swapped in on the main
+# thread.
+#
+# It runs on a DEDICATED Thread, not WorkerThreadPool. A fresh region's collect
+# cold-parses ~64 tile files serially (~870 ms); on the shared pool that one long
+# task saturated the workers the engine + tile streaming also use, and the frame
+# hitched even though the traffic work itself was off-thread. A private Thread
+# never competes with that pool, so the rebuild is truly invisible.
+#
+#   _rebuild_thread    the running Thread, or null when idle.
+#   _rebuild_center    center the in-flight rebuild is building around.
+#   _pending_network   result the thread produced, awaiting main-thread swap-in.
+#   _rebuild_done      set true by the thread when finished (guarded by mutex).
+# `_use_threads` lets headless tests force synchronous rebuilds for determinism.
+var _rebuild_thread: Thread = null
+var _rebuild_center: Vector3 = Vector3.ZERO
+var _pending_network: TrafficRoadNetwork = null
+var _rebuild_done: bool = false
+var _rebuild_mutex := Mutex.new()
+var _use_threads: bool = true
 ## Live traffic cars (both LODs). Recycled in place rather than freed.
 var _cars: Array[TrafficCar] = []
 var _refresh_accum: float = 0.0
@@ -104,53 +141,163 @@ func _ready() -> void:
 		_tile_manager.data_loaded.connect(_on_data_loaded)
 
 
+## Join an in-flight rebuild thread before this node is torn down. The thread
+## body calls back into this instance; freeing the node while it ran would call
+## into a freed object. wait_to_finish blocks until the build completes (bounded:
+## one region build) and only happens on scene exit. A Thread that was started
+## MUST be joined or Godot errors on shutdown.
+func _exit_tree() -> void:
+	if _rebuild_thread != null:
+		_rebuild_thread.wait_to_finish()
+		_rebuild_thread = null
+	_pending_network = null
+
+
 func _on_data_loaded(_osm_data: OSMParser.OSMData) -> void:
 	# Build the initial graph around wherever the car currently is. If the car
 	# isn't wired yet, defer to the first _physics_process, which will build once
-	# a center is available.
+	# a center is available. The FIRST build is synchronous so traffic appears
+	# promptly; later rebuilds (as the player drives) run off-thread.
 	if _car != null:
-		_rebuild_network_around(_car.global_position)
+		_rebuild_network_sync(_car.global_position)
 		_refresh_population()
 
 
-## (Re)build the drivable road graph from the ways within a radius of `center`,
-## pulled from the streaming tile source. Covers a little beyond recycle_radius
-## so a car flowing to the edge still finds connected roads before the next
-## rebuild. Cars whose road no longer exists in the fresh graph are unrouted so
-## the next refresh recycles them onto a nearby road.
-func _rebuild_network_around(center: Vector3) -> void:
-	# Reach past recycle_radius so continuations near the edge still connect, and
-	# give the plan-ahead room to resolve. Clamped to a sane floor.
-	var build_radius := maxf(recycle_radius + active_radius, 400.0)
-	var osm_data := _tile_manager.collect_osm_near(center, build_radius)
-	_network.build(osm_data)
+## Radius the drivable graph is built over. Reaches past recycle_radius so
+## continuations near the edge still connect and the plan-ahead has room to
+## resolve; clamped to a sane floor.
+##
+## Sized to recycle_radius + one tile: any car within recycle range, plus the
+## tile it might flow into before the next rebuild, is graphed — so no car reaches
+## an ungraphed edge. This is deliberately TIGHTER than the old
+## recycle+active (~600 m) because the collect parses one tile file per grid cell;
+## 540 m over 200 m tiles is ~49 cells vs ~64, roughly a third less cold-parse
+## work per fresh-region rebuild (the felt-stutter source).
+func _build_radius() -> float:
+	var ts := _tile_manager.tile_size if _tile_manager != null else 200.0
+	return maxf(recycle_radius + ts, 400.0)
+
+
+## Assemble the region OSM data + build the road graph. PURE DATA (no scene tree,
+## no physics) so it is safe to run on a WorkerThreadPool thread. Returns the
+## freshly built network; does NOT touch any manager state.
+func _build_network_for(center: Vector3) -> TrafficRoadNetwork:
+	# Split the two halves so we can see whether the cost is re-collecting the
+	# region (tile walk + parse) or building the graph. Both run off-thread, so
+	# record_usec (thread-safe) rather than begin/end spans.
+	var t0 := Time.get_ticks_usec()
+	# yield_every=4: on the rebuild thread, yield the scheduler every 4 cold tile
+	# parses so a fresh region's parse burst doesn't monopolize the shared
+	# allocator against the main thread. 0 in the sync path (tests) keeps it tight.
+	var yield_every := 4 if _use_threads else 0
+	var osm_data := _tile_manager.collect_osm_near(center, _build_radius(), yield_every)
+	var t1 := Time.get_ticks_usec()
+	FrameTracerScript.record_usec("traffic_collect_osm", t1 - t0)
+	var net := TrafficRoadNetwork.new()
+	net.build(osm_data)
+	FrameTracerScript.record_usec("traffic_network_build", Time.get_ticks_usec() - t1)
+	return net
+
+
+## Swap a freshly built graph in as the live network (MAIN THREAD). Cars whose
+## segment vanished from the rebuilt graph (roads just outside the new region)
+## are unrouted; they keep driving their cached polyline this frame and
+## _refresh_population recycles them onto a live road next tick.
+func _adopt_network(net: TrafficRoadNetwork, center: Vector3) -> void:
+	# The swap-in + car rerouting runs on the main thread; trace it in case the
+	# reroute loop over many cars ever becomes a spike itself.
+	var _trace := FrameTracerScript.scope("traffic_adopt_network")
+	_network = net
 	_network_center = center
 	_network_built = true
-	# Drop routes for cars whose segment vanished from the rebuilt graph (roads
-	# just outside the new region). They keep driving their cached polyline this
-	# frame; _refresh_population recycles them onto a live road next tick.
 	for c: TrafficCar in _cars:
 		var wid := c.current_way_id()
 		if wid != -1 and _network.find_road(wid) == null:
 			_routes.erase(c.get_instance_id())
-	print("TrafficManager: %d drivable roads near player, total capacity %d" % [
-		_network.road_count(), _network.total_capacity()])
+
+
+## Build + adopt the graph synchronously on the calling (main) thread. Used for
+## the very first build, where there is no existing graph to drive on while a
+## worker task runs, and in the headless/test path (_use_threads = false).
+func _rebuild_network_sync(center: Vector3) -> void:
+	_adopt_network(_build_network_for(center), center)
+
+
+## Kick off an off-thread rebuild around `center` if one isn't already running.
+## Cars keep driving the current graph until the thread finishes and its result
+## is adopted in _physics_process. Falls back to a synchronous rebuild when
+## threads are disabled (tests).
+func _request_rebuild(center: Vector3) -> void:
+	if _rebuild_thread != null:
+		return  # a rebuild is already in flight; it'll re-center soon enough
+	if not _use_threads:
+		_rebuild_network_sync(center)
+		_refresh_population()
+		return
+	_rebuild_center = center
+	_rebuild_mutex.lock()
+	_rebuild_done = false
+	_rebuild_mutex.unlock()
+	_rebuild_thread = Thread.new()
+	# A dedicated Thread (not WorkerThreadPool) so a fresh region's ~870 ms
+	# cold-parse never competes with the pool the engine + tile streaming use.
+	_rebuild_thread.start(_rebuild_thread_body)
+
+
+## Dedicated-thread body: build the graph for _rebuild_center and publish it.
+## Touches only pure-data collect/build paths (thread-safe: collect_osm_near uses
+## the mutex-guarded parse_tile cache). Sets _rebuild_done under the mutex so the
+## main thread can observe completion without a data race.
+func _rebuild_thread_body() -> void:
+	var t0 := Time.get_ticks_usec()
+	var net := _build_network_for(_rebuild_center)
+	FrameTracerScript.record_usec("traffic_rebuild_task", Time.get_ticks_usec() - t0)
+	_rebuild_mutex.lock()
+	_pending_network = net
+	_rebuild_done = true
+	_rebuild_mutex.unlock()
+
+
+## Main thread: adopt a finished rebuild, if any. Non-blocking — while the thread
+## is still working, _rebuild_done is false and we return immediately. Once done,
+## join the thread (near-instant, it has already finished) and swap in the graph.
+func _collect_finished_rebuild() -> void:
+	if _rebuild_thread == null:
+		return
+	_rebuild_mutex.lock()
+	var done := _rebuild_done
+	_rebuild_mutex.unlock()
+	if not done:
+		return
+	_rebuild_thread.wait_to_finish()  # join; returns at once since it's finished
+	_rebuild_thread = null
+	if _pending_network != null:
+		_adopt_network(_pending_network, _rebuild_center)
+		_pending_network = null
+		_refresh_population()
 
 
 func _physics_process(delta: float) -> void:
 	if _car == null:
 		return
 
+	# Adopt any off-thread rebuild that finished since last frame.
+	_collect_finished_rebuild()
+
 	# Keep the drivable graph centered on the player: rebuild the region graph
 	# whenever the player has moved far enough. On a small single-file map the
 	# build radius covers the whole area so this is effectively the classic
 	# once-built graph; on a streamed country it follows the player. The first
-	# build may be deferred here if the car wasn't wired yet at data-load time.
+	# build is synchronous (no graph to drive on yet); later rebuilds run on a
+	# worker thread so the physics frame never stalls on collect + build.
 	if _tile_manager != null and _tile_manager.is_data_ready():
-		if not _network_built \
-				or _car.global_position.distance_to(_network_center) > _NETWORK_REBUILD_THRESHOLD:
-			_rebuild_network_around(_car.global_position)
+		if not _network_built:
+			# First build: synchronous, so cars exist as soon as data is ready.
+			_rebuild_network_sync(_car.global_position)
 			_refresh_population()
+		elif _car.global_position.distance_to(_network_center) > _NETWORK_REBUILD_THRESHOLD:
+			# Subsequent rebuilds: off-thread, driving the old graph meanwhile.
+			_request_rebuild(_car.global_position)
 
 	if _network.road_count() == 0:
 		return
@@ -175,6 +322,9 @@ func _physics_process(delta: float) -> void:
 func _refresh_population() -> void:
 	if _car == null:
 		return
+	# Trace the population refresh: it may instance new TrafficCar scenes
+	# (add_child) which is main-thread work and a possible stutter source.
+	var _trace := FrameTracerScript.scope("traffic_refresh_population")
 	var center := _car.global_position
 	var plans := TrafficSpawnPolicy.select_active_roads(
 		_network.get_roads(), center, active_radius, max_cars)

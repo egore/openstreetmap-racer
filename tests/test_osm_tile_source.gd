@@ -184,6 +184,58 @@ func test_disk_source_lru_caches_parsed_tile() -> void:
 		.override_failure_message("second load served from LRU cache").is_true()
 
 
+# ─── parse_tile: thread-safe streaming entry point ───────────────────────────
+
+func test_disk_parse_tile_matches_load_tile_contents() -> void:
+	# parse_tile is what OSMTileManager dispatches to a worker thread; it must
+	# surface the same features as the cached main-thread load_tile path.
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	var loaded := src.load_tile(Vector2i(0, 0))
+	var parsed := src.parse_tile(Vector2i(0, 0))
+	assert_int((parsed["ways"] as Array).size()) \
+		.override_failure_message("parse_tile surfaces same way count").is_equal((loaded["ways"] as Array).size())
+	var pdata: OSMParser.OSMData = parsed["osm_data"]
+	assert_bool(pdata.ways.has(10)).override_failure_message("parse_tile way present").is_true()
+	assert_bool(pdata.nodes.has(1)).override_failure_message("parse_tile node present").is_true()
+
+
+func test_disk_parse_tile_caches_and_shares_with_load_tile() -> void:
+	# parse_tile is thread-safe AND caches: a second parse hits the shared cache
+	# and returns the SAME object, and load_tile (main-thread streaming) reuses
+	# that same cached bucket rather than re-parsing the file. This shared cache
+	# is what stops the traffic rebuild from re-parsing ~49 tiles every rebuild.
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	var p1 := src.parse_tile(Vector2i(0, 0))
+	var p2 := src.parse_tile(Vector2i(0, 0))
+	assert_bool(p1["osm_data"] == p2["osm_data"]) \
+		.override_failure_message("second parse served from the shared cache").is_true()
+	assert_bool(src._cache.has(Vector2i(0, 0))) \
+		.override_failure_message("parse_tile populates the shared cache").is_true()
+	var loaded := src.load_tile(Vector2i(0, 0))
+	assert_bool(loaded["osm_data"] == p1["osm_data"]) \
+		.override_failure_message("load_tile reuses the tile parse_tile already cached").is_true()
+
+
+func test_disk_parse_tile_unknown_tile_empty() -> void:
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	assert_bool(src.parse_tile(Vector2i(9, 9)).is_empty()) \
+		.override_failure_message("unbaked tile parses to empty").is_true()
+
+
+func test_in_memory_parse_tile_defaults_to_load_tile() -> void:
+	# InMemoryTileSource's load_tile is already side-effect-free, so parse_tile
+	# (the base forward) must return the same bucket shape.
+	_write(_tmp_osm, _SPAN_DOC)
+	var src := OSMTileSource.InMemoryTileSource.new(_tmp_osm, 200.0)
+	var tk := src._pos_to_tile((src._osm_data.nodes[1] as OSMParser.OSMNode).local_pos)
+	var parsed := src.parse_tile(tk)
+	assert_int((parsed["ways"] as Array).size()) \
+		.override_failure_message("in-memory parse_tile surfaces the way").is_equal(1)
+
+
 # ─── Projection parity ───────────────────────────────────────────────────────
 
 func test_tile_key_matches_manager_formula() -> void:
@@ -273,3 +325,73 @@ func test_collect_osm_near_empty_before_ready() -> void:
 	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
 	var data := src.collect_osm_near(Vector3.ZERO, 1000.0)
 	assert_int(data.ways.size()).override_failure_message("not-ready source yields no ways").is_equal(0)
+
+
+## collect_* run on a WorkerThreadPool thread (traffic graph rebuild) and go
+## through the thread-safe, cached parse_tile. They MUST populate the shared cache
+## so repeated rebuilds — and the main-thread streamer visiting the same tiles —
+## reuse the parse instead of re-reading ~49 files every rebuild. This is the fix
+## for the multi-second traffic_collect_osm spikes.
+func test_collect_osm_near_disk_populates_shared_cache() -> void:
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	src.collect_osm_near(Vector3.ZERO, 5000.0)
+	assert_bool(src._cache.has(Vector2i(0, 0))) \
+		.override_failure_message("collect_osm_near caches the tiles it parses").is_true()
+
+
+func test_collect_ways_near_disk_populates_shared_cache() -> void:
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	src.collect_ways_near(Vector3.ZERO, 5000.0)
+	assert_bool(src._cache.has(Vector2i(0, 0))) \
+		.override_failure_message("collect_ways_near caches the tiles it parses").is_true()
+
+
+func test_collect_osm_near_reuses_streamed_tile_parse() -> void:
+	# A tile streamed by load_tile must be reused by a later collect (and vice
+	# versa): they share one cache, so the second access returns the same object.
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	var streamed := src.load_tile(Vector2i(0, 0))
+	var collected := src.collect_osm_near(Vector3.ZERO, 5000.0)
+	assert_bool(collected.ways.has(10)) \
+		.override_failure_message("collect finds the baked way").is_true()
+	# The way object collected is the very one from the cached streamed bucket.
+	var streamed_way: OSMParser.OSMWay = (streamed["ways"] as Array)[0]
+	assert_bool(collected.ways[10] == streamed_way) \
+		.override_failure_message("collect reused the cached streamed way object").is_true()
+
+
+# ─── Cold-parse yielding (rebuild-thread stutter mitigation) ─────────────────
+
+func test_is_cached_reflects_lru_state() -> void:
+	# _is_cached must report false before a tile is parsed and true after, so
+	# collect_osm_near yields only on genuine cold parses.
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	assert_bool(src._is_cached(Vector2i(0, 0))) \
+		.override_failure_message("tile not cached before first parse").is_false()
+	src.parse_tile(Vector2i(0, 0))
+	assert_bool(src._is_cached(Vector2i(0, 0))) \
+		.override_failure_message("tile cached after parse").is_true()
+
+
+func test_collect_osm_near_with_yield_returns_same_result() -> void:
+	# Passing yield_every must not change the collected data — it only affects
+	# scheduler yielding between cold parses.
+	_bake_fixture()
+	var src := OSMTileSource.DiskTileSource.new(_tmp_dir)
+	var data := src.collect_osm_near(Vector3.ZERO, 5000.0, 2)
+	assert_bool(data.ways.has(10)) \
+		.override_failure_message("yielding collect still returns the baked way").is_true()
+
+
+func test_in_memory_is_cached_always_true() -> void:
+	# In-memory tiles never cold-parse (references into the resident OSMData), so
+	# they report cached — collect never needlessly yields on the small-map path.
+	_write(_tmp_osm, _SPAN_DOC)
+	var src := OSMTileSource.InMemoryTileSource.new(_tmp_osm, 200.0)
+	var tk := src._pos_to_tile((src._osm_data.nodes[1] as OSMParser.OSMNode).local_pos)
+	assert_bool(src._is_cached(tk)) \
+		.override_failure_message("in-memory tiles are always 'cached'").is_true()

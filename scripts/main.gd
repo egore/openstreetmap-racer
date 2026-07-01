@@ -4,6 +4,8 @@ extends Node3D
 ## Acts as the composition root: it wires the car and tile manager to the HUD
 ## via signals instead of having those nodes reach across the tree themselves.
 
+const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
+
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
 @onready var speed_label: Label = $HUD/SpeedLabel
@@ -93,6 +95,21 @@ func _process(_delta: float) -> void:
 	# Escape toggles the pause state.
 	if Input.is_action_just_pressed("ui_cancel"):
 		_set_paused(not get_tree().paused)
+
+## F3 toggles the frame tracer (also enable non-interactively with OSMRACER_TRACE=1);
+## F4 dumps the per-label timing summary. Used to hunt streaming/loading stutters:
+## with tracing on, any main-thread span over the threshold prints "[trace] <label>
+## took N ms", naming the culprit. See scripts/frame_tracer.gd.
+func _unhandled_key_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key == null or not key.pressed or key.echo:
+		return
+	if key.keycode == KEY_F3:
+		var on := not FrameTracerScript.is_enabled()
+		FrameTracerScript.set_enabled(on)
+		print("[trace] frame tracing %s" % ("ON" if on else "OFF"))
+	elif key.keycode == KEY_F4:
+		FrameTracerScript.dump_summary()
 
 ## Pauses or resumes the game. Godot's scene-tree pause cleanly halts car
 ## physics, tile streaming and HUD updates without the hacky "near-zero

@@ -152,9 +152,6 @@ static func parse_file(path: String, apply_elevation: bool = true) -> OSMData:
 				# in the local-meter projection.
 				node.local_pos.y = data.height_provider.sample_latlon(node.lat, node.lon)
 
-	print("OSMParser: Loaded %d nodes, %d ways, %d relations" % [
-		data.nodes.size(), data.ways.size(), data.relations.size()
-	])
 	return data
 
 ## Convert lat/lon to local meter-based coordinates (Y-up, X=east, Z=south)

@@ -61,10 +61,33 @@ func get_global_osm_data() -> OSMParser.OSMData:
 func has_tile(_tile_key: Vector2i) -> bool:
 	return false
 
+
+## True when parse_tile would serve this tile from cache (no cold file parse).
+## Used by collect_osm_near to decide when to yield between cold parses. The base
+## reports false (sources without a file cache never cold-parse — InMemory returns
+## references); DiskTileSource overrides to consult its LRU.
+func _is_cached(_tile_key: Vector2i) -> bool:
+	return false
+
 ## Return the self-contained tile bucket (see contract above) for a tile key, or
 ## null when the tile is empty / unknown.
+##
+## May touch shared mutable state (the disk source's LRU cache), so this is the
+## MAIN-THREAD entry point. Off-thread streaming must use parse_tile() instead.
 func load_tile(_tile_key: Vector2i) -> Dictionary:
 	return {}
+
+
+## Thread-safe variant of load_tile: produce a tile bucket WITHOUT touching any
+## shared mutable state (no LRU cache). Safe to call from a WorkerThreadPool task
+## because it only reads immutable manifest/index data and returns freshly parsed
+## objects. Returns {} for empty / unknown tiles.
+##
+## The default just forwards to load_tile: sources whose load_tile is already
+## side-effect-free (InMemoryTileSource) need no separate implementation. Sources
+## that cache (DiskTileSource) override this to bypass the cache.
+func parse_tile(tile_key: Vector2i) -> Dictionary:
+	return load_tile(tile_key)
 
 
 ## Tile key for a world XZ position. Shared with OSMTileManager._pos_to_tile so
@@ -84,8 +107,13 @@ func pos_to_tile(pos: Vector3) -> Vector2i:
 ## self-contained OSMData, and de-duplicates ways that span multiple tiles.
 ##
 ## Works uniformly for InMemoryTileSource and DiskTileSource because it only
-## relies on the has_tile/load_tile contract. Returns [] before the source is
+## relies on the has_tile/parse_tile contract. Returns [] before the source is
 ## ready.
+##
+## THREAD-SAFE: uses parse_tile, whose cache is mutex-guarded, so callers may run
+## this off the main thread (e.g. the traffic graph rebuild) without racing the
+## main-thread streamer. Tiles it parses are cached and shared with streaming, so
+## overlapping regions across successive rebuilds don't re-read the same files.
 func collect_ways_near(center: Vector3, radius: float) -> Array:
 	var out: Array = []
 	if not is_ready():
@@ -109,7 +137,7 @@ func collect_ways_near(center: Vector3, radius: float) -> Array:
 			var tkey := Vector2i(tx, tz)
 			if not has_tile(tkey):
 				continue
-			var bucket := load_tile(tkey)
+			var bucket := parse_tile(tkey)
 			if bucket.is_empty():
 				continue
 			var osm_data: OSMParser.OSMData = bucket["osm_data"]
@@ -136,7 +164,19 @@ func collect_ways_near(center: Vector3, radius: float) -> Array:
 ## (not just resolved polylines). Backed by the same tile-walking as
 ## collect_ways_near, so the traffic graph around the player stays consistent
 ## with the world and streams a country tile-by-tile instead of loading it whole.
-func collect_osm_near(center: Vector3, radius: float) -> OSMParser.OSMData:
+##
+## THREAD-SAFE (uses the mutex-guarded parse_tile cache): the traffic manager runs
+## this on a WorkerThreadPool task to keep the graph rebuild off the physics
+## thread, and the tiles it parses are cached and shared with streaming.
+## `yield_every` > 0 makes the collect yield the OS scheduler (delay 0 ms) after
+## every that-many COLD tile parses. When this runs on the traffic rebuild thread,
+## a fresh region cold-parses dozens of tiles back-to-back — a solid burst of
+## allocation that contends with the main thread's per-frame work (GDScript shares
+## an allocator/refcounting), which is felt as a stutter even though the work is
+## off-thread. Yielding periodically breaks the burst so the main thread gets
+## scheduler + allocator breathing room. 0 disables it (cached/warm collects and
+## the main-thread minimap path stay tight).
+func collect_osm_near(center: Vector3, radius: float, yield_every: int = 0) -> OSMParser.OSMData:
 	var data := OSMParser.OSMData.new()
 	data.center_lat = get_center_lat()
 	data.center_lon = get_center_lon()
@@ -153,14 +193,22 @@ func collect_osm_near(center: Vector3, radius: float) -> OSMParser.OSMData:
 		floori((center.z + radius) / ts) + 1)
 
 	var r_sq := radius * radius
+	var cold_parses := 0
 	for tx: int in range(min_tile.x, max_tile.x + 1):
 		for tz: int in range(min_tile.y, max_tile.y + 1):
 			var tkey := Vector2i(tx, tz)
 			if not has_tile(tkey):
 				continue
-			var bucket := load_tile(tkey)
+			# Yield between cold parses so a fresh region's parse burst doesn't
+			# monopolize the shared allocator against the main thread.
+			var was_cached := _is_cached(tkey)
+			var bucket := parse_tile(tkey)
 			if bucket.is_empty():
 				continue
+			if yield_every > 0 and not was_cached:
+				cold_parses += 1
+				if cold_parses % yield_every == 0:
+					OS.delay_msec(0)  # yield scheduler; near-zero wall time
 			var src: OSMParser.OSMData = bucket["osm_data"]
 			for way: OSMParser.OSMWay in bucket["ways"]:
 				if data.ways.has(way.id):
@@ -236,6 +284,11 @@ class InMemoryTileSource extends OSMTileSource:
 	func has_tile(tile_key: Vector2i) -> bool:
 		return _spatial_index.has(tile_key)
 
+	## In-memory tiles never cold-parse (load_tile returns references into the one
+	## resident OSMData), so they're always "cached" — collect never needs to yield.
+	func _is_cached(_tile_key: Vector2i) -> bool:
+		return true
+
 	## In-memory tiles share the one global OSMData for reference resolution —
 	## that's exactly the pre-refactor behavior, so builders see identical data.
 	func load_tile(tile_key: Vector2i) -> Dictionary:
@@ -306,9 +359,12 @@ class DiskTileSource extends OSMTileSource:
 	## Manifest layout version this source understands (see bake_osm_tiles.py).
 	const SUPPORTED_VERSION := 1
 	## How many parsed tiles to keep cached before evicting the oldest. Streaming
-	## re-visits tiles as the camera drifts, so a small LRU avoids re-parsing the
-	## same file on every wobble without holding the whole country in RAM.
-	const CACHE_CAPACITY := 32
+	## re-visits tiles as the camera drifts, and the traffic graph rebuild collects
+	## a whole region of tiles at once, so a generous LRU avoids re-parsing the same
+	## file repeatedly without holding the whole country in RAM. The traffic
+	## build_radius (~600 m) over a 200 m grid touches ~49 tiles, so the cache must
+	## comfortably hold a rebuild's working set AND the streaming ring around it.
+	const CACHE_CAPACITY := 128
 
 	var _dir: String = ""
 	var _tile_size: float = 200.0
@@ -318,9 +374,15 @@ class DiskTileSource extends OSMTileSource:
 	var _height_provider: HeightProvider = null
 	var _ready: bool = false
 
-	# Simple LRU: _cache maps tile_key -> bucket; _lru is oldest..newest keys.
+	# Thread-safe LRU parse cache. Both the main-thread streaming (load_tile) and
+	# the worker-thread region collect (parse_tile, via collect_osm_near) read and
+	# write it, so every access is guarded by _cache_mutex. Sharing one cache is
+	# the whole point: a tile parsed for the traffic rebuild is then free for the
+	# streamer, and vice versa, instead of each path re-parsing the same file.
+	# _cache maps tile_key -> bucket; _lru is oldest..newest keys.
 	var _cache: Dictionary = {}
 	var _lru: Array[Vector2i] = []
+	var _cache_mutex := Mutex.new()
 
 	func _init(tiles_dir: String) -> void:
 		_dir = tiles_dir.trim_suffix("/")
@@ -361,13 +423,58 @@ class DiskTileSource extends OSMTileSource:
 	func has_tile(tile_key: Vector2i) -> bool:
 		return _tile_files.has(tile_key)
 
+	## Thread-safe LRU membership check (mutex-guarded) so collect_osm_near can
+	## tell a cheap cache hit from a cold file parse and only yield on the latter.
+	func _is_cached(tile_key: Vector2i) -> bool:
+		_cache_mutex.lock()
+		var present := _cache.has(tile_key)
+		_cache_mutex.unlock()
+		return present
+
+	## Main-thread streaming entry point. Now identical to parse_tile: both go
+	## through the shared, mutex-guarded cache, so a tile parsed by either path is
+	## reused by the other. Kept as a distinct name for call-site clarity.
 	func load_tile(tile_key: Vector2i) -> Dictionary:
+		return parse_tile(tile_key)
+
+	## Thread-safe tile fetch: returns a cached bucket if present, else parses the
+	## file once and caches it. Safe to call from a WorkerThreadPool task (the
+	## traffic rebuild's collect_osm_near) concurrently with main-thread streaming
+	## because the cache is guarded by _cache_mutex and the (slow) file parse
+	## happens OUTSIDE the lock so it doesn't serialize the two threads.
+	func parse_tile(tile_key: Vector2i) -> Dictionary:
 		if not _tile_files.has(tile_key):
 			return {}
-		if _cache.has(tile_key):
-			_touch(tile_key)
-			return _cache[tile_key]
 
+		# Fast path: hit the shared cache under the lock.
+		_cache_mutex.lock()
+		if _cache.has(tile_key):
+			_touch_locked(tile_key)
+			var hit: Dictionary = _cache[tile_key]
+			_cache_mutex.unlock()
+			return hit
+		_cache_mutex.unlock()
+
+		# Miss: parse the file WITHOUT holding the lock (disk I/O + XML parse is
+		# the slow part; serializing it across threads would defeat the point).
+		var bucket := _parse_tile_uncached(tile_key)
+
+		# Publish to the cache. A concurrent caller may have parsed the same tile
+		# meanwhile; if so, prefer the already-cached bucket so both callers share
+		# one object (harmless either way — buckets are immutable once built).
+		_cache_mutex.lock()
+		if _cache.has(tile_key):
+			_touch_locked(tile_key)
+			bucket = _cache[tile_key]
+		elif not bucket.is_empty():
+			_insert_locked(tile_key, bucket)
+		_cache_mutex.unlock()
+		return bucket
+
+	## Parse one tile file into a bucket, with no caching. Pure/read-only against
+	## shared state (immutable manifest + read-only height sampling), so it's safe
+	## to run on any thread.
+	func _parse_tile_uncached(tile_key: Vector2i) -> Dictionary:
 		var path := "%s/%s" % [_dir, _tile_files[tile_key]]
 		# Per-tile files are pre-projected data; elevation comes from the shared
 		# provider (apply_elevation=false avoids each tile re-loading a DEM).
@@ -378,9 +485,7 @@ class DiskTileSource extends OSMTileSource:
 			for node: OSMParser.OSMNode in data.nodes.values():
 				node.local_pos.y = _height_provider.sample_latlon(node.lat, node.lon)
 
-		var bucket := _bucket_from_data(data, tile_key)
-		_insert(tile_key, bucket)
-		return bucket
+		return _bucket_from_data(data, tile_key)
 
 	## Split a parsed tile OSMData into the node/way/relation arrays the manager
 	## iterates, applying the same "which tile does this belong to" rule the
@@ -452,8 +557,8 @@ class DiskTileSource extends OSMTileSource:
 			_tile_files[tkey] = String(entry["file"])
 		return true
 
-	# ─── LRU cache ───────────────────────────────────────────────────────────
-	func _insert(tkey: Vector2i, bucket: Dictionary) -> void:
+	# ─── LRU cache (callers MUST hold _cache_mutex) ──────────────────────────
+	func _insert_locked(tkey: Vector2i, bucket: Dictionary) -> void:
 		_cache[tkey] = bucket
 		_lru.append(tkey)
 		while _lru.size() > CACHE_CAPACITY:
@@ -462,6 +567,6 @@ class DiskTileSource extends OSMTileSource:
 			if not _lru.has(evict):
 				_cache.erase(evict)
 
-	func _touch(tkey: Vector2i) -> void:
+	func _touch_locked(tkey: Vector2i) -> void:
 		_lru.erase(tkey)
 		_lru.append(tkey)

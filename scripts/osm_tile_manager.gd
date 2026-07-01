@@ -7,6 +7,9 @@ extends Node3D
 # global class cache is populated (headless test discovery can race the
 # class_name registration otherwise).
 const OSMTileSourceScript := preload("res://scripts/osm_tile_source.gd")
+# Preloaded (not referenced by bare class_name) so it resolves during headless
+# test discovery regardless of class_name cache order.
+const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 
 ## Emitted once the OSM file has been parsed and the spatial index is ready.
 signal data_loaded(osm_data: OSMParser.OSMData)
@@ -23,6 +26,13 @@ signal tile_unloaded(tile_key: Vector2i)
 @export var tile_size: float = 200.0  # meters per tile edge (disk cache overrides)
 @export var load_radius: int = 2      # tiles in each direction to keep loaded
 @export var unload_radius: int = 3    # tiles beyond this are freed
+## Max wall-clock time (milliseconds) spent instancing streamed tiles into the
+## scene tree per frame. Parsing happens off-thread; instancing must stay on the
+## main thread (Godot's scene tree is not thread-safe), so it's spread across
+## frames under this budget to avoid a hitch when several tiles arrive at once.
+## At least one tile is always drained per frame so a large budget-buster can't
+## stall the queue forever.
+@export var instance_budget_ms: float = 4.0
 ## Number of grid cells per tile edge when building displaced terrain from a
 ## DEM. Higher = smoother slopes but more vertices. Ignored when terrain is flat.
 ## At 32 (cell ≈ tile_size/32 ≈ 6 m for a 200 m tile) the triangulated surface
@@ -41,6 +51,56 @@ var _tile_source: OSMTileSourceScript = null
 var _height_provider: HeightProvider = null   # map-wide; from the tile source
 var _loaded_tiles: Dictionary = {}    # Vector2i tile_key -> Node3D (tile root)
 var _current_tile: Vector2i = Vector2i(999999, 999999)
+
+# ─── Async streaming state ────────────────────────────────────────────────────
+# A tile crossing can request several new tiles at once. Parsing each (disk read
+# + XML parse) on the main thread is what froze the frame; we now push parsing to
+# WorkerThreadPool tasks and instance the results on the main thread under a
+# per-frame time budget.
+#
+#   _pending_tiles   tiles a task has been dispatched for (dedupe: don't dispatch
+#                    or re-dispatch the same tile while its parse is in flight).
+#   _parse_tasks     tile_key -> WorkerThreadPool task id (to poll completion).
+#   _ready_buckets   tile_key -> parsed bucket, awaiting main-thread instancing.
+#   _instance_queue  FIFO of tile_keys with a ready bucket to drain per frame.
+# `_use_threads` lets headless tests force synchronous behaviour for determinism.
+var _pending_tiles: Dictionary = {}
+var _parse_tasks: Dictionary = {}
+var _ready_buckets: Dictionary = {}
+var _instance_queue: Array[Vector2i] = []
+var _use_threads: bool = true
+
+# ─── Incremental feature instancing ───────────────────────────────────────────
+# Even off-thread parsing left a hard freeze: building ALL of a tile's features
+# (roads, buildings, relations) in one _instance_tile call blocks the main thread
+# 100-900 ms because each feature builds a mesh + material + collider, and that
+# work can't move off-thread (Godot's scene tree isn't thread-safe). So a tile's
+# ground/collider is still built immediately (the car needs a surface), but its
+# FEATURES are enqueued as many small work items and drained across frames under
+# the same instance_budget_ms as tile instancing. A dense tile then costs a few
+# ms per frame over several frames instead of one long stall.
+#
+#   _feature_queue   FIFO of FeatureWork items awaiting a main-thread build.
+# A per-feature build over this threshold is logged as a pathological outlier
+# (e.g. a giant multipolygon) so it can be found and guarded.
+var _feature_queue: Array[FeatureWork] = []
+## A single feature build takes longer than this (ms) → warn once. One monster
+## feature can still overshoot a frame; this surfaces it rather than hiding it.
+const _FEATURE_SLOW_MS := 30.0
+
+## One deferred feature-build unit for a tile. `kind` selects the builder; the
+## payload fields carry exactly what that builder needs. Kept as a tiny data
+## holder so the drain loop stays a simple dispatch.
+class FeatureWork extends RefCounted:
+	enum Kind { WAY, BUILDING_PART, ASSETS, RELATION }
+	var kind: int
+	var tile_key: Vector2i
+	var tile_root: Node3D                 # parent to add the built node under
+	var osm_data: OSMParser.OSMData
+	var way: OSMParser.OSMWay = null      # WAY / BUILDING_PART
+	var relation: OSMParser.OSMRelation = null  # RELATION
+	var nodes: Array = []                 # ASSETS
+	var ctx: OSMTileContext = null        # WAY (handler dispatch context)
 
 var _way_builder: OSMWayBuilder = null
 var _infrastructure_builder: OSMInfrastructureBuilder = null
@@ -131,6 +191,12 @@ func _process(_delta: float) -> void:
 	if _tile_source == null:
 		return
 
+	# Drain finished parse tasks and instance a budgeted slice of them every
+	# frame, regardless of whether the camera moved — tiles requested on an
+	# earlier frame keep flowing into the scene without a hitch.
+	_collect_finished_parses()
+	_drain_instance_queue()
+
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
 		return
@@ -142,13 +208,15 @@ func _process(_delta: float) -> void:
 	_current_tile = cam_tile
 	_update_tiles()
 
+## Request/free tiles for the current camera tile. Loading is asynchronous: each
+## needed tile is handed to a WorkerThreadPool parse task (see _request_tile);
+## instancing happens later in _process under the frame budget.
 func _update_tiles() -> void:
-	# Load tiles within radius
+	# Request tiles within radius (async parse; instanced later).
 	for dx: int in range(-load_radius, load_radius + 1):
 		for dz: int in range(-load_radius, load_radius + 1):
 			var tkey := Vector2i(_current_tile.x + dx, _current_tile.y + dz)
-			if not _loaded_tiles.has(tkey):
-				_load_tile(tkey)
+			_request_tile(tkey)
 
 	# Unload tiles outside unload_radius
 	var to_unload: Array[Vector2i] = []
@@ -160,14 +228,119 @@ func _update_tiles() -> void:
 	for tkey: Vector2i in to_unload:
 		_unload_tile(tkey)
 
-func _load_tile(tkey: Vector2i) -> void:
-	var bucket: Dictionary = _tile_source.load_tile(tkey)
+## Kick off (or skip) loading a single tile. A tile is skipped when it is already
+## loaded, already parsing in a task, or already parsed and waiting to instance.
+## Otherwise its parse is dispatched to a worker thread (or run inline when
+## threads are disabled), so this returns immediately without touching the scene.
+func _request_tile(tkey: Vector2i) -> void:
+	if _loaded_tiles.has(tkey) or _pending_tiles.has(tkey) or _ready_buckets.has(tkey):
+		return
+	_pending_tiles[tkey] = true
+	if _use_threads:
+		var task_id := WorkerThreadPool.add_task(_parse_tile_task.bind(tkey))
+		_parse_tasks[tkey] = task_id
+	else:
+		# Synchronous fallback (headless tests): parse now, instance next drain.
+		_ready_buckets[tkey] = _tile_source.parse_tile(tkey)
+		_instance_queue.append(tkey)
 
+## WorkerThreadPool task body: parse ONE tile off the main thread. Touches only
+## the thread-safe parse_tile() path (no scene tree, no shared mutable cache),
+## then stashes the result for the main thread to pick up in _collect_finished_parses.
+func _parse_tile_task(tkey: Vector2i) -> void:
+	# Time the off-thread parse and record it (record_usec is thread-safe). If
+	# parses are cheap here but frames still hitch, the cost is in instancing, not
+	# parsing — which tells us where to look next.
+	var t0 := Time.get_ticks_usec()
+	var bucket := _tile_source.parse_tile(tkey)
+	FrameTracerScript.record_usec("parse_tile_task", Time.get_ticks_usec() - t0)
+	# Dictionary assignment keyed by a unique tile is safe here: each task writes
+	# its own distinct key exactly once, and the main thread only reads a key
+	# after WorkerThreadPool.is_task_completed() confirms this task finished.
+	_ready_buckets[tkey] = bucket
+
+## Main-thread: harvest every parse task that has completed since last frame,
+## moving its tile onto the instance queue. Non-blocking — unfinished tasks are
+## left for a later frame.
+func _collect_finished_parses() -> void:
+	if _parse_tasks.is_empty():
+		return
+	var done: Array[Vector2i] = []
+	for tkey: Vector2i in _parse_tasks:
+		if WorkerThreadPool.is_task_completed(_parse_tasks[tkey]):
+			done.append(tkey)
+	for tkey: Vector2i in done:
+		# Reclaim the task slot (also the documented way to observe completion).
+		WorkerThreadPool.wait_for_task_completion(_parse_tasks[tkey])
+		_parse_tasks.erase(tkey)
+		_instance_queue.append(tkey)
+
+## Main-thread: instance queued tiles into the scene tree until the per-frame
+## time budget is spent. Always instances at least one tile so a single heavy
+## tile can never wedge the queue. Tiles that drifted out of range while queued
+## are dropped without instancing.
+func _drain_instance_queue() -> void:
+	if _instance_queue.is_empty() and _feature_queue.is_empty():
+		return
+	var deadline := Time.get_ticks_usec() + int(instance_budget_ms * 1000.0)
+
+	# Drain ready tiles first: each pass builds a tile's ground + collider (so a
+	# freshly streamed tile is drivable immediately) and enqueues its features.
+	# Always take at least one tile so the queue can't wedge, but stop consuming
+	# more once the budget is spent.
+	var first := true
+	while not _instance_queue.is_empty() and (first or Time.get_ticks_usec() < deadline):
+		first = false
+		var tkey: Vector2i = _instance_queue.pop_front()
+		var bucket: Dictionary = _ready_buckets.get(tkey, {})
+		_ready_buckets.erase(tkey)
+		_pending_tiles.erase(tkey)
+		# Skip tiles that were unloaded / drifted out of range while queued, or
+		# that got instanced by a synchronous ensure_tiles_around in the meantime.
+		if _loaded_tiles.has(tkey):
+			continue
+		var dist: int = max(abs(tkey.x - _current_tile.x), abs(tkey.y - _current_tile.y))
+		if dist > unload_radius:
+			continue
+		_instance_tile(tkey, bucket, true)  # defer features to the queue below
+
+	# Then spend whatever budget remains building queued FEATURES. Always build at
+	# least one so progress is guaranteed even when tiles ate the whole budget;
+	# one pathological feature can overshoot a frame but is logged (see
+	# _build_feature) so it can be guarded rather than silently freezing.
+	first = true
+	while not _feature_queue.is_empty() and (first or Time.get_ticks_usec() < deadline):
+		first = false
+		_build_feature(_feature_queue.pop_front())
+
+## Synchronously parse AND instance one tile on the calling (main) thread. Used
+## by ensure_tiles_around at spawn, where a collider must exist THIS frame before
+## the car is dropped — there's no time to wait for a worker task to finish.
+func _load_tile(tkey: Vector2i) -> void:
+	if _loaded_tiles.has(tkey):
+		return
+	# Cancel any async request for this tile so it isn't instanced twice.
+	_pending_tiles.erase(tkey)
+	_ready_buckets.erase(tkey)
+	_instance_queue.erase(tkey)
+	_instance_tile(tkey, _tile_source.load_tile(tkey))
+
+## Instance a parsed tile bucket into the scene tree. MAIN THREAD ONLY (creates
+## nodes, adds physics bodies, emits signals). Split out of the old _load_tile so
+## the parse half can run off-thread while this half stays budgeted on the main
+## thread.
+## Instance a tile. The tile root + ground collider are built immediately (the
+## car needs a drivable surface the moment a tile is "loaded"), then the tile's
+## FEATURES are either built inline (defer=false, e.g. spawn) or enqueued as
+## small per-feature work items drained across frames (defer=true, streaming).
+##
+## Deferring is what removes the hard freeze: a dense tile's 100-900 ms of
+## feature building becomes a few ms per frame spread over several frames.
+func _instance_tile(tkey: Vector2i, bucket: Dictionary, defer: bool = false) -> void:
 	# Every in-range tile gets a root + ground collider, even when it carries no
 	# OSM features. On a streamed country the cache is sparse — tiles between
 	# baked features have no file (bucket is empty) — but the car still needs a
-	# surface to drive on there, or it falls through the world. (This was masked
-	# on the old in-memory small map, which was dense.)
+	# surface to drive on there, or it falls through the world.
 	var tile_root := Node3D.new()
 	tile_root.name = "Tile_%d_%d" % [tkey.x, tkey.y]
 	add_child(tile_root)
@@ -179,139 +352,231 @@ func _load_tile(tkey: Vector2i) -> void:
 		tile_loaded.emit(tkey)
 		return
 
-	# Self-contained per-tile dataset builders resolve way/relation members
-	# against. For the in-memory source this is the one global OSMData; for the
-	# disk source it's the tile's own parsed file (with neighbor nodes for
-	# closure). Either way, only THIS local is used inside _load_tile.
 	var osm_data: OSMParser.OSMData = bucket["osm_data"]
 
-	# Check whether the tile is fully covered by an area polygon. If so, skip
-	# the terrain ground mesh (the draped area renders on top anyway and the
-	# terrain underneath is invisible). This saves vertices and avoids z-fighting.
-	var tile_covered := false
-	if _has_terrain():
-		var grid_step := tile_size / float(max(1, terrain_subdivisions))
-		var origin_x := float(tkey.x) * tile_size
-		var origin_z := float(tkey.y) * tile_size
-		for way: OSMParser.OSMWay in bucket["ways"]:
-			if AreaHandler.is_area(way) or ParkingHandler.is_parking(way):
-				var pts := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
-				if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
-						pts, origin_x, origin_z, tile_size, grid_step):
-					tile_covered = true
-					break
-		# Also check multipolygon area relations.
-		if not tile_covered:
-			for rel: OSMParser.OSMRelation in bucket["relations"]:
-				if rel.tags.get("type", "") != "multipolygon":
-					continue
-				if not (rel.tags.has("landuse") or rel.tags.has("natural") or rel.tags.has("leisure")):
-					continue
-				for member: Dictionary in rel.members:
-					if member["type"] != "way" or member["role"] != "outer":
-						continue
-					var way_id: int = member["ref"]
-					if not osm_data.ways.has(way_id):
-						continue
-					var pts := PolygonUtils.way_to_points(
-						osm_data.ways[way_id].node_ids, osm_data.nodes)
-					if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
-							pts, origin_x, origin_z, tile_size, grid_step):
-						tile_covered = true
-						break
-				if tile_covered:
-					break
+	# ── Prep (cheap, always immediate): coverage check, ground, suppression ──
+	var tile_covered := _tile_fully_covered(tkey, bucket, osm_data)
 
 	# Build ground plane for the tile. When fully covered by an area polygon the
 	# visible mesh is redundant (the draped area sits on top), but the physics
 	# collider is still needed so the car doesn't fall through.
 	_build_ground(tile_root, tkey, tile_covered)
 
-	# Collect building:part ways and determine which building outlines to suppress
-	var building_part_ways: Array[OSMParser.OSMWay] = []
-	var suppressed_building_ids: Dictionary = {}  # building way IDs to skip 3D rendering
+	# The tile is "loaded" (surface exists) even though its features may still be
+	# streaming in over the next frames. Record it now so streaming/unload logic
+	# treats it as present and never re-requests it.
+	_loaded_tiles[tkey] = tile_root
 
-	for way: OSMParser.OSMWay in bucket["ways"]:
-		if _is_building_part(way):
-			building_part_ways.append(way)
-
-	if building_part_ways.size() > 0:
-		# For each building:part, find the parent building=* outline that contains it
-		for part: OSMParser.OSMWay in building_part_ways:
-			var part_points := PolygonUtils.way_to_points(part.node_ids, osm_data.nodes)
-			if part_points.size() < 3:
-				continue
-			var part_centroid := PolygonUtils.polygon_centroid(part_points)
-			for way: OSMParser.OSMWay in bucket["ways"]:
-				if not way.tags.has("building") or way.tags.has("building:part"):
-					continue
-				var bld_points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
-				if bld_points.size() < 3:
-					continue
-				if _point_in_polygon_xz(part_centroid, bld_points):
-					suppressed_building_ids[way.id] = true
-
-	# Collect way IDs that are members of relations the relation builder will
-	# render (multipolygon buildings/areas, type=building). These ways carry
-	# relation-level semantics (e.g. the relation has building=yes, but the
-	# member way only has styling tags like colour/roof:shape). The relation
-	# builder merges the parent tags and renders them; the per-way loop must
-	# skip them to avoid "Skipping way" noise or double rendering.
+	var building_part_ways := _collect_building_part_ways(bucket, osm_data)
+	var suppressed_building_ids := _collect_suppressed_buildings(
+		building_part_ways, bucket, osm_data)
 	var relation_way_ids := _collect_relation_way_ids(bucket["relations"], osm_data)
-
-	# Process ways (roads, buildings from ways, etc.) via the handler registry.
-	# Each way is offered to handlers in priority order; the first match builds
-	# it. This replaces the central if-elif dispatch — feature-specific logic now
-	# lives in scripts/handlers/*.gd (see _way_handlers).
 	var ctx := _make_tile_context(tkey, suppressed_building_ids, osm_data)
+
+	# ── Feature building: inline (spawn) or queued (streaming) ──
+	var items := _plan_tile_features(
+		tkey, tile_root, osm_data, bucket, ctx, building_part_ways, relation_way_ids)
+	if defer:
+		_feature_queue.append_array(items)
+	else:
+		for item: FeatureWork in items:
+			_build_feature(item)
+
+	tile_loaded.emit(tkey)
+
+## Assemble the ordered list of deferred feature-build items for a tile: ways
+## (via the handler registry), building:part footprints, the standalone-asset
+## batch, then relations — the same order the monolithic builder used.
+func _plan_tile_features(
+		tkey: Vector2i, tile_root: Node3D, osm_data: OSMParser.OSMData,
+		bucket: Dictionary, ctx: OSMTileContext,
+		building_part_ways: Array[OSMParser.OSMWay],
+		relation_way_ids: Dictionary) -> Array[FeatureWork]:
+	var items: Array[FeatureWork] = []
 	var processed_way_ids := {}
+
 	for way: OSMParser.OSMWay in bucket["ways"]:
 		if processed_way_ids.has(way.id):
 			continue
 		processed_way_ids[way.id] = true
 		if relation_way_ids.has(way.id):
 			continue
+		var w := FeatureWork.new()
+		w.kind = FeatureWork.Kind.WAY
+		w.tile_key = tkey
+		w.tile_root = tile_root
+		w.osm_data = osm_data
+		w.way = way
+		w.ctx = ctx
+		items.append(w)
 
-		var handled := false
-		for handler: OSMWayHandler in _way_handlers:
-			if handler.matches(way, ctx):
-				var node := handler.build(way, ctx)
-				if node != null:
-					tile_root.add_child(node)
-				handled = true
-				break
-		if not handled and not _is_ignorable_way(way):
-			print_debug("Skipping way with tags", way.tags)
-
-	# Render building:part ways as 3D buildings
 	for part: OSMParser.OSMWay in building_part_ways:
 		if processed_way_ids.has(part.id):
 			continue
 		processed_way_ids[part.id] = true
-		var mesh_instance := _building_builder.build_building_from_way(part, osm_data)
-		if mesh_instance != null:
-			tile_root.add_child(mesh_instance)
+		var b := FeatureWork.new()
+		b.kind = FeatureWork.Kind.BUILDING_PART
+		b.tile_key = tkey
+		b.tile_root = tile_root
+		b.osm_data = osm_data
+		b.way = part
+		items.append(b)
 
-	# Process standalone nodes (traffic lights, trees, etc.).
-	# Placeholder-box assets are merged into MultiMeshInstance3D batches inside
-	# the placer; scene assets are still instanced individually.
-	var assets_root := _asset_placer.place_assets_batched(bucket["nodes"])
-	if assets_root != null:
-		tile_root.add_child(assets_root)
+	var a := FeatureWork.new()
+	a.kind = FeatureWork.Kind.ASSETS
+	a.tile_key = tkey
+	a.tile_root = tile_root
+	a.osm_data = osm_data
+	a.nodes = bucket["nodes"]
+	items.append(a)
 
-	# Process relations (multipolygon buildings, etc.)
-	_relation_builder.tile_clip_rect = _tile_clip_rect(tkey) as Variant
 	var processed_rel_ids := {}
 	for rel: OSMParser.OSMRelation in bucket["relations"]:
 		if processed_rel_ids.has(rel.id):
 			continue
 		processed_rel_ids[rel.id] = true
-		var rel_node := _relation_builder.build_relation(rel, osm_data)
-		if rel_node != null:
-			tile_root.add_child(rel_node)
+		var r := FeatureWork.new()
+		r.kind = FeatureWork.Kind.RELATION
+		r.tile_key = tkey
+		r.tile_root = tile_root
+		r.osm_data = osm_data
+		r.relation = rel
+		items.append(r)
 
-	_loaded_tiles[tkey] = tile_root
-	tile_loaded.emit(tkey)
+	return items
+
+## Build one queued feature into the scene tree. MAIN THREAD ONLY. A build slower
+## than _FEATURE_SLOW_MS is logged as a pathological outlier so a monster feature
+## (e.g. a huge multipolygon) can be found and guarded rather than silently
+## freezing a frame.
+func _build_feature(item: FeatureWork) -> void:
+	# The tile may have been unloaded (camera drifted away) while this item waited
+	# in the queue; its tile_root is then freed. Skip so we don't parent onto a
+	# dead node.
+	if not is_instance_valid(item.tile_root) or not _loaded_tiles.has(item.tile_key):
+		return
+
+	var t0 := Time.get_ticks_usec()
+	match item.kind:
+		FeatureWork.Kind.WAY:
+			# Clip linear ways (road/waterway/railway ribbons) to this tile so a
+			# way spanning many tiles only builds its in-tile portion here, not its
+			# whole length in every tile. The builder reads tile_clip_rect; set it
+			# per feature and clear it after so nothing else inherits it.
+			_way_builder.tile_clip_rect = item.ctx.tile_clip
+			var handled := false
+			for handler: OSMWayHandler in _way_handlers:
+				if handler.matches(item.way, item.ctx):
+					var node := handler.build(item.way, item.ctx)
+					if node != null:
+						item.tile_root.add_child(node)
+					handled = true
+					break
+			_way_builder.tile_clip_rect = null
+			if not handled and not _is_ignorable_way(item.way):
+				print_debug("Skipping way with tags", item.way.tags)
+		FeatureWork.Kind.BUILDING_PART:
+			var mi := _building_builder.build_building_from_way(item.way, item.osm_data)
+			if mi != null:
+				item.tile_root.add_child(mi)
+		FeatureWork.Kind.ASSETS:
+			var assets_root := _asset_placer.place_assets_batched(item.nodes)
+			if assets_root != null:
+				item.tile_root.add_child(assets_root)
+		FeatureWork.Kind.RELATION:
+			_relation_builder.tile_clip_rect = _tile_clip_rect(item.tile_key) as Variant
+			var rel_node := _relation_builder.build_relation(item.relation, item.osm_data)
+			if rel_node != null:
+				item.tile_root.add_child(rel_node)
+
+	var elapsed_us := Time.get_ticks_usec() - t0
+	FrameTracerScript.record_usec("build_feature", elapsed_us)
+	if elapsed_us >= int(_FEATURE_SLOW_MS * 1000.0):
+		# Print (not push_warning) so it lands inline with the [trace] stream on
+		# stdout — push_warning only reaches the debugger/error log. Gated on the
+		# tracer so it's silent in normal play. Names the exact feature + tile so a
+		# pathological way/relation can be found and guarded.
+		if FrameTracerScript.is_enabled():
+			print("[trace] SLOW feature %s took %.1f ms at tile %s" % [
+				_feature_desc(item), elapsed_us / 1000.0, item.tile_key])
+
+## Human-readable description of a feature work item for slow-build warnings.
+func _feature_desc(item: FeatureWork) -> String:
+	match item.kind:
+		FeatureWork.Kind.WAY:
+			return "way %d %s" % [item.way.id, item.way.tags]
+		FeatureWork.Kind.BUILDING_PART:
+			return "building:part %d" % item.way.id
+		FeatureWork.Kind.ASSETS:
+			return "assets(%d nodes)" % item.nodes.size()
+		FeatureWork.Kind.RELATION:
+			return "relation %d %s" % [item.relation.id, item.relation.tags]
+	return "unknown"
+
+## True when the tile is entirely under an area polygon (way or multipolygon
+## relation), so the visible terrain mesh can be skipped (collider still built).
+func _tile_fully_covered(
+		tkey: Vector2i, bucket: Dictionary, osm_data: OSMParser.OSMData) -> bool:
+	if not _has_terrain():
+		return false
+	var grid_step := tile_size / float(max(1, terrain_subdivisions))
+	var origin_x := float(tkey.x) * tile_size
+	var origin_z := float(tkey.y) * tile_size
+	for way: OSMParser.OSMWay in bucket["ways"]:
+		if AreaHandler.is_area(way) or ParkingHandler.is_parking(way):
+			var pts := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+			if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
+					pts, origin_x, origin_z, tile_size, grid_step):
+				return true
+	for rel: OSMParser.OSMRelation in bucket["relations"]:
+		if rel.tags.get("type", "") != "multipolygon":
+			continue
+		if not (rel.tags.has("landuse") or rel.tags.has("natural") or rel.tags.has("leisure")):
+			continue
+		for member: Dictionary in rel.members:
+			if member["type"] != "way" or member["role"] != "outer":
+				continue
+			var way_id: int = member["ref"]
+			if not osm_data.ways.has(way_id):
+				continue
+			var pts := PolygonUtils.way_to_points(
+				osm_data.ways[way_id].node_ids, osm_data.nodes)
+			if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
+					pts, origin_x, origin_z, tile_size, grid_step):
+				return true
+	return false
+
+## Ways in this tile tagged building:part (rendered in their own pass).
+func _collect_building_part_ways(
+		bucket: Dictionary, _osm_data: OSMParser.OSMData) -> Array[OSMParser.OSMWay]:
+	var out: Array[OSMParser.OSMWay] = []
+	for way: OSMParser.OSMWay in bucket["ways"]:
+		if _is_building_part(way):
+			out.append(way)
+	return out
+
+## building=* outline ways whose footprint contains a building:part, so the flat
+## outline isn't drawn under the detailed part geometry.
+func _collect_suppressed_buildings(
+		building_part_ways: Array[OSMParser.OSMWay], bucket: Dictionary,
+		osm_data: OSMParser.OSMData) -> Dictionary:
+	var suppressed: Dictionary = {}
+	if building_part_ways.is_empty():
+		return suppressed
+	for part: OSMParser.OSMWay in building_part_ways:
+		var part_points := PolygonUtils.way_to_points(part.node_ids, osm_data.nodes)
+		if part_points.size() < 3:
+			continue
+		var part_centroid := PolygonUtils.polygon_centroid(part_points)
+		for way: OSMParser.OSMWay in bucket["ways"]:
+			if not way.tags.has("building") or way.tags.has("building:part"):
+				continue
+			var bld_points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
+			if bld_points.size() < 3:
+				continue
+			if _point_in_polygon_xz(part_centroid, bld_points):
+				suppressed[way.id] = true
+	return suppressed
 
 ## Build the per-tile context handed to every way handler. Bundles the shared
 ## builders and tile parameters so handler build() signatures stay uniform.
@@ -332,6 +597,20 @@ func _make_tile_context(
 	ctx.asset_placer = _asset_placer
 	return ctx
 
+## Block until every in-flight parse task has finished before this node is torn
+## down. A WorkerThreadPool task holds a bound reference to _parse_tile_task; if
+## the node freed while a task was still running, that task would call into a
+## freed instance. Waiting here is bounded (a task only parses one tile) and only
+## happens on scene exit.
+func _exit_tree() -> void:
+	for tkey: Vector2i in _parse_tasks:
+		WorkerThreadPool.wait_for_task_completion(_parse_tasks[tkey])
+	_parse_tasks.clear()
+	_pending_tiles.clear()
+	_ready_buckets.clear()
+	_instance_queue.clear()
+	_feature_queue.clear()
+
 func _unload_tile(tkey: Vector2i) -> void:
 	var tile_node: Node3D = _loaded_tiles[tkey]
 	if tile_node != null:
@@ -346,6 +625,15 @@ func _unload_tile(tkey: Vector2i) -> void:
 				_asset_placer.lamp_lights.unregister_tile(assets)
 		tile_node.queue_free()
 	_loaded_tiles.erase(tkey)
+	# Drop any still-queued feature items for this tile so we don't build onto a
+	# freed root (the drain also guards defensively, but pruning keeps the queue
+	# from filling with dead work as the camera sweeps across tiles).
+	if not _feature_queue.is_empty():
+		var kept: Array[FeatureWork] = []
+		for item: FeatureWork in _feature_queue:
+			if item.tile_key != tkey:
+				kept.append(item)
+		_feature_queue = kept
 	tile_unloaded.emit(tkey)
 
 
@@ -377,10 +665,13 @@ func collect_ways_near(center: Vector3, radius: float) -> Array:
 ## streams from. Traffic builds its road graph from this so it stays consistent
 ## with the rendered roads and streams a country region-by-region. Returns an
 ## empty OSMData until the source is ready.
-func collect_osm_near(center: Vector3, radius: float) -> OSMParser.OSMData:
+## `yield_every` > 0 lets an off-main-thread caller (the traffic rebuild thread)
+## ask the collect to yield the scheduler every N cold tile parses, so a fresh
+## region's parse burst doesn't contend with the main thread's per-frame work.
+func collect_osm_near(center: Vector3, radius: float, yield_every: int = 0) -> OSMParser.OSMData:
 	if _tile_source == null:
 		return OSMParser.OSMData.new()
-	return _tile_source.collect_osm_near(center, radius)
+	return _tile_source.collect_osm_near(center, radius, yield_every)
 
 
 ## True once a tile source is loaded and ready to be queried.
@@ -407,11 +698,19 @@ func set_show_debug_labels(enabled: bool) -> void:
 ## to drift into them. Returns true once at least the centering tile is present.
 ## Spawn logic calls this so a ground collider exists before the car is unfrozen,
 ## which is what prevents the car free-falling through a not-yet-streamed world.
+##
+## SYNCHRONOUS by design: unlike camera-driven streaming (which parses off-thread
+## and instances over several frames), spawn cannot wait — the collider must
+## exist THIS frame. So the tiles around the spawn point are parsed + instanced
+## inline via _load_tile; the async queue continues to feed the outer ring.
 func ensure_tiles_around(world_pos: Vector3) -> bool:
 	if _tile_source == null:
 		return false
 	_current_tile = _pos_to_tile(world_pos)
-	_update_tiles()
+	# Instance the in-range tiles synchronously so a ground collider is live now.
+	for dx: int in range(-load_radius, load_radius + 1):
+		for dz: int in range(-load_radius, load_radius + 1):
+			_load_tile(Vector2i(_current_tile.x + dx, _current_tile.y + dz))
 	return true
 
 func _has_terrain() -> bool:
@@ -458,6 +757,7 @@ func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 ## the real terrain. Vertices are built in world space (mesh at origin) so the
 ## sampled heights and the OSM geometry share one coordinate frame.
 func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = false) -> void:
+	var _trace := FrameTracerScript.scope("build_terrain_ground")
 	var hp := _height_provider
 	var subs: int = max(1, terrain_subdivisions)
 	var origin_x := tkey.x * tile_size
@@ -496,6 +796,14 @@ func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = f
 	st.generate_normals()
 	var mesh := st.commit()
 
+	# The trimesh collider (create_trimesh_shape) is the usual terrain hot spot —
+	# it cooks a concave shape from every triangle. Trace it separately so we can
+	# tell mesh build from collider cook when a tile hitches.
+	FrameTracerScript.begin("terrain_trimesh_collider")
+	var tri_shape: ConcavePolygonShape3D = mesh.create_trimesh_shape()
+	tri_shape.backface_collision = true
+	FrameTracerScript.end("terrain_trimesh_collider")
+
 	var ground_body := StaticBody3D.new()
 	ground_body.name = "Ground"
 
@@ -510,12 +818,11 @@ func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = f
 
 	var col_shape := CollisionShape3D.new()
 	col_shape.name = "GroundCollision"
-	# create_trimesh_shape() builds a ONE-SIDED concave collider; bodies approach
-	# from the back of the triangle winding pass straight through. Terrain must be
-	# collidable from both sides (and our triangle winding is not guaranteed to
-	# face up everywhere), so enable backface collision.
-	var tri_shape: ConcavePolygonShape3D = mesh.create_trimesh_shape()
-	tri_shape.backface_collision = true
+	# create_trimesh_shape() (cooked above, under a trace span) builds a ONE-SIDED
+	# concave collider; bodies approaching from the back of the triangle winding
+	# pass straight through. Terrain must be collidable from both sides (and our
+	# triangle winding is not guaranteed to face up everywhere), so backface
+	# collision was enabled on the cooked shape.
 	col_shape.shape = tri_shape
 	ground_body.add_child(col_shape)
 

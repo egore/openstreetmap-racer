@@ -153,3 +153,63 @@ func test_add_quad_facing_shading_matches_desired() -> void:
 			assert_float(mdt.get_vertex_normal(vi).normalized().dot(desired.normalized())) \
 				.override_failure_message("add_quad_facing shading normal matches desired") \
 				.is_greater(0.99)
+
+
+# ─── clip_polyline_to_rect (per-tile ribbon clipping) ────────────────────────
+#
+# A way spanning many tiles is present in every tile's bucket; without clipping,
+# build_road rebuilds the whole (subdivided, draped) ribbon per tile (~107 ms on
+# a long primary road). clip_polyline_to_rect trims the centreline to the tile so
+# only the in-tile portion is built. These pin the clip's correctness.
+
+func test_clip_polyline_fully_inside_is_unchanged() -> void:
+	# A polyline wholly within the rect returns one part with the same points.
+	var pts := PackedVector3Array([Vector3(10, 0, 10), Vector3(20, 0, 20), Vector3(30, 0, 15)])
+	var parts := PolygonUtils.clip_polyline_to_rect(pts, [0.0, 100.0, 0.0, 100.0], 0.0)
+	assert_int(parts.size()).override_failure_message("one part when fully inside").is_equal(1)
+	var part: PackedVector3Array = parts[0]
+	assert_int(part.size()).override_failure_message("all points kept").is_equal(3)
+
+
+func test_clip_polyline_fully_outside_is_empty() -> void:
+	# A polyline entirely outside the rect yields no parts.
+	var pts := PackedVector3Array([Vector3(500, 0, 500), Vector3(600, 0, 600)])
+	var parts := PolygonUtils.clip_polyline_to_rect(pts, [0.0, 100.0, 0.0, 100.0], 0.0)
+	assert_int(parts.size()).override_failure_message("nothing inside the rect").is_equal(0)
+
+
+func test_clip_polyline_crossing_boundary_is_trimmed() -> void:
+	# A straight line from inside to far outside is trimmed at the rect edge, so
+	# the clipped part's endpoint lies on (or within) the boundary.
+	var pts := PackedVector3Array([Vector3(50, 0, 50), Vector3(250, 0, 50)])
+	var parts := PolygonUtils.clip_polyline_to_rect(pts, [0.0, 100.0, 0.0, 100.0], 0.0)
+	assert_int(parts.size()).override_failure_message("one clipped part").is_equal(1)
+	var part: PackedVector3Array = parts[0]
+	# Enters at x=50 (inside), exits where it crosses x=100.
+	assert_float(part[0].x).override_failure_message("start kept inside").is_equal_approx(50.0, 0.01)
+	assert_float(part[part.size() - 1].x).override_failure_message("clipped at x=100 boundary").is_equal_approx(100.0, 0.01)
+
+
+func test_clip_polyline_reentering_yields_two_parts() -> void:
+	# A polyline that dips out of the rect and comes back produces two separate
+	# in-tile runs (so the ribbon isn't bridged across the gap).
+	var pts := PackedVector3Array([
+		Vector3(50, 0, 50),    # inside
+		Vector3(50, 0, 250),   # outside (below)
+		Vector3(80, 0, 250),   # outside
+		Vector3(80, 0, 50),    # inside again
+	])
+	var parts := PolygonUtils.clip_polyline_to_rect(pts, [0.0, 100.0, 0.0, 100.0], 0.0)
+	assert_int(parts.size()).override_failure_message("two separate in-tile runs").is_equal(2)
+
+
+func test_clip_polyline_margin_extends_bounds() -> void:
+	# The margin expands the rect, so a point just outside the raw rect but within
+	# the margin is retained — this is what overlaps adjacent tiles' ribbons so
+	# there's no seam gap.
+	var pts := PackedVector3Array([Vector3(50, 0, 50), Vector3(102, 0, 50)])
+	# Without margin the end is clipped at 100; with a 5 m margin it survives to 102.
+	var parts := PolygonUtils.clip_polyline_to_rect(pts, [0.0, 100.0, 0.0, 100.0], 5.0)
+	assert_int(parts.size()).is_equal(1)
+	var part: PackedVector3Array = parts[0]
+	assert_float(part[part.size() - 1].x).override_failure_message("margin keeps point past raw edge").is_equal_approx(102.0, 0.01)

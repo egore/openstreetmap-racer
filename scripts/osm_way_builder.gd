@@ -12,6 +12,15 @@ extends RefCounted
 ## follow the DEM instead of linearly interpolating between sparse OSM nodes.
 var height_provider: HeightProvider = null
 var terrain_grid_step: float = 0.0
+## [min_x, max_x, min_z, max_z] of the tile currently being built, or null. When
+## set, a way's centreline is clipped to this rect (plus CLIP_MARGIN) before the
+## ribbon is built, so a country-spanning way (e.g. a primary road) only builds
+## the portion inside this tile instead of its whole length in every tile it
+## touches. The manager sets this per tile before dispatching way builds.
+var tile_clip_rect: Variant = null
+## Overlap (m) added around the tile when clipping ribbons, so adjacent tiles'
+## clipped ribbons meet with no seam gap. A couple of metres is plenty.
+const CLIP_MARGIN := 3.0
 
 # Road width in meters based on highway type
 const ROAD_WIDTHS := {
@@ -138,38 +147,9 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	sidewalk_mat.albedo_color = SIDEWALK_COLOR
 	sidewalk_st.set_material(sidewalk_mat)
 
-	# Build a ribbon mesh along the polyline using miter joins at bends
-	var half_w := width / 2.0
 	var sidewalk_sides := _get_sidewalk_sides(way.tags)
 	var has_left_sidewalk: bool = sidewalk_sides["left"]
 	var has_right_sidewalk: bool = sidewalk_sides["right"]
-	var miter_limit := 2.0  # clamp miter to avoid spikes on very sharp turns
-
-	# Pre-compute, for every point, the miter offset vector that reaches the
-	# RIGHT edge (the left edge is its negation). At interior points the miter
-	# bisects the angle between adjacent segments so both segments share the same
-	# edge vertices, eliminating gaps and overlaps.
-	var n_pts := points.size()
-	var miter_offsets: Array[Vector3] = []
-	miter_offsets.resize(n_pts)
-	for i: int in range(n_pts):
-		miter_offsets[i] = _miter_offset(points, i, half_w, miter_limit)
-
-	# Edge vertices (left/right) per point, each draped on the terrain at its own
-	# XZ. These define the road footprint and drive the sidewalks.
-	var left_edge: Array = []
-	var right_edge: Array = []
-	left_edge.resize(n_pts)
-	right_edge.resize(n_pts)
-	for i: int in range(n_pts):
-		var pt := points[i]
-		var off := miter_offsets[i]
-		var lx := pt.x - off.x
-		var lz := pt.z - off.z
-		var rx := pt.x + off.x
-		var rz := pt.z + off.z
-		left_edge[i] = Vector3(lx, _edge_height(lx, lz, pt.y) + ROAD_Y, lz)
-		right_edge[i] = Vector3(rx, _edge_height(rx, rz, pt.y) + ROAD_Y, rz)
 
 	# Whether to conform the surface to the terrain triangulation. Even with the
 	# edges draped, a flat quad spanning a cell sits below terrain folds crossing
@@ -179,6 +159,76 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	var conform := height_provider != null and height_provider.is_ready() \
 		and terrain_grid_step > 0.0
 
+	# Clip the centreline to the current tile (plus a small margin) so a way that
+	# spans many tiles only builds its in-tile portion here instead of its whole
+	# length in every tile it touches. Marking UVs are metres-from-way-start, so
+	# each clipped part carries the along-distance of its FIRST point (found in
+	# along_at by nearest original point) to keep markings aligned. When no clip
+	# rect is set (flat/whole-map path) the single full polyline is used as-is.
+	var parts: Array = [points]
+	if tile_clip_rect != null:
+		parts = PolygonUtils.clip_polyline_to_rect(points, tile_clip_rect, CLIP_MARGIN)
+		if parts.is_empty():
+			return null  # way doesn't actually enter this tile
+
+	for part: PackedVector3Array in parts:
+		var part_pts: PackedVector3Array = part
+		if part_pts.size() < 2:
+			continue
+		# Along-distance offset for this part = distance from the way start to the
+		# part's first point, so lane/crossing markings line up across the clip.
+		var part_along0 := _along_at_point(points, along_at, part_pts[0])
+		_emit_road_ribbon(
+			st, sidewalk_st, part_pts, width, part_along0,
+			has_left_sidewalk, has_right_sidewalk, conform)
+
+	var mesh := st.commit()
+	if has_left_sidewalk or has_right_sidewalk:
+		mesh = sidewalk_st.commit(mesh)
+
+	mesh_instance.mesh = mesh
+	return mesh_instance
+
+
+## Emit one ribbon (road surface + optional sidewalks) for a single centreline
+## polyline into the shared SurfaceTools. Extracted from build_road so a way that
+## was clipped into several in-tile parts can build each with its own along-offset
+## while sharing one mesh/material. `along0` is the metres-from-way-start of
+## part_pts[0], so lane/crossing marking UVs stay aligned after clipping.
+func _emit_road_ribbon(
+		st: SurfaceTool, sidewalk_st: SurfaceTool,
+		part_pts: PackedVector3Array, width: float, along0: float,
+		has_left_sidewalk: bool, has_right_sidewalk: bool, conform: bool) -> void:
+	var half_w := width / 2.0
+	var miter_limit := 2.0  # clamp miter to avoid spikes on very sharp turns
+	var n_pts := part_pts.size()
+
+	# Cumulative along-distance for THIS part, offset so UV.x remains metres from
+	# the original way start (keeps markings aligned across the clip seam).
+	var along_at := _cumulative_along(part_pts)
+	for i: int in range(along_at.size()):
+		along_at[i] += along0
+
+	# Miter offset to the RIGHT edge per point (left edge is its negation).
+	var miter_offsets: Array[Vector3] = []
+	miter_offsets.resize(n_pts)
+	for i: int in range(n_pts):
+		miter_offsets[i] = _miter_offset(part_pts, i, half_w, miter_limit)
+
+	var left_edge: Array = []
+	var right_edge: Array = []
+	left_edge.resize(n_pts)
+	right_edge.resize(n_pts)
+	for i: int in range(n_pts):
+		var pt := part_pts[i]
+		var off := miter_offsets[i]
+		var lx := pt.x - off.x
+		var lz := pt.z - off.z
+		var rx := pt.x + off.x
+		var rz := pt.z + off.z
+		left_edge[i] = Vector3(lx, _edge_height(lx, lz, pt.y) + ROAD_Y, lz)
+		right_edge[i] = Vector3(rx, _edge_height(rx, rz, pt.y) + ROAD_Y, rz)
+
 	# Emit the road surface, one segment quad at a time.
 	for i: int in range(n_pts - 1):
 		var l0: Vector3 = left_edge[i]
@@ -186,18 +236,13 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		var r1: Vector3 = right_edge[i + 1]
 		var l1: Vector3 = left_edge[i + 1]
 
-		# Per-segment UV frame: project any world XZ onto this segment's
-		# centreline to get metres travelled (UV.x) and the across-road fraction
-		# (UV.y, 0 = left edge, 1 = right edge). Built as a Callable so the
-		# terrain-conforming clip can UV its (unpredictable) output vertices too.
-		var c0 := points[i]
-		var c1 := points[i + 1]
+		var c0 := part_pts[i]
+		var c1 := part_pts[i + 1]
 		var uv_fn := _segment_uv_fn(
 			Vector2(c0.x, c0.z), Vector2(c1.x, c1.z),
 			along_at[i], width)
 
 		if conform:
-			# Clip this segment's footprint to the terrain triangles and drape.
 			var quad := PackedVector2Array([
 				Vector2(l0.x, l0.z),
 				Vector2(r0.x, r0.z),
@@ -207,8 +252,6 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 			PolygonUtils.emit_terrain_conforming_quad(
 				st, quad, height_provider, terrain_grid_step, ROAD_Y, uv_fn)
 		else:
-			# Flat world: a single quad. Winding matches the original
-			# (left,right,right / left,left,right) with an upward normal.
 			var uv_l0 := uv_fn.call(Vector2(l0.x, l0.z)) as Vector2
 			var uv_r0 := uv_fn.call(Vector2(r0.x, r0.z)) as Vector2
 			var uv_r1 := uv_fn.call(Vector2(r1.x, r1.z)) as Vector2
@@ -221,23 +264,30 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 			st.set_uv(uv_r1); st.set_normal(Vector3.UP); st.add_vertex(r1)
 
 		if has_left_sidewalk:
-			# Left edge outward direction: points away from road center (leftward)
-			var center := Vector3(points[i].x, left_edge[i].y, points[i].z)
+			var center := Vector3(part_pts[i].x, left_edge[i].y, part_pts[i].z)
 			var outward: Vector3 = (center - left_edge[i]).normalized()
 			_add_sidewalk_segment(sidewalk_st, left_edge[i], left_edge[i + 1], -outward, i == 0, i == n_pts - 2)
 
 		if has_right_sidewalk:
-			# Right edge outward direction: points away from road center (rightward)
-			var center := Vector3(points[i].x, right_edge[i].y, points[i].z)
+			var center := Vector3(part_pts[i].x, right_edge[i].y, part_pts[i].z)
 			var outward: Vector3 = (right_edge[i] - center).normalized()
 			_add_sidewalk_segment(sidewalk_st, right_edge[i], right_edge[i + 1], outward, i == 0, i == n_pts - 2)
 
-	var mesh := st.commit()
-	if has_left_sidewalk or has_right_sidewalk:
-		mesh = sidewalk_st.commit(mesh)
 
-	mesh_instance.mesh = mesh
-	return mesh_instance
+## Along-distance (metres from way start) of the original point nearest `p`. Used
+## to give a clipped part the correct marking-UV offset. Linear scan is fine —
+## clipped parts are few and this runs once per part.
+func _along_at_point(points: PackedVector3Array, along_at: PackedFloat32Array, p: Vector3) -> float:
+	var best_i := 0
+	var best_d := INF
+	for i: int in range(points.size()):
+		var dx := points[i].x - p.x
+		var dz := points[i].z - p.z
+		var d := dx * dx + dz * dz
+		if d < best_d:
+			best_d = d
+			best_i = i
+	return along_at[best_i] if best_i < along_at.size() else 0.0
 
 
 # ─── Lane-marking UVs ─────────────────────────────────────────────────────────

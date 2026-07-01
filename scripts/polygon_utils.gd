@@ -285,6 +285,84 @@ static func project_xz(point: Vector3, origin: Vector3, direction: Vector3) -> f
 ##
 ## Returns the original points unchanged when no HeightProvider is available
 ## or when every segment is already short enough.
+## Clip a polyline (road/waterway/railway centreline) to a world-XZ rectangle,
+## returning the sub-polylines that lie inside it. A country-spanning way (e.g.
+## the N57 primary road) is present in EVERY tile it touches; without clipping,
+## build_road rebuilds the whole way — subdivided to terrain and draped — in each
+## of those tiles (~107 ms each). Clipping first means a tile only builds the part
+## of the way within its bounds.
+##
+## rect is [min_x, max_x, min_z, max_z]. `margin` expands the rect so consecutive
+## tiles' clipped ribbons OVERLAP slightly at the shared edge, leaving no visible
+## gap at the seam (the asphalt is depth-write-disabled, so the overlap is free).
+## A segment crossing the boundary is split at the crossing; a way that leaves and
+## re-enters the rect yields multiple sub-polylines. Each retains ≥2 points.
+static func clip_polyline_to_rect(
+		points: PackedVector3Array, rect: Array, margin: float = 0.0) -> Array:
+	var out: Array = []
+	if points.size() < 2:
+		return out
+	var min_x: float = rect[0] - margin
+	var max_x: float = rect[1] + margin
+	var min_z: float = rect[2] - margin
+	var max_z: float = rect[3] + margin
+
+	var current := PackedVector3Array()
+	for i: int in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		# Liang–Barsky clip of segment a→b against the rect (in XZ; Y carried by
+		# lerp so the clipped endpoints keep a sensible height).
+		var seg := _clip_segment_xz(a, b, min_x, max_x, min_z, max_z)
+		if seg.is_empty():
+			# Segment fully outside: end any run in progress.
+			if current.size() >= 2:
+				out.append(current)
+			current = PackedVector3Array()
+			continue
+		var ca: Vector3 = seg[0]
+		var cb: Vector3 = seg[1]
+		# Start a new run if this clipped segment doesn't continue the last point.
+		if current.is_empty() or current[current.size() - 1].distance_to(ca) > 0.001:
+			if current.size() >= 2:
+				out.append(current)
+			current = PackedVector3Array()
+			current.append(ca)
+		current.append(cb)
+	if current.size() >= 2:
+		out.append(current)
+	return out
+
+## Liang–Barsky segment clip in the XZ plane. Returns [] when the segment is
+## wholly outside the rect, else [clipped_a, clipped_b] with Y linearly
+## interpolated to the clipped parameters.
+static func _clip_segment_xz(
+		a: Vector3, b: Vector3, min_x: float, max_x: float,
+		min_z: float, max_z: float) -> Array:
+	var t0 := 0.0
+	var t1 := 1.0
+	var dx := b.x - a.x
+	var dz := b.z - a.z
+	# Each boundary as (p, q): t must satisfy p*t <= q. Clamp [t0,t1] accordingly.
+	var p := [-dx, dx, -dz, dz]
+	var q := [a.x - min_x, max_x - a.x, a.z - min_z, max_z - a.z]
+	for k: int in range(4):
+		if absf(p[k]) < 0.000001:
+			if q[k] < 0.0:
+				return []  # parallel and outside this boundary
+			continue
+		var r: float = q[k] / p[k]
+		if p[k] < 0.0:
+			t0 = maxf(t0, r)
+		else:
+			t1 = minf(t1, r)
+		if t0 > t1:
+			return []
+	var ca := a.lerp(b, t0)
+	var cb := a.lerp(b, t1)
+	return [ca, cb]
+
+
 static func subdivide_polyline_to_terrain(
 		points: PackedVector3Array,
 		hp: HeightProvider,
@@ -529,6 +607,25 @@ static func build_terrain_draped_mesh(
 		min_z = bounds[2]
 		max_z = bounds[3]
 
+	# Pre-clip the (potentially huge, many-thousand-point) polygon to the tile
+	# rectangle ONCE. Without this, a country-scale feature — e.g. the
+	# Grevelingenmeer lake — is intersected against the full ring in EVERY grid
+	# cell of the tile (≈1000 cells × thousands of points ≈ 370 ms). Clipping to
+	# the tile first collapses the ring to just its tile-local part, so the
+	# per-cell intersections below run against a small polygon. When no clip_rect
+	# is given (small polygons) we keep the original single-polygon path.
+	var poly_parts: Array = []
+	if clip_rect != null:
+		var tile_rect := PackedVector2Array([
+			Vector2(min_x, min_z), Vector2(min_x, max_z),
+			Vector2(max_x, max_z), Vector2(max_x, min_z),
+		])
+		poly_parts = Geometry2D.intersect_polygons(tile_rect, poly_2d)
+		if poly_parts.is_empty():
+			return null  # polygon doesn't actually reach into this tile
+	else:
+		poly_parts = [poly_2d]
+
 	var grid_x0 := floorf(min_x / grid_step) * grid_step
 	var grid_z0 := floorf(min_z / grid_step) * grid_step
 	var grid_x1 := ceilf(max_x / grid_step) * grid_step
@@ -555,20 +652,21 @@ static func build_terrain_draped_mesh(
 				Vector2(next_x, cell_z),
 			])
 
-			# Intersect cell with the polygon.
-			var clips := Geometry2D.intersect_polygons(cell_rect, poly_2d)
-			for clip: PackedVector2Array in clips:
-				var indices := Geometry2D.triangulate_polygon(clip)
-				if indices.size() == 0:
-					continue
-				for idx: int in indices:
-					var p2 := clip[idx]
-					# Drape on the terrain *mesh* triangle (not raw bilinear) so the
-					# area surface coincides with the ground it sits on.
-					var wy := hp.sample_mesh_height(p2.x, p2.y) + y_offset
-					st.set_normal(Vector3.UP)
-					st.add_vertex(Vector3(p2.x, wy, p2.y))
-					has_tris = true
+			# Intersect cell with each tile-local polygon part.
+			for part: PackedVector2Array in poly_parts:
+				var clips := Geometry2D.intersect_polygons(cell_rect, part)
+				for clip: PackedVector2Array in clips:
+					var indices := Geometry2D.triangulate_polygon(clip)
+					if indices.size() == 0:
+						continue
+					for idx: int in indices:
+						var p2 := clip[idx]
+						# Drape on the terrain *mesh* triangle (not raw bilinear) so
+						# the area surface coincides with the ground it sits on.
+						var wy := hp.sample_mesh_height(p2.x, p2.y) + y_offset
+						st.set_normal(Vector3.UP)
+						st.add_vertex(Vector3(p2.x, wy, p2.y))
+						has_tris = true
 
 			cell_z = next_z
 		cell_x = next_x
