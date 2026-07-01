@@ -50,6 +50,10 @@ var _detailed: bool = false
 ## Height to hold the block above the road surface so it rests on the asphalt
 ## rather than sinking into it (half the body height).
 const _RIDE_HEIGHT := 0.5
+## Steepest grade (rise/run) the body will pitch to. Clamps the pitch so a near-
+## vertical jump between two path points (e.g. a mapping glitch or a very coarse
+## DEM) can't tip a car onto its nose. tan(~40 deg) ≈ 0.84 covers any real road.
+const _MAX_GRADE := 0.84
 
 ## Steering/throttle tuning for the DETAILED mode. The block is driven with
 ## direct velocity steering (not wheels) — it's a stub, so we keep it simple and
@@ -67,9 +71,11 @@ const _END_TOLERANCE := 1.5
 
 
 func _ready() -> void:
-	# Blocks shouldn't tip over or spin; lock rotation on the physics axes we
-	# don't drive and let _drive_detailed orient the body by hand.
-	axis_lock_angular_x = true
+	# Blocks shouldn't roll or spin on their own, but they DO need to pitch to
+	# follow the road grade (otherwise a rigid level box on a hill rests on one
+	# bumper with the other floating, and gravity crabs it sideways down the
+	# slope). So lock only roll (Z); leave pitch (X) free for _slope_basis to
+	# drive by hand, and yaw (Y) free for steering.
 	axis_lock_angular_z = true
 	# Start frozen; the manager decides the initial LOD right after spawning.
 	freeze = true
@@ -278,29 +284,73 @@ func _advance(step: float) -> void:
 		_distance = new_dist
 
 
-## Place the body exactly on the route at the current distance, facing forward.
+## Place the body exactly on the route at the current distance, facing forward
+## AND pitched along the road's grade — like a real car sitting on a hill.
 func _snap_to_path() -> void:
 	if _path_length <= 0.0:
 		return
 	var pos := _point_at_distance(_distance)
-	pos.y += _RIDE_HEIGHT
+	# Sample the point ahead *before* lifting `pos`, so the direction vector keeps
+	# the road's true rise/run and the car pitches with the grade.
 	var ahead := _point_at_distance(minf(_distance + 1.0, _path_length))
 	var dir := ahead - pos
-	dir.y = 0.0
+	pos.y += _RIDE_HEIGHT
 	global_position = pos
-	if dir.length_squared() > 0.0001:
-		look_at(pos + dir.normalized(), Vector3.UP)
+	var target: Variant = _slope_basis(dir)
+	if target != null:
+		global_transform.basis = target
 
 
-## Smoothly rotate the body to face `dir` (XZ) while in detailed mode.
+## Smoothly rotate the body to face `dir` while in detailed mode, pitching along
+## the road grade (the Y component of `dir` is honoured) without ever rolling.
 func _face_direction(dir: Vector3, delta: float) -> void:
+	var target_basis: Variant = _slope_basis(dir)
+	if target_basis == null:
+		return
+	# _slope_basis returns an orthonormalized rotation, and we orthonormalize the
+	# current basis too — both are required or slerp's internal quaternion cast
+	# rejects a non-rotation basis (the spammed "must be normalized" error).
+	var b := global_transform.basis.orthonormalized().slerp(
+		target_basis as Basis, clampf(delta * _STEER_LERP, 0.0, 1.0))
+	global_transform.basis = b
+
+
+## Orientation for a car travelling along `dir` on sloped ground: forward follows
+## the full 3D direction (so the body pitches up/down the grade), while the right
+## axis is kept horizontal so the car never rolls or twists sideways across the
+## slope. This mirrors how the road mesh is *draped* onto the terrain — it follows
+## the elevation without twisting the cross-section. Returns null for a degenerate
+## (zero-length) direction so callers can leave the current orientation untouched.
+##
+## Why not `look_at`/`Basis.looking_at` with a flattened dir: that forces the body
+## dead-level, so on a hill a rigid box touches the road at one edge (front bumper
+## down, rear floating) and gravity crabs it sideways down the grade. Keeping the
+## grade in `forward` lets the whole underside sit on the slope.
+func _slope_basis(dir: Vector3) -> Variant:
+	# Horizontal heading first: the yaw must come purely from the XZ travel
+	# direction so a steep segment can't wash out the compass heading.
 	var flat := Vector3(dir.x, 0.0, dir.z)
 	if flat.length_squared() < 0.0001:
-		return
-	var target_basis := Basis.looking_at(flat.normalized(), Vector3.UP)
-	var b := global_transform.basis.orthonormalized().slerp(
-		target_basis, clampf(delta * _STEER_LERP, 0.0, 1.0))
-	global_transform.basis = b
+		return null
+	flat = flat.normalized()
+	# Grade (rise over horizontal run), clamped so a near-vertical seam between
+	# two path points can never flip the car onto its nose.
+	var run := Vector2(dir.x, dir.z).length()
+	var slope := 0.0
+	if run > 0.0001:
+		slope = clampf(dir.y / run, -_MAX_GRADE, _MAX_GRADE)
+	# Forward tilted by the grade; right stays perfectly horizontal (no roll).
+	var forward := (flat + Vector3.UP * slope).normalized()
+	# Right = forward × UP keeps a RIGHT-HANDED basis (X × Y = Z). Using UP ×
+	# forward instead makes a reflection (determinant -1), which is NOT a rotation
+	# — the quaternion cast then rejects it and spams the "must be normalized"
+	# error every frame. Recompute up so all three axes are exactly orthonormal.
+	var right := forward.cross(Vector3.UP).normalized()
+	var up := right.cross(forward).normalized()
+	# Godot's convention: the body's forward is -Z, so column Z = -forward.
+	# Orthonormalize to scrub residual float drift, so the result is a valid
+	# rotation the physics server and Basis.slerp/quaternion cast will accept.
+	return Basis(right, up, -forward).orthonormalized()
 
 
 ## Arc-length distance (meters from the route start) of the point on the polyline
@@ -335,6 +385,12 @@ func _closest_distance(world_pos: Vector3) -> float:
 
 ## World point `dist` meters along the route, clamped to the polyline. Linear
 ## interpolation between the two bracketing points.
+##
+## Distance is measured in the XZ (ground) plane, NOT full 3D, so it agrees with
+## _closest_distance (which projects onto XZ). Mixing the two — 3D arc length here
+## but XZ projection there — made the look-ahead target and the derived progress
+## disagree on slopes, which pulled the car off the centreline (the "driving
+## sideways" on hills). The interpolated point still carries the correct 3D Y.
 func _point_at_distance(dist: float) -> Vector3:
 	if _path.size() == 0:
 		return global_position
@@ -342,7 +398,7 @@ func _point_at_distance(dist: float) -> Vector3:
 		return _path[0]
 	var remaining := dist
 	for i: int in range(_path.size() - 1):
-		var seg := _path[i].distance_to(_path[i + 1])
+		var seg := _xz_distance(_path[i], _path[i + 1])
 		if remaining <= seg or i == _path.size() - 2:
 			if seg <= 0.0001:
 				return _path[i + 1]
@@ -352,8 +408,15 @@ func _point_at_distance(dist: float) -> Vector3:
 	return _path[_path.size() - 1]
 
 
+## Horizontal (ground-plane) distance between two world points. Slope is carried
+## by Y separately; arc length along a route is reckoned on the ground so it lines
+## up with the XZ steering/projection math.
+static func _xz_distance(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z))
+
+
 static func _polyline_length(points: PackedVector3Array) -> float:
 	var total := 0.0
 	for i: int in range(points.size() - 1):
-		total += points[i].distance_to(points[i + 1])
+		total += _xz_distance(points[i], points[i + 1])
 	return total
