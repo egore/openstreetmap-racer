@@ -340,6 +340,41 @@ func test_segment_ids_are_unique_across_split_way() -> void:
 		assert_object(net.find_road(road.segment_id)).is_same(road)
 
 
+func test_segment_ids_are_stable_across_rebuilds() -> void:
+	# Streaming a country rebuilds the graph around the moving player. A road that
+	# reappears in the rebuilt graph must keep the SAME segment_id so a car
+	# already driving it stays valid (find_road) instead of being orphaned and
+	# respawned every rebuild. This is the property the TrafficManager relies on.
+	var data := OSMParser.OSMData.new()
+	_add_node(data, 1, Vector3(0, 0, 0))
+	_add_node(data, 2, Vector3(100, 0, 0))
+	_add_node(data, 3, Vector3(200, 0, 0))
+	_add_node(data, 4, Vector3(100, 0, 100))
+	_add_way(data, 10, [1, 2, 3])
+	_add_way(data, 20, [2, 4])
+
+	var first := _net(data)
+	var ids_first: Dictionary = {}   # way_id:start:end -> segment_id
+	for road: TrafficRoadNetwork.Road in first.get_roads():
+		ids_first["%d:%d:%d" % [road.way_id, road.start_node, road.end_node]] = road.segment_id
+
+	# Rebuild from the same data (simulating a re-collect around the player).
+	var second := _net(data)
+	for road: TrafficRoadNetwork.Road in second.get_roads():
+		var key := "%d:%d:%d" % [road.way_id, road.start_node, road.end_node]
+		assert_bool(ids_first.has(key)).override_failure_message("same road present after rebuild").is_true()
+		assert_int(road.segment_id) \
+			.override_failure_message("segment_id stable across rebuild for %s" % key) \
+			.is_equal(ids_first[key])
+
+
+func test_segment_id_direction_independent() -> void:
+	# A segment and its reverse (same physical span, endpoints swapped) hash to
+	# the same id, so orientation never changes a road's identity.
+	assert_int(TrafficRoadNetwork._segment_id_for(10, 1, 2)) \
+		.is_equal(TrafficRoadNetwork._segment_id_for(10, 2, 1))
+
+
 # ─── Rolling route plan (long-term intention) ────────────────────────────────
 #
 # plan_route walks the graph a few segments ahead so a car commits to a path

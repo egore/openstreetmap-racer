@@ -43,6 +43,12 @@ extends Node3D
 ## The tile manager to pull parsed OSM data from.
 @export var tile_manager_path: NodePath
 
+## How far the player must move from the last network-build center before the
+## drivable graph is rebuilt around the new position. Keeps the graph following
+## the player when streaming a country (where the whole map is never resident)
+## without rebuilding every frame. Zero-cost on the single-file path too.
+const _NETWORK_REBUILD_THRESHOLD := 120.0
+
 ## Packed scene for a single traffic car (the stub block).
 const TRAFFIC_CAR_SCENE := preload("res://scenes/traffic_car.tscn")
 
@@ -71,6 +77,11 @@ var _routes: Dictionary = {}
 ## re-planning is cheap and traffic still spreads out over the network.
 const _PLAN_AHEAD := 6
 
+## World position the current road graph was built around, and whether a graph
+## has been built at all. Used to decide when to rebuild as the player drives.
+var _network_center: Vector3 = Vector3.ZERO
+var _network_built: bool = false
+
 
 func _ready() -> void:
 	_rng.randomize()
@@ -83,25 +94,65 @@ func _ready() -> void:
 	if _tile_manager == null:
 		push_warning("TrafficManager: no tile manager wired; traffic disabled")
 		return
-	# Build the network as soon as OSM data exists; otherwise wait for the signal
-	# (mirrors how main.gd handles the spawn timing).
-	var data := _tile_manager.get_osm_data()
-	if data != null:
-		_on_data_loaded(data)
+	# Build the graph around the player as soon as the tile source is ready;
+	# otherwise wait for the signal (mirrors how main.gd handles spawn timing).
+	# The network is built from the region around the car (not the whole map) so
+	# a streamed country works — see _rebuild_network_around.
+	if _tile_manager.is_data_ready():
+		_on_data_loaded(null)
 	else:
 		_tile_manager.data_loaded.connect(_on_data_loaded)
 
 
-func _on_data_loaded(osm_data: OSMParser.OSMData) -> void:
+func _on_data_loaded(_osm_data: OSMParser.OSMData) -> void:
+	# Build the initial graph around wherever the car currently is. If the car
+	# isn't wired yet, defer to the first _physics_process, which will build once
+	# a center is available.
+	if _car != null:
+		_rebuild_network_around(_car.global_position)
+		_refresh_population()
+
+
+## (Re)build the drivable road graph from the ways within a radius of `center`,
+## pulled from the streaming tile source. Covers a little beyond recycle_radius
+## so a car flowing to the edge still finds connected roads before the next
+## rebuild. Cars whose road no longer exists in the fresh graph are unrouted so
+## the next refresh recycles them onto a nearby road.
+func _rebuild_network_around(center: Vector3) -> void:
+	# Reach past recycle_radius so continuations near the edge still connect, and
+	# give the plan-ahead room to resolve. Clamped to a sane floor.
+	var build_radius := maxf(recycle_radius + active_radius, 400.0)
+	var osm_data := _tile_manager.collect_osm_near(center, build_radius)
 	_network.build(osm_data)
-	print("TrafficManager: %d drivable roads, total capacity %d" % [
+	_network_center = center
+	_network_built = true
+	# Drop routes for cars whose segment vanished from the rebuilt graph (roads
+	# just outside the new region). They keep driving their cached polyline this
+	# frame; _refresh_population recycles them onto a live road next tick.
+	for c: TrafficCar in _cars:
+		var wid := c.current_way_id()
+		if wid != -1 and _network.find_road(wid) == null:
+			_routes.erase(c.get_instance_id())
+	print("TrafficManager: %d drivable roads near player, total capacity %d" % [
 		_network.road_count(), _network.total_capacity()])
-	# Populate immediately so cars are present the moment the world appears.
-	_refresh_population()
 
 
 func _physics_process(delta: float) -> void:
-	if _network.road_count() == 0 or _car == null:
+	if _car == null:
+		return
+
+	# Keep the drivable graph centered on the player: rebuild the region graph
+	# whenever the player has moved far enough. On a small single-file map the
+	# build radius covers the whole area so this is effectively the classic
+	# once-built graph; on a streamed country it follows the player. The first
+	# build may be deferred here if the car wasn't wired yet at data-load time.
+	if _tile_manager != null and _tile_manager.is_data_ready():
+		if not _network_built \
+				or _car.global_position.distance_to(_network_center) > _NETWORK_REBUILD_THRESHOLD:
+			_rebuild_network_around(_car.global_position)
+			_refresh_population()
+
+	if _network.road_count() == 0:
 		return
 	# Flow every car that reached the end of its road onto a connected road *this*
 	# frame, so it rolls through the junction with no visible pause or teleport.

@@ -11,7 +11,7 @@ extends Control
 
 var _car: VehicleBody3D = null
 var _tile_manager: OSMTileManager = null
-var _osm_data: OSMParser.OSMData = null
+var _data_ready: bool = false
 
 # Cached draw data for roads/waterways/buildings within a large radius
 var _cached_road_segments: Array = []   # Array of { points: PackedVector3Array, highway: String }
@@ -72,19 +72,19 @@ func _resolve_nodes() -> void:
 	if tile_manager_node_path and _tile_manager == null:
 		_tile_manager = get_node_or_null(tile_manager_node_path) as OSMTileManager
 		if _tile_manager:
-			# Pull data if it's already available, otherwise wait for the signal.
-			_osm_data = _tile_manager.get_osm_data()
-			if _osm_data == null and not _tile_manager.data_loaded.is_connected(_on_data_loaded):
+			# Pull readiness if data is already available, else wait for the signal.
+			_data_ready = _tile_manager.is_data_ready()
+			if not _data_ready and not _tile_manager.data_loaded.is_connected(_on_data_loaded):
 				_tile_manager.data_loaded.connect(_on_data_loaded)
 
 
-func _on_data_loaded(osm_data: OSMParser.OSMData) -> void:
-	_osm_data = osm_data
+func _on_data_loaded(_osm_data: OSMParser.OSMData) -> void:
+	_data_ready = true
 	_cached_road_segments.clear()  # force a rebuild on the next frame
 
 
 func _process(_delta: float) -> void:
-	if _car == null or _osm_data == null:
+	if _car == null or not _data_ready:
 		_resolve_nodes()
 		return
 	var car_pos := _car.global_position
@@ -96,27 +96,21 @@ func _process(_delta: float) -> void:
 
 func _rebuild_cache(center: Vector3) -> void:
 	_cache_center = center
-	var cache_radius := map_radius * 3.0
 	_cached_road_segments.clear()
 	_cached_waterway_segments.clear()
 	_cached_building_outlines.clear()
 
-	if _osm_data == null:
+	if _tile_manager == null:
 		return
 
-	for way: OSMParser.OSMWay in _osm_data.ways.values():
-		var points := _get_way_points(way)
-		if points.is_empty():
-			continue
-
-		var any_in_range := false
-		for p: Vector3 in points:
-			if Vector2(p.x - center.x, p.z - center.z).length() < cache_radius:
-				any_in_range = true
-				break
-		if not any_in_range:
-			continue
-
+	# Pull ways near the car from the same tile source the 3D world streams from,
+	# so the minimap stays consistent with what's rendered (and, on the disk
+	# streaming path, the whole country is never iterated). The 3.0x radius keeps
+	# a margin so features don't pop in at the minimap edge.
+	var cache_radius := map_radius * 3.0
+	for entry: Dictionary in _tile_manager.collect_ways_near(center, cache_radius):
+		var way: OSMParser.OSMWay = entry["way"]
+		var points: PackedVector3Array = entry["points"]
 		if way.tags.has("highway"):
 			_cached_road_segments.append({
 				"points": points,
@@ -129,14 +123,6 @@ func _rebuild_cache(center: Vector3) -> void:
 			})
 		elif way.tags.has("building"):
 			_cached_building_outlines.append(points)
-
-
-func _get_way_points(way: OSMParser.OSMWay) -> PackedVector3Array:
-	var pts := PackedVector3Array()
-	for nid: int in way.node_ids:
-		if _osm_data.nodes.has(nid):
-			pts.append(_osm_data.nodes[nid].local_pos)
-	return pts
 
 
 func _draw() -> void:

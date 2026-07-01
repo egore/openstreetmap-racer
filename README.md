@@ -30,7 +30,7 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 11. **Headlights** (`scripts/headlights.gd`) — A self-contained component under the car holding two forward-facing `SpotLight3D` beams and the glowing lamp faces. It exposes a single `set_on(bool)` intent and fades the beams + lamp emission up/down like real bulbs. `main.gd` (the composition root) connects the sky controller's `day_night_changed` signal to it, so the headlights **switch on automatically after dark and off by day** — the car owns the lights, the sky controller decides when it's dark, and neither knows about the other.
 
-12. **Traffic** (`scripts/traffic/`) — AI cars that drive along the OSM roads around the player. `TrafficRoadNetwork` flattens every drivable `highway=*` way into a list of centreline polylines carrying a width and a width-scaled car *capacity* (**the larger the street, the more cars**), and forms a **road graph** by **splitting every way at its junction nodes** (any node shared by two or more ways) and indexing the resulting junction-to-junction *segments* by their endpoint OSM node ids — so a street that crosses another in the *middle* of both ways actually connects there, not just where way endpoints happen to coincide. Direction is honoured — `oneway=*` and the implicit one-way flow of `junction=roundabout`/`circular` — so cars never drive against traffic. `TrafficSpawnPolicy` picks the roads within a radius of the player and, widest-first, hands out a car budget so arterials stay busy when the global cap is tight. `TrafficManager` (a scene node wired to the car and tile manager) pools `TrafficCar` instances and gives each car a **rolling multi-segment route plan** (`TrafficRoadNetwork.plan_route`) — a *long-term intention* a few junctions ahead — so it commits to a coherent path rather than re-rolling the dice at every corner (the aimless wiggling of the first cut). When a car reaches the end of its road it **continues onto the next segment in its plan**, refilling the plan when it runs out; each hop still weights toward the straightest through-road and rejects hairpin U-turns unless it's the only exit — so cars flow segment-to-segment with no teleport (a detailed car keeps its exact position and momentum across the seam). In view, each block is steered by a closed-loop pursuit controller that re-derives its true progress by projecting its body position onto the road polyline each frame and aims at a look-ahead point down the road — so it tracks the centreline smoothly through curves and roundabouts instead of oscillating, and a bump just gets corrected. The whole system pauses with the scene. A car only gets recycled onto a fresh nearby road when it hits a genuine dead end or drifts out of range, so traffic is *consistently present near the player* rather than globally persistent. Each car has two levels of detail: **in view it is a full physics body** the player can collide with; **out of view it drops to a cheap kinematic mover** that just advances a scalar distance along its polyline, keeping a whole city of cars affordable. Cars are stub coloured blocks for now (`scenes/traffic_car.tscn`); tune `max_cars`, `active_radius`, and `detail_distance` on the `TrafficManager` node. The road-network, graph-traversal and spawn-policy logic is pure and unit-tested (`tests/test_traffic_*.gd`).
+12. **Traffic** (`scripts/traffic/`) — AI cars that drive along the OSM roads around the player. `TrafficRoadNetwork` flattens every drivable `highway=*` way into a list of centreline polylines carrying a width and a width-scaled car *capacity* (**the larger the street, the more cars**), and forms a **road graph** by **splitting every way at its junction nodes** (any node shared by two or more ways) and indexing the resulting junction-to-junction *segments* by their endpoint OSM node ids — so a street that crosses another in the *middle* of both ways actually connects there, not just where way endpoints happen to coincide. Direction is honoured — `oneway=*` and the implicit one-way flow of `junction=roundabout`/`circular` — so cars never drive against traffic. `TrafficSpawnPolicy` picks the roads within a radius of the player and, widest-first, hands out a car budget so arterials stay busy when the global cap is tight. `TrafficManager` (a scene node wired to the car and tile manager) pools `TrafficCar` instances and gives each car a **rolling multi-segment route plan** (`TrafficRoadNetwork.plan_route`) — a *long-term intention* a few junctions ahead — so it commits to a coherent path rather than re-rolling the dice at every corner (the aimless wiggling of the first cut). When a car reaches the end of its road it **continues onto the next segment in its plan**, refilling the plan when it runs out; each hop still weights toward the straightest through-road and rejects hairpin U-turns unless it's the only exit — so cars flow segment-to-segment with no teleport (a detailed car keeps its exact position and momentum across the seam). In view, each block is steered by a closed-loop pursuit controller that re-derives its true progress by projecting its body position onto the road polyline each frame and aims at a look-ahead point down the road — so it tracks the centreline smoothly through curves and roundabouts instead of oscillating, and a bump just gets corrected. The whole system pauses with the scene. A car only gets recycled onto a fresh nearby road when it hits a genuine dead end or drifts out of range, so traffic is *consistently present near the player* rather than globally persistent. Each car has two levels of detail: **in view it is a full physics body** the player can collide with; **out of view it drops to a cheap kinematic mover** that just advances a scalar distance along its polyline, keeping a whole city of cars affordable. Cars are stub coloured blocks for now (`scenes/traffic_car.tscn`); tune `max_cars`, `active_radius`, and `detail_distance` on the `TrafficManager` node. The graph is **rebuilt from the region around the player** (via the same tile source the world streams from), so traffic works identically whether the map is a single `.osm` or a streamed country — and segment ids are derived from each road's way + endpoint nodes so they stay **stable across rebuilds**, letting cars keep driving across a rebuild instead of respawning. The road-network, graph-traversal and spawn-policy logic is pure and unit-tested (`tests/test_traffic_*.gd`).
 
 13. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. A lamp's body can be refined by the OSM `support=*` subtag: `support=bent_mast` swaps the placeholder pole for the `street_lamp-bent_mast.blend` model, whose built-in mesh named `light` becomes the glowing head (its material is driven for the glow and the cast light is placed at that mesh's centre, so the bent arm is correctly lit out over the road). Unknown or absent `support` values fall back to the placeholder pole. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
 
@@ -52,6 +52,10 @@ The tile manager tracks which tile the camera is in. When the camera crosses int
 
 ### Getting Map Data
 
+There are two ways to supply map data, and the game auto-detects which is present:
+
+**A) Single `.osm` file (simplest, small areas)**
+
 1. Go to [openstreetmap.org/export](https://www.openstreetmap.org/export)
 2. Select your area of interest (keep it reasonable — a few km² works well)
 3. Click "Export" to download a `.osm` file
@@ -61,6 +65,51 @@ Alternatively, use [JOSM](https://josm.openstreetmap.de/) for larger exports, or
 ```
 https://overpass-api.de/api/map?bbox=8.46,49.48,8.48,49.49
 ```
+
+The whole file is parsed into memory at startup, so this works well up to ~10 km².
+
+**B) Streaming tile cache from a whole country (large areas)**
+
+For anything bigger than a single `.osm` can hold in RAM, download a country
+from [Geofabrik](https://download.geofabrik.de/) and bake it into a streaming
+tile cache with `tools/bake_osm_tiles.py`. The game then streams small,
+self-contained per-tile files from `data/tiles/` as you drive, instead of
+loading everything up front.
+
+The bake clips the country to your bounding box using the **`osmium`
+command-line tool** (fast C++ — a whole-country `.pbf` clips in seconds rather
+than minutes), so install it first:
+
+```bash
+brew install osmium-tool      # macOS
+apt install osmium-tool       # Debian/Ubuntu
+```
+
+Then:
+
+```bash
+# See the resolved Geofabrik URL for a country (no download):
+uv run tools/bake_osm_tiles.py --country europe/germany --list
+
+# Download the country and bake the bounding box you want to drive
+# (min_lon min_lat max_lon max_lat):
+uv run tools/bake_osm_tiles.py \
+    --country europe/germany \
+    --bounds 7.5900 50.3400 7.6400 50.3700
+
+# Or reuse a .pbf you already downloaded:
+uv run tools/bake_osm_tiles.py --pbf germany-latest.osm.pbf \
+    --bounds 7.5900 50.3400 7.6400 50.3700
+```
+
+This writes `data/tiles/manifest.json` plus one `<x>_<z>.osm` per tile. When that
+manifest is present the game **streams from the cache** and ignores `data/map.osm`;
+delete `data/tiles/` to go back to the single-file path. The tile size, center,
+and projection are recorded in the manifest and adopted verbatim by the game, so
+the baker and the renderer can't disagree about where a feature lands.
+
+> Note: DEM terrain is still baked map-wide with `tools/bake_dem.py` (a single
+> heightmap over the whole cache). Per-tile DEM is a future enhancement.
 
 ### Terrain Elevation (optional)
 
@@ -222,9 +271,15 @@ is positioned by the model, not hard-coded. `support=bent_mast` →
 
 ### Scaling Up
 
-For larger maps, consider:
+The single `data/map.osm` path is parsed whole into RAM, so it works well up to
+~10 km². For anything larger — up to a whole country — use the **streaming tile
+cache** (see *Getting Map Data → B*): `tools/bake_osm_tiles.py` clips a Geofabrik
+`.osm.pbf` to your chosen bounding box and bakes it into self-contained per-tile
+`.osm` files under `data/tiles/`, which the game loads on demand as the camera
+moves (`scripts/osm_tile_source.gd`, `DiskTileSource`). Only the tiles near the
+player are ever resident, so memory stays flat regardless of the total map size.
+
+Further options for even larger or live datasets:
 - A **PostGIS** database with `osm2pgsql` imported data, queried via GDScript HTTP or GDExtension
 - The **Overpass API** for on-the-fly tile fetching
-- Streaming from **`.osm.pbf`** files with a custom C++ GDExtension
-
-The current `.osm` file approach works well for areas up to ~10 km².
+- A binary per-tile format (instead of `.osm` XML) to shrink the cache on disk

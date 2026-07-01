@@ -87,6 +87,20 @@ func test_missing_files_flat() -> void:
 		.override_failure_message("flat sample is 0").is_equal_approx(0.0, 0.0001)
 
 
+## A DEM whose coverage does not contain the dataset center is rejected (flat),
+## so a stale heightmap left in data/ from a different region can't drape the
+## whole world on a bogus, clamped elevation. This is what kept a Netherlands
+## streaming cache from picking up an old Koblenz map.dem.
+func test_dem_for_wrong_region_is_rejected() -> void:
+	var hp := HeightProvider.new()
+	# Center far outside the fixture's [8.0,49.0]..[8.02,49.02] coverage.
+	var ok := hp.load_from_files(51.81, 3.92, _tmp_png, _tmp_json)
+	assert_bool(ok) \
+		.override_failure_message("DEM not covering the center is refused").is_false()
+	assert_bool(hp.is_ready()) \
+		.override_failure_message("provider stays flat for a wrong-region DEM").is_false()
+
+
 ## The west edge decodes to MIN_ELEV, the east edge to MAX_ELEV.
 func test_corner_elevations() -> void:
 	var hp := _load()
