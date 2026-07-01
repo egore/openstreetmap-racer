@@ -1,0 +1,25 @@
+[gd_scene load_steps=5 format=3 uid="uid://c8trafficcar01"]
+
+[ext_resource type="Script" path="res://scripts/traffic/traffic_car.gd" id="1_tcar"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_tcar"]
+size = Vector3(1.8, 1.0, 4.0)
+
+[sub_resource type="StandardMaterial3D" id="Material_tcar"]
+albedo_color = Color(0.75, 0.2, 0.2, 1)
+metallic = 0.1
+roughness = 0.6
+
+[sub_resource type="BoxMesh" id="BoxMesh_tcar"]
+material = SubResource("Material_tcar")
+size = Vector3(1.8, 1.0, 4.0)
+
+[node name="TrafficCar" type="RigidBody3D"]
+mass = 1000.0
+script = ExtResource("1_tcar")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_tcar")
+
+[node name="Collision" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_tcar")
