@@ -44,7 +44,11 @@ const ASSET_DEFS := {
 			},
 		},
 		"bus_stop": { "color": Color(0.2, 0.4, 0.8), "size": Vector3(0.8, 2.5, 0.3), "y_offset": 1.25, "label": "Bus Stop", "scene": "res://scenes/models/bus_stop.blend" },
-		"crossing": { "color": Color(1.0, 1.0, 1.0), "size": Vector3(2.0, 0.05, 2.0), "y_offset": 0.025, "label": "Crossing" },
+		# highway=crossing is painted onto the road surface by the asphalt shader
+		# (zebra band, see RoadMarkingSpec) rather than a flat placeholder box, so
+		# it is intentionally absent here — a box would double up the marking.
+		# highway=stop / give_way keep their vertical SIGN (a complement to, not a
+		# replacement for, the painted stop/give-way line on the carriageway).
 		"stop": { "color": Color(0.9, 0.1, 0.1), "size": Vector3(0.5, 2.0, 0.05), "y_offset": 1.0, "label": "Stop Sign" },
 		"give_way": { "color": Color(0.9, 0.9, 0.1), "size": Vector3(0.5, 2.0, 0.05), "y_offset": 1.0, "label": "Give Way", "scene": "res://scenes/models/give_way.blend" },
 	},
