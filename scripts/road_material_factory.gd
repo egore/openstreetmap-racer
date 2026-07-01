@@ -23,17 +23,99 @@ const UNPAVED_TYPES := {
 	"pedestrian": true,
 }
 
+## Draw-order rank per highway class (higher = painted LATER = on top). Roads are
+## kept full-length and overlap at junctions (the Mapnik model); because the
+## asphalt does not write depth (see the shader's depth_draw_never), overlapping
+## coplanar road quads are resolved purely by this order — so a bigger/more
+## important road always paints over the smaller one at a junction, exactly like
+## Mapnik draws all casings then fills big-roads-last. Unpaved/soft surfaces rank
+## below every paved road so a footway never paints over a carriageway.
+##
+## Values are used verbatim as Material.render_priority (Godot range -128..127).
+const ROAD_RENDER_PRIORITY := {
+	"path": 1,
+	"footway": 1,
+	"cycleway": 2,
+	"track": 2,
+	"pedestrian": 3,
+	"service": 5,
+	"living_street": 6,
+	"unclassified": 7,
+	"residential": 8,
+	"tertiary_link": 9,
+	"tertiary": 10,
+	"secondary_link": 11,
+	"secondary": 12,
+	"primary_link": 13,
+	"primary": 14,
+	"trunk_link": 15,
+	"trunk": 16,
+	"motorway_link": 17,
+	"motorway": 18,
+}
+## Fallback priority for a highway class not in the table above.
+const DEFAULT_RENDER_PRIORITY := 7
+
+
+## Draw-order rank for a highway class (higher paints on top). Exposed so the
+## builder can keep the road MESH's render_priority in sync with the material
+## (SurfaceTool bakes the material's priority, but the MeshInstance can override).
+static func render_priority_for(highway_type: String) -> int:
+	return ROAD_RENDER_PRIORITY.get(highway_type, DEFAULT_RENDER_PRIORITY)
+
 ## Returns the material for a road of the given highway type, tinted `color`.
 ## Paved roads receive a procedural-asphalt ShaderMaterial; unpaved/soft
 ## surfaces fall back to a matte StandardMaterial3D.
-static func create_road_material(highway_type: String, color: Color) -> Material:
+##
+## When a `lane_spec` and `road_width`/`road_length` are supplied the asphalt
+## shader also paints procedural lane markings (centre line, dashed dividers,
+## edge lines) from the ribbon UVs — see scripts/shaders/asphalt.gdshader and
+## RoadLaneSpec. Passing null keeps a plain (unmarked) asphalt surface.
+static func create_road_material(
+		highway_type: String,
+		color: Color,
+		lane_spec: RoadLaneSpec = null,
+		road_width: float = 0.0,
+		road_length: float = 0.0,
+) -> Material:
+	var priority := render_priority_for(highway_type)
+
 	if UNPAVED_TYPES.has(highway_type):
 		var plain := StandardMaterial3D.new()
 		plain.albedo_color = color
 		plain.roughness = 1.0
+		# Match the asphalt's Mapnik-style layering: full-length overlapping
+		# ribbons, resolved by draw order rather than depth, so a footway
+		# crossing a road doesn't z-fight it (and stays below it — lower rank).
+		plain.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		plain.render_priority = priority
 		return plain
 
 	var mat := ShaderMaterial.new()
 	mat.shader = ASPHALT_SHADER
 	mat.set_shader_parameter("base_color", color)
+	# render_priority orders overlapping (depth-write-disabled) roads so bigger
+	# classes paint last/on-top at junctions — the 3D analogue of Mapnik's
+	# casing-then-fill layer order.
+	mat.render_priority = priority
+	_apply_lane_markings(mat, lane_spec, road_width, road_length)
 	return mat
+
+
+## Push a RoadLaneSpec into the asphalt shader's marking uniforms. When the spec
+## is null or unmarked, markings stay disabled and the road is plain asphalt.
+static func _apply_lane_markings(
+		mat: ShaderMaterial,
+		lane_spec: RoadLaneSpec,
+		road_width: float,
+		road_length: float,
+) -> void:
+	if lane_spec == null or not lane_spec.marked or road_width <= 0.0:
+		mat.set_shader_parameter("markings_enabled", 0.0)
+		return
+	mat.set_shader_parameter("markings_enabled", 1.0)
+	mat.set_shader_parameter("road_width", road_width)
+	mat.set_shader_parameter("road_length", road_length)
+	mat.set_shader_parameter("lane_count", float(lane_spec.lane_count))
+	mat.set_shader_parameter("forward_lanes", float(lane_spec.forward_lanes))
+	mat.set_shader_parameter("one_way", 1.0 if lane_spec.one_way else 0.0)

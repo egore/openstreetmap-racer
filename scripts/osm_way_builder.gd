@@ -75,11 +75,6 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	if points.size() < 2:
 		return null
 
-	# Subdivide long segments so the ribbon follows the terrain.
-	if terrain_grid_step > 0.0:
-		points = PolygonUtils.subdivide_polyline_to_terrain(
-			points, height_provider, terrain_grid_step)
-
 	var highway_type: String = way.tags.get("highway", "unclassified")
 	var width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
 	var color: Color = ROAD_COLORS.get(highway_type, DEFAULT_COLOR)
@@ -96,6 +91,27 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		if explicit_width > 0.0:
 			width = explicit_width
 
+	# Roads are kept FULL-LENGTH: where ways share a node they overlap and merge
+	# into one connected surface (the Mapnik model), rather than being trimmed
+	# back — which left gaps even where roads simply connect. The z-fighting that
+	# coplanar overlap would otherwise cause is handled at DRAW time instead: the
+	# asphalt material does not write depth and carries a per-class
+	# render_priority (RoadMaterialFactory), so a bigger road paints on top of a
+	# smaller one at a junction, exactly like Mapnik draws casings then fills.
+
+	# Subdivide long segments so the ribbon follows the terrain.
+	if terrain_grid_step > 0.0:
+		points = PolygonUtils.subdivide_polyline_to_terrain(
+			points, height_provider, terrain_grid_step)
+
+	# Lane layout parsed from OSM tags (lanes, lanes:forward/backward, oneway).
+	# Drives the procedural markings painted by the asphalt shader.
+	var lane_spec := RoadLaneSpec.from_tags(highway_type, way.tags)
+	# Cumulative along-road distance at each point, plus total length, so the
+	# ribbon UVs (metres travelled) and the shader's end-fade line up.
+	var along_at := _cumulative_along(points)
+	var road_length: float = along_at[along_at.size() - 1] if along_at.size() > 0 else 0.0
+
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Road_%d" % way.id
 
@@ -104,8 +120,10 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 	# Asphalt for paved roads (procedural noise grain + faked normal bump),
 	# matte fallback for unpaved/soft surfaces. The shader samples noise in
-	# world-space XZ, so no per-vertex UVs are required on the ribbon.
-	var mat := RoadMaterialFactory.create_road_material(highway_type, color)
+	# world-space XZ; lane markings additionally use the ribbon UVs we emit
+	# below (UV.x = metres along the road, UV.y = fraction across it).
+	var mat := RoadMaterialFactory.create_road_material(
+		highway_type, color, lane_spec, width, road_length)
 	st.set_material(mat)
 
 	var sidewalk_st := SurfaceTool.new()
@@ -163,6 +181,16 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		var r1: Vector3 = right_edge[i + 1]
 		var l1: Vector3 = left_edge[i + 1]
 
+		# Per-segment UV frame: project any world XZ onto this segment's
+		# centreline to get metres travelled (UV.x) and the across-road fraction
+		# (UV.y, 0 = left edge, 1 = right edge). Built as a Callable so the
+		# terrain-conforming clip can UV its (unpredictable) output vertices too.
+		var c0 := points[i]
+		var c1 := points[i + 1]
+		var uv_fn := _segment_uv_fn(
+			Vector2(c0.x, c0.z), Vector2(c1.x, c1.z),
+			along_at[i], width)
+
 		if conform:
 			# Clip this segment's footprint to the terrain triangles and drape.
 			var quad := PackedVector2Array([
@@ -172,16 +200,20 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 				Vector2(l1.x, l1.z),
 			])
 			PolygonUtils.emit_terrain_conforming_quad(
-				st, quad, height_provider, terrain_grid_step, ROAD_Y)
+				st, quad, height_provider, terrain_grid_step, ROAD_Y, uv_fn)
 		else:
 			# Flat world: a single quad. Winding matches the original
 			# (left,right,right / left,left,right) with an upward normal.
-			st.set_normal(Vector3.UP); st.add_vertex(l0)
-			st.set_normal(Vector3.UP); st.add_vertex(r1)
-			st.set_normal(Vector3.UP); st.add_vertex(r0)
-			st.set_normal(Vector3.UP); st.add_vertex(l0)
-			st.set_normal(Vector3.UP); st.add_vertex(l1)
-			st.set_normal(Vector3.UP); st.add_vertex(r1)
+			var uv_l0 := uv_fn.call(Vector2(l0.x, l0.z)) as Vector2
+			var uv_r0 := uv_fn.call(Vector2(r0.x, r0.z)) as Vector2
+			var uv_r1 := uv_fn.call(Vector2(r1.x, r1.z)) as Vector2
+			var uv_l1 := uv_fn.call(Vector2(l1.x, l1.z)) as Vector2
+			st.set_uv(uv_l0); st.set_normal(Vector3.UP); st.add_vertex(l0)
+			st.set_uv(uv_r1); st.set_normal(Vector3.UP); st.add_vertex(r1)
+			st.set_uv(uv_r0); st.set_normal(Vector3.UP); st.add_vertex(r0)
+			st.set_uv(uv_l0); st.set_normal(Vector3.UP); st.add_vertex(l0)
+			st.set_uv(uv_l1); st.set_normal(Vector3.UP); st.add_vertex(l1)
+			st.set_uv(uv_r1); st.set_normal(Vector3.UP); st.add_vertex(r1)
 
 		if has_left_sidewalk:
 			# Left edge outward direction: points away from road center (leftward)
@@ -201,6 +233,53 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 	mesh_instance.mesh = mesh
 	return mesh_instance
+
+
+# ─── Lane-marking UVs ─────────────────────────────────────────────────────────
+
+## Cumulative XZ distance travelled along the polyline at each point (index i is
+## the distance from points[0] to points[i]). along_at[0] == 0. Used so ribbon
+## UVs carry metres-along-road, consistent across segments and across the
+## terrain-conforming clip.
+func _cumulative_along(points: PackedVector3Array) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	out.resize(points.size())
+	if points.size() == 0:
+		return out
+	out[0] = 0.0
+	var acc := 0.0
+	for i: int in range(1, points.size()):
+		var dx := points[i].x - points[i - 1].x
+		var dz := points[i].z - points[i - 1].z
+		acc += sqrt(dx * dx + dz * dz)
+		out[i] = acc
+	return out
+
+
+## Build a Callable that maps a world-space XZ point to a ribbon UV for one road
+## segment running c0 -> c1 (centreline endpoints in XZ). UV.x is metres along
+## the whole road (along0 at c0, growing toward c1); UV.y is the fraction across
+## the carriageway (0 at the left edge, 1 at the right edge), clamped so clipped
+## terrain vertices slightly outside the quad still read as on-road.
+##
+## "Right" is (dir rotated -90°) = Vector2(-dir.y, dir.x) in XZ, matching the
+## miter offset convention (+offset = right edge) used when placing the edges.
+func _segment_uv_fn(c0: Vector2, c1: Vector2, along0: float, width: float) -> Callable:
+	var dir := c1 - c0
+	var seg_len := dir.length()
+	if seg_len < 0.0001:
+		return func(_p: Vector2) -> Vector2: return Vector2(along0, 0.5)
+	var udir := dir / seg_len
+	# Right-hand lateral in XZ (mirrors _miter_offset's Vector3(-fwd.z,0,fwd.x)).
+	var right := Vector2(-udir.y, udir.x)
+	var half_w := maxf(width * 0.5, 0.0001)
+	return func(p: Vector2) -> Vector2:
+		var rel := p - c0
+		var along := along0 + rel.dot(udir)
+		var across := rel.dot(right)
+		var frac := clampf(0.5 + across / (half_w * 2.0), 0.0, 1.0)
+		return Vector2(along, frac)
+
 
 ## Terrain elevation (meters) for a ribbon edge vertex at (x, z).
 ##

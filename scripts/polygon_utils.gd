@@ -349,15 +349,22 @@ static func subdivide_polyline_to_terrain(
 ##
 ## quad: 4 XZ corners (Vector2(x, z)) in order around the quad (winding is
 ## normalized internally). hp must be ready; grid_step must be > 0.
+## When `uv_fn` is a valid Callable it is invoked as uv_fn(Vector2(x, z)) -> Vector2
+## for every emitted vertex, and the result is set as the vertex UV before the
+## vertex is added. This lets callers attach along/across road coordinates that
+## survive the terrain clipping (used for procedural lane markings). Pass an
+## empty Callable to skip UVs entirely.
 static func emit_terrain_conforming_quad(
 		st: SurfaceTool,
 		quad: PackedVector2Array,
 		hp: HeightProvider,
 		grid_step: float,
 		y_offset: float,
+		uv_fn: Callable = Callable(),
 ) -> void:
 	if quad.size() < 3 or hp == null or not hp.is_ready() or grid_step <= 0.0:
 		return
+	var has_uv := uv_fn.is_valid()
 
 	# Bounding cell range the quad can touch.
 	var minx := INF
@@ -400,6 +407,7 @@ static func emit_terrain_conforming_quad(
 				# Fan-triangulate the clipped piece, draping each vertex.
 				var o := piece[0]
 				var o3 := Vector3(o.x, hp.sample_mesh_height(o.x, o.y) + y_offset, o.y)
+				var o_uv := (uv_fn.call(Vector2(o.x, o.y)) as Vector2) if has_uv else Vector2.ZERO
 				for k: int in range(1, piece.size() - 1):
 					var p1: Vector2 = piece[k]
 					var p2: Vector2 = piece[k + 1]
@@ -407,8 +415,14 @@ static func emit_terrain_conforming_quad(
 					var v2 := Vector3(p2.x, hp.sample_mesh_height(p2.x, p2.y) + y_offset, p2.y)
 					# Wind o, v2, v1 so the face normal points up (matches the
 					# road's Vector3.UP convention).
+					if has_uv:
+						st.set_uv(o_uv)
 					st.set_normal(Vector3.UP); st.add_vertex(o3)
+					if has_uv:
+						st.set_uv(uv_fn.call(Vector2(p2.x, p2.y)) as Vector2)
 					st.set_normal(Vector3.UP); st.add_vertex(v2)
+					if has_uv:
+						st.set_uv(uv_fn.call(Vector2(p1.x, p1.y)) as Vector2)
 					st.set_normal(Vector3.UP); st.add_vertex(v1)
 
 
