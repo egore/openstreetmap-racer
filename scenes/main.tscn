@@ -9,6 +9,7 @@
 [ext_resource type="Script" path="res://scripts/sky_controller.gd" id="7_skyctl"]
 [ext_resource type="Script" path="res://scripts/headlights.gd" id="8_headlights"]
 [ext_resource type="Script" path="res://scripts/street_lamp_lights.gd" id="9_lamps"]
+[ext_resource type="Script" path="res://scripts/traffic/traffic_manager.gd" id="10_traffic"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -89,6 +90,11 @@ script = ExtResource("9_lamps")
 [node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
 script = ExtResource("2_tile")
 street_lamp_lights_path = NodePath("../StreetLampLights")
+
+[node name="TrafficManager" type="Node3D" parent="." unique_id=1042673343]
+script = ExtResource("10_traffic")
+car_path = NodePath("../Car")
+tile_manager_path = NodePath("../OSMTileManager")
 
 [node name="Car" type="VehicleBody3D" parent="." unique_id=1077184071]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
