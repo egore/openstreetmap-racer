@@ -147,3 +147,129 @@ func test_closest_distance_clamps_past_end() -> void:
 	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, 0)]), 0.0)
 	# A point beyond the road end projects to the end (arc-length = length).
 	assert_float(car._closest_distance(Vector3(130, 0, 0))).is_equal_approx(100.0, 0.01)
+
+
+# ─── Slope orientation (the terrain-drape fix) ───────────────────────────────
+#
+# On a hill the car must sit *on* the road: pitch with the grade (nose up when
+# climbing) but never roll or twist across the slope, and never let a steep
+# segment corrupt its compass heading. It's the same drape the road mesh uses.
+# Before the fix the body was forced dead-level, so on a slope a rigid box rested
+# on one bumper with the other floating and gravity crabbed it sideways.
+
+func test_arc_length_is_measured_in_xz_not_3d() -> void:
+	# 100 m of horizontal run climbing 30 m. Arc length must be the ground run
+	# (100), not the 3D hypotenuse (~104.4), so it agrees with the XZ steering.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 30, 0)]), 0.0)
+	assert_float(car.path_length()).is_equal_approx(100.0, 0.001)
+
+
+func test_slope_orientation_pitches_with_grade() -> void:
+	# Climbing east at a 30 m / 100 m grade: the nose (-Z forward) should tilt up.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 30, 0)]), 40.0)
+	var fwd := -car.global_transform.basis.orthonormalized().z
+	# Forward points east (+X) and upward (+Y) on the climb.
+	assert_float(fwd.x).is_greater(0.0)
+	assert_float(fwd.y).is_greater(0.05)
+
+
+func test_slope_orientation_does_not_roll() -> void:
+	# However steep or curved, the car's right axis stays horizontal (no roll /
+	# no twist across the slope) — the property the road drape preserves too.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 30, 0)]), 40.0)
+	var right := car.global_transform.basis.orthonormalized().x
+	assert_float(right.y).is_equal_approx(0.0, 0.001)
+
+
+func test_slope_heading_stays_along_the_road() -> void:
+	# The XZ heading must follow the road even on a grade (a steep segment can't
+	# wash out the compass direction). Climbing east → forward's XZ is +X.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 30, 0)]), 40.0)
+	var fwd := -car.global_transform.basis.orthonormalized().z
+	var heading := Vector2(fwd.x, fwd.z).normalized()
+	assert_float(heading.x).is_equal_approx(1.0, 0.01)
+	assert_float(heading.y).is_equal_approx(0.0, 0.01)
+
+
+func test_flat_road_stays_level() -> void:
+	# Regression: on flat ground the car is still perfectly level (no spurious
+	# pitch introduced by the slope math).
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, 0)]), 40.0)
+	var fwd := -car.global_transform.basis.orthonormalized().z
+	var up := car.global_transform.basis.orthonormalized().y
+	assert_float(fwd.y).is_equal_approx(0.0, 0.001)
+	assert_float(up.y).is_equal_approx(1.0, 0.001)
+
+
+func test_extreme_grade_is_clamped() -> void:
+	# A near-vertical jump between two path points (mapping glitch / coarse DEM)
+	# must not tip the car onto its nose — pitch is clamped to a sane max grade.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(1, 100, 0)]), 0.5)
+	var fwd := -car.global_transform.basis.orthonormalized().z
+	# Even on an absurd wall, forward stays below ~40° (tan ≈ 0.84 → sin ≈ 0.64).
+	assert_float(fwd.y).is_less_equal(0.65)
+
+
+func test_slope_basis_is_a_valid_rotation() -> void:
+	# Regression: _slope_basis must return an orthonormal rotation basis. If it
+	# drifts out of tolerance, Basis.slerp's quaternion cast in _face_direction
+	# spams "must be normalized in order to be casted to a Quaternion" every
+	# physics frame. is_rotation() is exactly the predicate that cast checks.
+	var car := _make_car()
+	# A range of headings and grades, including diagonals where float drift bites.
+	# All have a non-degenerate XZ run, so all yield a basis (degenerate → null,
+	# which callers handle by leaving orientation untouched — see the guard).
+	var dirs := [
+		Vector3(1, 0.3, 0), Vector3(0.7, 0.7, 0.7), Vector3(-0.4, -0.9, 0.2),
+		Vector3(3, 5, -2), Vector3(10.0, 30.0, -10.0)]
+	for d: Vector3 in dirs:
+		var b: Variant = car._slope_basis(d)
+		assert_bool(b != null).override_failure_message(
+			"expected a basis for non-degenerate dir %s" % d).is_true()
+		var basis := b as Basis
+		# A valid rotation basis has determinant 1 and orthonormal axes — exactly
+		# what the quaternion cast requires. (is_rotation() isn't exposed to
+		# GDScript, so check its constituent properties directly.)
+		assert_float(basis.determinant()).override_failure_message(
+			"determinant for dir %s not 1" % d).is_equal_approx(1.0, 0.0001)
+		assert_float(basis.x.length()).is_equal_approx(1.0, 0.0001)
+		assert_float(basis.y.length()).is_equal_approx(1.0, 0.0001)
+		assert_float(basis.z.length()).is_equal_approx(1.0, 0.0001)
+		assert_float(basis.x.dot(basis.y)).is_equal_approx(0.0, 0.0001)
+		assert_float(basis.x.dot(basis.z)).is_equal_approx(0.0, 0.0001)
+		assert_float(basis.y.dot(basis.z)).is_equal_approx(0.0, 0.0001)
+		# And the cast that actually spams the error must succeed silently.
+		var _q := basis.get_rotation_quaternion()
+
+
+func test_detailed_drive_on_slope_keeps_valid_basis() -> void:
+	# End-to-end regression for the "must be normalized ... Quaternion" spam:
+	# drive a detailed car along a climbing route for several physics frames
+	# (exercising _face_direction's slerp each frame) and confirm the resulting
+	# orientation is still a clean rotation.
+	var floor_body := StaticBody3D.new()
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(600, 2, 600)
+	col.shape = box
+	floor_body.add_child(col)
+	add_child(floor_body)
+	auto_free(floor_body)
+	var angle := atan2(30.0, 100.0)
+	floor_body.rotation = Vector3(0, 0, -angle)
+
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 30, 0)]), 5.0)
+	car.set_detailed(true)
+	for i in range(30):
+		await get_tree().physics_frame
+	var basis := car.global_transform.basis.orthonormalized()
+	assert_float(basis.determinant()).is_equal_approx(1.0, 0.0001)
+	# No roll survived the drive: right axis still horizontal.
+	assert_float(basis.x.y).is_equal_approx(0.0, 0.01)
