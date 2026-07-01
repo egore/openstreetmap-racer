@@ -128,14 +128,37 @@ func build(osm_data: OSMParser.OSMData) -> void:
 	# hit a "dead end" at the end of every way and got teleported away. That was
 	# the biggest cause of the wiggling/jumping.
 	var junctions := _find_junction_nodes(osm_data)
-	var next_segment_id := 0
 	for way: OSMParser.OSMWay in osm_data.ways.values():
 		for road: Road in _roads_from_way(way, osm_data, junctions):
-			road.segment_id = next_segment_id
-			next_segment_id += 1
+			# Identify a segment by its parent way + endpoint nodes rather than a
+			# per-build counter. This is *stable across rebuilds*: when the graph
+			# is rebuilt around a moving player (streaming a country), a road that
+			# reappears keeps the same id, so a car already driving it stays valid
+			# instead of being orphaned and respawned every rebuild. Interior
+			# roads (near the player, where junction detection is stable) get a
+			# perfectly stable id; only roads at the rebuilt region's edge, whose
+			# split points can shift, may change id — and those are far from the
+			# player where an occasional recycle is invisible.
+			road.segment_id = _segment_id_for(road.way_id, road.start_node, road.end_node)
 			_roads.append(road)
 			_by_way_id[road.segment_id] = road
 	_build_junction_index()
+
+
+## Stable, build-independent segment id from the parent way id and endpoint
+## nodes. Endpoints are order-normalized so a segment hashes the same regardless
+## of traversal direction. Combines the three ids into a wide value and folds it
+## to a positive int (never the -1 "no road" sentinel); collision probability
+## across a realistic near-player region is negligible.
+static func _segment_id_for(way_id: int, start_node: int, end_node: int) -> int:
+	var lo: int = min(start_node, end_node)
+	var hi: int = max(start_node, end_node)
+	# 64-bit mix (constants are odd, from splitmix64-style folding) so distinct
+	# (way, endpoints) triples spread out rather than clustering by small ids.
+	var h: int = way_id * 1099511628211
+	h = (h ^ lo) * 1099511628211
+	h = (h ^ hi) * 1099511628211
+	return (h & 0x7fffffffffffffff) | 1
 
 
 ## Count how many drivable ways touch each node; any node touched by 2+ ways is a

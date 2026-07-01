@@ -3,6 +3,11 @@ extends Node3D
 
 ## Manages a grid of tiles around the camera. Loads/unloads tiles dynamically.
 
+# Preloaded so the InMemory/Disk implementations resolve even before Godot's
+# global class cache is populated (headless test discovery can race the
+# class_name registration otherwise).
+const OSMTileSourceScript := preload("res://scripts/osm_tile_source.gd")
+
 ## Emitted once the OSM file has been parsed and the spatial index is ready.
 signal data_loaded(osm_data: OSMParser.OSMData)
 ## Emitted whenever a tile's geometry has been instanced into the scene.
@@ -11,7 +16,11 @@ signal tile_loaded(tile_key: Vector2i)
 signal tile_unloaded(tile_key: Vector2i)
 
 @export var osm_file_path: String = "res://data/map.osm"
-@export var tile_size: float = 200.0  # meters per tile edge
+## Directory of a pre-baked streaming tile cache (tools/bake_osm_tiles.py). When
+## it contains a manifest.json the manager streams from disk (country-scale);
+## otherwise it falls back to loading osm_file_path whole (small-map path).
+@export var tile_cache_dir: String = "res://data/tiles"
+@export var tile_size: float = 200.0  # meters per tile edge (disk cache overrides)
 @export var load_radius: int = 2      # tiles in each direction to keep loaded
 @export var unload_radius: int = 3    # tiles beyond this are freed
 ## Number of grid cells per tile edge when building displaced terrain from a
@@ -25,8 +34,11 @@ signal tile_unloaded(tile_key: Vector2i)
 ## on unload). Optional: when unset, street lamps render as unlit poles.
 @export var street_lamp_lights_path: NodePath
 
-var _osm_data: OSMParser.OSMData = null
-var _spatial_index: Dictionary = {}   # Vector2i tile_key -> { ways: [], nodes: [], relations: [] }
+# Backing store for tiles: either the classic parse-everything InMemoryTileSource
+# or a streaming DiskTileSource. The manager no longer owns a global OSMData or
+# spatial index — it asks the source for each tile's self-contained data.
+var _tile_source: OSMTileSourceScript = null
+var _height_provider: HeightProvider = null   # map-wide; from the tile source
 var _loaded_tiles: Dictionary = {}    # Vector2i tile_key -> Node3D (tile root)
 var _current_tile: Vector2i = Vector2i(999999, 999999)
 
@@ -71,75 +83,43 @@ func _ready() -> void:
 
 	_load_osm_data()
 
+## Pick a tile source and get it ready. A baked streaming cache
+## (tile_cache_dir/manifest.json) wins; otherwise fall back to loading
+## osm_file_path whole. Either way the manager then talks only to _tile_source.
 func _load_osm_data() -> void:
-	print("OSMTileManager: Loading OSM data from %s" % osm_file_path)
-	_osm_data = OSMParser.parse_file(osm_file_path)
-	if _osm_data == null:
+	_tile_source = _create_tile_source()
+	if _tile_source == null or not _tile_source.is_ready():
 		push_error("OSMTileManager: Failed to load OSM data")
 		return
-	_build_spatial_index()
+
+	# The disk cache is authoritative about tile_size (baked into it); adopt it
+	# so the manager's tiling math matches the files on disk.
+	tile_size = _tile_source.get_tile_size()
+	_height_provider = _tile_source.get_height_provider()
+
 	# Pass terrain parameters to builders for draped meshes and subdivided ribbons.
 	if _has_terrain():
 		var grid_step := tile_size / float(max(1, terrain_subdivisions))
 		# Bind the height field to the exact terrain-mesh grid so draped features
 		# can sample the triangulated surface (sample_mesh_height) instead of the
 		# smoother raw bilinear field and thus sit flush on the built terrain.
-		_osm_data.height_provider.set_mesh_grid(tile_size, terrain_subdivisions)
-		_relation_builder.height_provider = _osm_data.height_provider
+		_height_provider.set_mesh_grid(tile_size, terrain_subdivisions)
+		_relation_builder.height_provider = _height_provider
 		_relation_builder.terrain_grid_step = grid_step
-		_way_builder.height_provider = _osm_data.height_provider
+		_way_builder.height_provider = _height_provider
 		_way_builder.terrain_grid_step = grid_step
-	print("OSMTileManager: Spatial index built, ready for tile loading")
-	data_loaded.emit(_osm_data)
+	print("OSMTileManager: Tile source ready, ready for tile loading")
+	data_loaded.emit(get_osm_data())
 
-func _build_spatial_index() -> void:
-	_spatial_index.clear()
-
-	# Index standalone nodes (nodes with tags that aren't just part of ways)
-	for node: OSMParser.OSMNode in _osm_data.nodes.values():
-		if node.tags.size() > 0:
-			var tkey := _pos_to_tile(node.local_pos)
-			_ensure_tile_bucket(tkey)
-			_spatial_index[tkey]["nodes"].append(node)
-
-	# Index ways: add to every tile their nodes touch
-	for way: OSMParser.OSMWay in _osm_data.ways.values():
-		var tiles_touched := {}
-		for nid: int in way.node_ids:
-			if _osm_data.nodes.has(nid):
-				var node: OSMParser.OSMNode = _osm_data.nodes[nid]
-				var tkey := _pos_to_tile(node.local_pos)
-				tiles_touched[tkey] = true
-		for tkey: Vector2i in tiles_touched:
-			_ensure_tile_bucket(tkey)
-			_spatial_index[tkey]["ways"].append(way)
-
-	# Index relations: add to tiles based on member nodes
-	for rel: OSMParser.OSMRelation in _osm_data.relations.values():
-		var tiles_touched := {}
-		for member: Dictionary in rel.members:
-			if member["type"] == "way":
-				var ref_id: int = member["ref"]
-				if _osm_data.ways.has(ref_id):
-					var w: OSMParser.OSMWay = _osm_data.ways[ref_id]
-					for nid: int in w.node_ids:
-						if _osm_data.nodes.has(nid):
-							var node: OSMParser.OSMNode = _osm_data.nodes[nid]
-							var tkey := _pos_to_tile(node.local_pos)
-							tiles_touched[tkey] = true
-			elif member["type"] == "node":
-				var ref_id: int = member["ref"]
-				if _osm_data.nodes.has(ref_id):
-					var node: OSMParser.OSMNode = _osm_data.nodes[ref_id]
-					var tkey := _pos_to_tile(node.local_pos)
-					tiles_touched[tkey] = true
-		for tkey: Vector2i in tiles_touched:
-			_ensure_tile_bucket(tkey)
-			_spatial_index[tkey]["relations"].append(rel)
-
-func _ensure_tile_bucket(tkey: Vector2i) -> void:
-	if not _spatial_index.has(tkey):
-		_spatial_index[tkey] = { "nodes": [], "ways": [], "relations": [] }
+## Prefer the streaming disk cache when a manifest is present, else the classic
+## in-memory parse of a single .osm.
+func _create_tile_source() -> OSMTileSourceScript:
+	var manifest := "%s/manifest.json" % tile_cache_dir.trim_suffix("/")
+	if FileAccess.file_exists(manifest):
+		print("OSMTileManager: Streaming from tile cache %s" % tile_cache_dir)
+		return OSMTileSourceScript.DiskTileSource.new(tile_cache_dir)
+	print("OSMTileManager: Loading OSM data from %s" % osm_file_path)
+	return OSMTileSourceScript.InMemoryTileSource.new(osm_file_path, tile_size)
 
 func _pos_to_tile(pos: Vector3) -> Vector2i:
 	return Vector2i(
@@ -148,7 +128,7 @@ func _pos_to_tile(pos: Vector3) -> Vector2i:
 	)
 
 func _process(_delta: float) -> void:
-	if _osm_data == null:
+	if _tile_source == null:
 		return
 
 	var camera := get_viewport().get_camera_3d()
@@ -181,16 +161,29 @@ func _update_tiles() -> void:
 		_unload_tile(tkey)
 
 func _load_tile(tkey: Vector2i) -> void:
-	if not _spatial_index.has(tkey):
-		# Empty tile, still mark as loaded so we don't retry
-		_loaded_tiles[tkey] = null
-		tile_loaded.emit(tkey)
-		return
+	var bucket: Dictionary = _tile_source.load_tile(tkey)
 
-	var bucket: Dictionary = _spatial_index[tkey]
+	# Every in-range tile gets a root + ground collider, even when it carries no
+	# OSM features. On a streamed country the cache is sparse — tiles between
+	# baked features have no file (bucket is empty) — but the car still needs a
+	# surface to drive on there, or it falls through the world. (This was masked
+	# on the old in-memory small map, which was dense.)
 	var tile_root := Node3D.new()
 	tile_root.name = "Tile_%d_%d" % [tkey.x, tkey.y]
 	add_child(tile_root)
+
+	if bucket.is_empty():
+		# No features here: just ground (terrain or flat), then done.
+		_build_ground(tile_root, tkey, false)
+		_loaded_tiles[tkey] = tile_root
+		tile_loaded.emit(tkey)
+		return
+
+	# Self-contained per-tile dataset builders resolve way/relation members
+	# against. For the in-memory source this is the one global OSMData; for the
+	# disk source it's the tile's own parsed file (with neighbor nodes for
+	# closure). Either way, only THIS local is used inside _load_tile.
+	var osm_data: OSMParser.OSMData = bucket["osm_data"]
 
 	# Check whether the tile is fully covered by an area polygon. If so, skip
 	# the terrain ground mesh (the draped area renders on top anyway and the
@@ -202,7 +195,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		var origin_z := float(tkey.y) * tile_size
 		for way: OSMParser.OSMWay in bucket["ways"]:
 			if AreaHandler.is_area(way) or ParkingHandler.is_parking(way):
-				var pts := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+				var pts := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 				if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
 						pts, origin_x, origin_z, tile_size, grid_step):
 					tile_covered = true
@@ -218,10 +211,10 @@ func _load_tile(tkey: Vector2i) -> void:
 					if member["type"] != "way" or member["role"] != "outer":
 						continue
 					var way_id: int = member["ref"]
-					if not _osm_data.ways.has(way_id):
+					if not osm_data.ways.has(way_id):
 						continue
 					var pts := PolygonUtils.way_to_points(
-						_osm_data.ways[way_id].node_ids, _osm_data.nodes)
+						osm_data.ways[way_id].node_ids, osm_data.nodes)
 					if pts.size() >= 3 and PolygonUtils.polygon_covers_tile(
 							pts, origin_x, origin_z, tile_size, grid_step):
 						tile_covered = true
@@ -245,14 +238,14 @@ func _load_tile(tkey: Vector2i) -> void:
 	if building_part_ways.size() > 0:
 		# For each building:part, find the parent building=* outline that contains it
 		for part: OSMParser.OSMWay in building_part_ways:
-			var part_points := PolygonUtils.way_to_points(part.node_ids, _osm_data.nodes)
+			var part_points := PolygonUtils.way_to_points(part.node_ids, osm_data.nodes)
 			if part_points.size() < 3:
 				continue
 			var part_centroid := PolygonUtils.polygon_centroid(part_points)
 			for way: OSMParser.OSMWay in bucket["ways"]:
 				if not way.tags.has("building") or way.tags.has("building:part"):
 					continue
-				var bld_points := PolygonUtils.way_to_points(way.node_ids, _osm_data.nodes)
+				var bld_points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 				if bld_points.size() < 3:
 					continue
 				if _point_in_polygon_xz(part_centroid, bld_points):
@@ -264,13 +257,13 @@ func _load_tile(tkey: Vector2i) -> void:
 	# member way only has styling tags like colour/roof:shape). The relation
 	# builder merges the parent tags and renders them; the per-way loop must
 	# skip them to avoid "Skipping way" noise or double rendering.
-	var relation_way_ids := _collect_relation_way_ids(bucket["relations"])
+	var relation_way_ids := _collect_relation_way_ids(bucket["relations"], osm_data)
 
 	# Process ways (roads, buildings from ways, etc.) via the handler registry.
 	# Each way is offered to handlers in priority order; the first match builds
 	# it. This replaces the central if-elif dispatch — feature-specific logic now
 	# lives in scripts/handlers/*.gd (see _way_handlers).
-	var ctx := _make_tile_context(tkey, suppressed_building_ids)
+	var ctx := _make_tile_context(tkey, suppressed_building_ids, osm_data)
 	var processed_way_ids := {}
 	for way: OSMParser.OSMWay in bucket["ways"]:
 		if processed_way_ids.has(way.id):
@@ -295,7 +288,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		if processed_way_ids.has(part.id):
 			continue
 		processed_way_ids[part.id] = true
-		var mesh_instance := _building_builder.build_building_from_way(part, _osm_data)
+		var mesh_instance := _building_builder.build_building_from_way(part, osm_data)
 		if mesh_instance != null:
 			tile_root.add_child(mesh_instance)
 
@@ -313,7 +306,7 @@ func _load_tile(tkey: Vector2i) -> void:
 		if processed_rel_ids.has(rel.id):
 			continue
 		processed_rel_ids[rel.id] = true
-		var rel_node := _relation_builder.build_relation(rel, _osm_data)
+		var rel_node := _relation_builder.build_relation(rel, osm_data)
 		if rel_node != null:
 			tile_root.add_child(rel_node)
 
@@ -322,9 +315,11 @@ func _load_tile(tkey: Vector2i) -> void:
 
 ## Build the per-tile context handed to every way handler. Bundles the shared
 ## builders and tile parameters so handler build() signatures stay uniform.
-func _make_tile_context(tkey: Vector2i, suppressed_building_ids: Dictionary) -> OSMTileContext:
+func _make_tile_context(
+		tkey: Vector2i, suppressed_building_ids: Dictionary,
+		osm_data: OSMParser.OSMData) -> OSMTileContext:
 	var ctx := OSMTileContext.new()
-	ctx.osm_data = _osm_data
+	ctx.osm_data = osm_data
 	ctx.tile_key = tkey
 	ctx.tile_size = tile_size
 	ctx.has_terrain = _has_terrain()
@@ -359,9 +354,38 @@ func get_loaded_tile_count() -> int:
 	return _loaded_tiles.size()
 
 
-## Returns the parsed OSM data, or null if it has not loaded yet.
+## Returns a representative OSM dataset, or null if not loaded yet. For the
+## in-memory source this is the full map; for the streaming disk source it is a
+## stub with center + height provider but empty feature dicts (see
+## OSMTileSource.get_global_osm_data).
 func get_osm_data() -> OSMParser.OSMData:
-	return _osm_data
+	return _tile_source.get_global_osm_data() if _tile_source != null else null
+
+
+## Collect ways within `radius` meters of a world position, as
+## [{ way, points }]. Backed by the same tile source the 3D world streams from,
+## so the minimap and the world stay consistent (and disk tiles stream + cache
+## once). Returns [] until the source is ready.
+func collect_ways_near(center: Vector3, radius: float) -> Array:
+	if _tile_source == null:
+		return []
+	return _tile_source.collect_ways_near(center, radius)
+
+
+## Assemble a self-contained OSMData of the ways (and their nodes) within
+## `radius` meters of a world position, from the same tile source the 3D world
+## streams from. Traffic builds its road graph from this so it stays consistent
+## with the rendered roads and streams a country region-by-region. Returns an
+## empty OSMData until the source is ready.
+func collect_osm_near(center: Vector3, radius: float) -> OSMParser.OSMData:
+	if _tile_source == null:
+		return OSMParser.OSMData.new()
+	return _tile_source.collect_osm_near(center, radius)
+
+
+## True once a tile source is loaded and ready to be queried.
+func is_data_ready() -> bool:
+	return _tile_source != null and _tile_source.is_ready()
 
 
 ## Terrain elevation (meters) at a world XZ position, or 0.0 when the world is
@@ -369,7 +393,7 @@ func get_osm_data() -> OSMParser.OSMData:
 func get_terrain_height(world_pos: Vector3) -> float:
 	if not _has_terrain():
 		return 0.0
-	return _osm_data.height_provider.sample_local_xz(world_pos.x, world_pos.z)
+	return _height_provider.sample_local_xz(world_pos.x, world_pos.z)
 
 
 ## Forwards the debug-labels visibility flag to the asset placer so labels on
@@ -384,16 +408,14 @@ func set_show_debug_labels(enabled: bool) -> void:
 ## Spawn logic calls this so a ground collider exists before the car is unfrozen,
 ## which is what prevents the car free-falling through a not-yet-streamed world.
 func ensure_tiles_around(world_pos: Vector3) -> bool:
-	if _osm_data == null:
+	if _tile_source == null:
 		return false
 	_current_tile = _pos_to_tile(world_pos)
 	_update_tiles()
 	return true
 
 func _has_terrain() -> bool:
-	return _osm_data != null \
-		and _osm_data.height_provider != null \
-		and _osm_data.height_provider.is_ready()
+	return _height_provider != null and _height_provider.is_ready()
 
 func _build_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = false) -> void:
 	if _has_terrain():
@@ -436,7 +458,7 @@ func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 ## the real terrain. Vertices are built in world space (mesh at origin) so the
 ## sampled heights and the OSM geometry share one coordinate frame.
 func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = false) -> void:
-	var hp := _osm_data.height_provider
+	var hp := _height_provider
 	var subs: int = max(1, terrain_subdivisions)
 	var origin_x := tkey.x * tile_size
 	var origin_z := tkey.y * tile_size
@@ -519,7 +541,7 @@ func _is_building_part(way: OSMParser.OSMWay) -> bool:
 ## Ways that DO carry their own feature tags (e.g. a highway=* way reused as
 ## the outer ring of a landuse multipolygon) are NOT suppressed: they need
 ## independent rendering as roads/railways/etc.
-func _collect_relation_way_ids(relations: Array) -> Dictionary:
+func _collect_relation_way_ids(relations: Array, osm_data: OSMParser.OSMData) -> Dictionary:
 	var ids := {}
 	for rel: OSMParser.OSMRelation in relations:
 		if not _relation_renders_ways(rel):
@@ -528,9 +550,9 @@ func _collect_relation_way_ids(relations: Array) -> Dictionary:
 			if member["type"] != "way":
 				continue
 			var way_id: int = member["ref"]
-			if not _osm_data.ways.has(way_id):
+			if not osm_data.ways.has(way_id):
 				continue
-			var way: OSMParser.OSMWay = _osm_data.ways[way_id]
+			var way: OSMParser.OSMWay = osm_data.ways[way_id]
 			# Only suppress the way if no handler would independently claim it
 			# based on its own tags. If it has highway/railway/barrier/etc. tags,
 			# it needs to be rendered both as that feature AND as part of the

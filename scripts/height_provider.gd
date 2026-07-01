@@ -146,6 +146,17 @@ func load_from_files(ref_lat: float, ref_lon: float,
 		push_error("HeightProvider: invalid bounds in metadata")
 		return false
 
+	# Reject a heightmap that doesn't actually cover the dataset. Otherwise a
+	# stale DEM baked for a different area (e.g. an old map.dem for city A left in
+	# data/ while streaming a cache for city B) would "load" and then clamp every
+	# sample to its edge, draping the whole world on a bogus, wrong-region
+	# elevation. When the center isn't inside the DEM, fall back to a flat world.
+	if _ref_lon < _min_lon or _ref_lon > _max_lon \
+			or _ref_lat < _min_lat or _ref_lat > _max_lat:
+		print("HeightProvider: DEM at %s covers [%.4f,%.4f]..[%.4f,%.4f] but dataset center is (%.4f, %.4f); ignoring stale DEM, terrain is flat." % [
+			meta_path, _min_lon, _min_lat, _max_lon, _max_lat, _ref_lon, _ref_lat])
+		return false
+
 	# Precompute per-sample constants so the hot path multiplies instead of
 	# dividing. (_m_per_deg_* are already > 0 for any real latitude.)
 	_inv_m_per_deg_lat = 1.0 / _m_per_deg_lat

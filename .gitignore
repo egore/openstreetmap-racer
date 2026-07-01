@@ -1,6 +1,7 @@
 /.godot
 *.blend1
 *.tif
+*.osm.pbf
 
 # Documentation used as inspiration
 /references
@@ -8,9 +9,13 @@
 # Generated data
 /data/*.dem.png
 /data/*.dem.json
+/data/tiles
 
 # Godot specific
 /addons
 
 # gdUnit4 test reports
 /reports
+
+# Python
+__pycache__
