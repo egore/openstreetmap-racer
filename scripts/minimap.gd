@@ -30,6 +30,8 @@ const BUILDING_FILL := Color(0.45, 0.42, 0.38, 0.7)
 const WATERWAY_COLOR := Color(0.2, 0.5, 0.9, 0.95)
 const CAR_COLOR := Color(0.95, 0.3, 0.2, 1.0)
 const BORDER_COLOR := Color(0.3, 0.35, 0.3, 0.9)
+const NORTH_COLOR := Color(0.9, 0.15, 0.15, 1.0)
+const NORTH_BORDER_COLOR := Color(1.0, 1.0, 1.0, 1.0)
 
 const MAJOR_HIGHWAYS := ["motorway", "trunk", "primary", "secondary", "tertiary",
 	"motorway_link", "trunk_link", "primary_link"]
@@ -181,7 +183,49 @@ func _draw() -> void:
 	# Border ring
 	draw_arc(Vector2.ZERO, radius - 1.0, 0, TAU, 64, BORDER_COLOR, 2.5)
 
+	# North indicator: red arrow pointing toward true north, drawn near the
+	# rim. The minimap rotates with the car, so north spins with the heading.
+	# See _draw_north_arrow() / _world_to_minimap() for the direction math.
+	_draw_north_arrow(car_angle, radius)
+
 	draw_set_transform(Vector2.ZERO)
+
+
+## Returns the on-screen unit vector that points toward true north for a given
+## car heading. Derived by mapping a world point due north of the car
+## (dx=0, dz=-1) through _world_to_minimap():
+##   sx = -(0*cos - (-1)*sin) = -sin(car_angle)
+##   sy = -(0*sin + (-1)*cos) =  cos(car_angle)
+## Kept as a pure static helper so the direction math can be unit-tested.
+static func north_screen_direction(car_angle: float) -> Vector2:
+	return Vector2(-sin(car_angle), cos(car_angle))
+
+
+## Draws a red arrow near the rim pointing toward true north.
+## Assumes draw_set_transform() has already placed the origin at the minimap
+## center. Direction comes from north_screen_direction().
+func _draw_north_arrow(car_angle: float, radius: float) -> void:
+	# Unit vector on screen pointing toward north.
+	var north_dir := north_screen_direction(car_angle)
+	# Perpendicular, used to fan out the arrowhead base.
+	var side_dir := Vector2(-north_dir.y, north_dir.x)
+
+	# The arrow tip pokes past the rim; the base sits inside it. The arrow is
+	# drawn unclipped (unlike the map geometry) so it can spill over the border.
+	var tip_dist := radius + 6.6
+	var arrow_len := 14.52
+	var half_width := 7.26
+
+	var tip := north_dir * tip_dist
+	var base := north_dir * (tip_dist - arrow_len)
+	var left := base + side_dir * half_width
+	var right := base - side_dir * half_width
+
+	var arrow := PackedVector2Array([tip, left, right])
+	draw_colored_polygon(arrow, NORTH_COLOR)
+	# White outline around the triangle (close the loop back to the tip).
+	var outline := PackedVector2Array([tip, left, right, tip])
+	draw_polyline(outline, NORTH_BORDER_COLOR, 1.5, true)
 
 
 func _world_to_minimap(world_pos: Vector3, car_pos: Vector3, car_angle: float, scale_factor: float) -> Vector2:
