@@ -77,6 +77,7 @@ static func create_road_material(
 		lane_spec: RoadLaneSpec = null,
 		road_width: float = 0.0,
 		road_length: float = 0.0,
+		marking_spec: RoadMarkingSpec = null,
 ) -> Material:
 	var priority := render_priority_for(highway_type)
 
@@ -99,6 +100,7 @@ static func create_road_material(
 	# casing-then-fill layer order.
 	mat.render_priority = priority
 	_apply_lane_markings(mat, lane_spec, road_width, road_length)
+	_apply_transverse_markings(mat, marking_spec, road_width)
 	return mat
 
 
@@ -119,3 +121,30 @@ static func _apply_lane_markings(
 	mat.set_shader_parameter("lane_count", float(lane_spec.lane_count))
 	mat.set_shader_parameter("forward_lanes", float(lane_spec.forward_lanes))
 	mat.set_shader_parameter("one_way", 1.0 if lane_spec.one_way else 0.0)
+
+
+## Push a RoadMarkingSpec's transverse markings (crossings, stop/give-way lines)
+## into the asphalt shader's uniforms. These are painted independently of the
+## lane markings, so a crossing shows even on an undivided road — but they still
+## need the carriageway width to span it, so a zero width disables them. When the
+## spec is null or empty, transverse_count stays 0 and nothing extra is drawn.
+static func _apply_transverse_markings(
+		mat: ShaderMaterial,
+		marking_spec: RoadMarkingSpec,
+		road_width: float,
+) -> void:
+	if marking_spec == null or marking_spec.is_empty() or road_width <= 0.0:
+		mat.set_shader_parameter("transverse_count", 0)
+		return
+	var along := marking_spec.along_positions()
+	var kinds := marking_spec.kinds()
+	mat.set_shader_parameter("transverse_count", along.size())
+	# The shader arrays are fixed-size (MAX_TRANSVERSE_MARKINGS); passing the
+	# packed arrays sets the leading entries and leaves the rest at their
+	# defaults, which transverse_count keeps the loop from reading.
+	mat.set_shader_parameter("transverse_along", along)
+	mat.set_shader_parameter("transverse_kind", kinds)
+	# road_width is already set by the lane-marking path, but a road may have
+	# crossings without lane markings (e.g. service road); set it here too so
+	# the transverse block has a valid carriageway width regardless.
+	mat.set_shader_parameter("road_width", road_width)

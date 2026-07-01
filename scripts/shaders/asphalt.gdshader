@@ -68,6 +68,22 @@ uniform float end_fade : hint_range(0.0, 8.0) = 1.5;
 // Total road length in metres (UV.x runs 0..road_length). 0 disables end fade.
 uniform float road_length : hint_range(0.0, 100000.0) = 0.0;
 
+// --- Transverse markings (crossings / stop / give-way) ----------------------
+// Unlike the lane lines above (which run ALONG the road), these sit at a single
+// point along it and span ACROSS the carriageway: zebra crossings, stop bars and
+// give-way lines. Each comes from an OSM node placed on the way (see
+// RoadMarkingSpec); we pass the metres-along position of each and a kind code so
+// the shader paints the right band. MAX_TRANSVERSE_MARKINGS must match
+// RoadMarkingSpec.MAX_MARKINGS.
+const int MAX_TRANSVERSE_MARKINGS = 8;
+// How many entries of the arrays below are valid (0 disables them entirely).
+uniform int transverse_count = 0;
+// Metres-along-road (UV.x space) of each transverse marking.
+uniform float transverse_along[MAX_TRANSVERSE_MARKINGS];
+// Kind of each marking: 1 = zebra, 2 = stop bar, 3 = give-way (see
+// RoadMarkingSpec.Kind). Anything else is skipped.
+uniform float transverse_kind[MAX_TRANSVERSE_MARKINGS];
+
 // World-space XZ position of the fragment, passed from the vertex stage.
 varying vec3 world_pos;
 
@@ -76,6 +92,54 @@ varying vec3 world_pos;
 float line_coverage(float pos_m, float center, float half_w, float aa) {
 	float d = abs(pos_m - center);
 	return 1.0 - smoothstep(half_w - aa, half_w + aa, d);
+}
+
+// Coverage of one transverse marking of `kind`, evaluated at (`along`, `across`)
+// in metres. `centre` is the marking's metres-along position; `half_w` is half
+// the carriageway width so bands can be sized/insets relative to the road. The
+// `along_aa`/`across_aa` are the screen-projected antialias widths of each axis.
+//
+// Bands are drawn as a function of the along-road distance to `centre`, so they
+// stay perpendicular to travel and follow the road on curves for free (the UV
+// frame already rotates with the ribbon).
+float transverse_coverage(
+		float kind, float centre, float along, float across,
+		float half_w, float along_aa, float across_aa) {
+	float da = abs(along - centre);          // metres along, from the band centre
+	// Keep every band a little inside the kerbs so it reads as on-carriageway.
+	float span = max(half_w - 0.15, 0.05);
+	float edge = 1.0 - smoothstep(span - across_aa, span + across_aa, abs(across));
+	if (edge <= 0.0) {
+		return 0.0;
+	}
+
+	if (kind < 1.5) {
+		// Zebra: broad band of stripes running ALONG the road (the classic
+		// "piano key" look), so the painted bars are parallel to traffic.
+		float band_half = 1.5;               // ~3 m deep crossing
+		if (da > band_half + along_aa) {
+			return 0.0;
+		}
+		float band = 1.0 - smoothstep(band_half - along_aa, band_half + along_aa, da);
+		// Stripe across the carriageway: ~0.5 m painted, ~0.5 m gap.
+		float stripe_period = 1.0;
+		float stripe_phase = fract((across + span) / stripe_period);
+		float stripe = step(stripe_phase, 0.5);
+		return band * edge * stripe;
+	} else if (kind < 2.5) {
+		// Stop bar: a single solid transverse line ~0.4 m deep.
+		float bar_half = 0.2;
+		float bar = 1.0 - smoothstep(bar_half - along_aa, bar_half + along_aa, da);
+		return bar * edge;
+	} else {
+		// Give-way: a dashed transverse line (short dashes across the road).
+		float bar_half = 0.15;
+		float bar = 1.0 - smoothstep(bar_half - along_aa, bar_half + along_aa, da);
+		float dash_period = 0.9;
+		float dash_phase = fract((across + span) / dash_period);
+		float dash = step(dash_phase, 0.55);
+		return bar * edge * dash;
+	}
 }
 
 // --- Value noise (cheap, tileable-free in world space) ----------------------
@@ -205,5 +269,30 @@ void fragment() {
 		ALBEDO = mix(ALBEDO, marking_color, clamp(paint, 0.0, 1.0));
 		// Fresh paint is smoother/brighter than the surrounding asphalt.
 		ROUGHNESS = mix(ROUGHNESS, 0.55, clamp(paint, 0.0, 1.0));
+	}
+
+	// --- Transverse markings (crossings / stop / give-way) -----------------
+	// Painted independently of `markings_enabled`: a crossing or stop bar is
+	// drawn from OSM nodes on the way and should appear even on undivided roads
+	// that carry no lane lines, as long as the carriageway width is known.
+	if (transverse_count > 0 && road_width > 0.01) {
+		float half_w = road_width * 0.5;
+		float across = (UV.y - 0.5) * road_width;
+		float along = UV.x;
+		float across_aa = fwidth(across) * 0.75 + 0.0005;
+		float along_aa = fwidth(along) * 0.75 + 0.0005;
+
+		float tpaint = 0.0;
+		for (int i = 0; i < MAX_TRANSVERSE_MARKINGS; i++) {
+			if (i >= transverse_count) {
+				break;
+			}
+			tpaint = max(tpaint, transverse_coverage(
+				transverse_kind[i], transverse_along[i],
+				along, across, half_w, along_aa, across_aa));
+		}
+
+		ALBEDO = mix(ALBEDO, marking_color, clamp(tpaint, 0.0, 1.0));
+		ROUGHNESS = mix(ROUGHNESS, 0.55, clamp(tpaint, 0.0, 1.0));
 	}
 }

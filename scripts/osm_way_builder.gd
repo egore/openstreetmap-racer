@@ -107,6 +107,11 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# Lane layout parsed from OSM tags (lanes, lanes:forward/backward, oneway).
 	# Drives the procedural markings painted by the asphalt shader.
 	var lane_spec := RoadLaneSpec.from_tags(highway_type, way.tags)
+	# Transverse markings from OSM nodes ON this way (zebra crossings, stop and
+	# give-way lines). Built from the RAW node polyline so each marking's
+	# metres-along matches the ribbon UV.x (terrain subdivision below only adds
+	# collinear points and preserves path length).
+	var marking_spec := RoadMarkingSpec.from_way(way.node_ids, osm_data.nodes)
 	# Cumulative along-road distance at each point, plus total length, so the
 	# ribbon UVs (metres travelled) and the shader's end-fade line up.
 	var along_at := _cumulative_along(points)
@@ -123,7 +128,7 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# world-space XZ; lane markings additionally use the ribbon UVs we emit
 	# below (UV.x = metres along the road, UV.y = fraction across it).
 	var mat := RoadMaterialFactory.create_road_material(
-		highway_type, color, lane_spec, width, road_length)
+		highway_type, color, lane_spec, width, road_length, marking_spec)
 	st.set_material(mat)
 
 	var sidewalk_st := SurfaceTool.new()
