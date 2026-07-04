@@ -387,7 +387,7 @@ func _continue_car(car: TrafficCar) -> bool:
 	if cont == null:
 		return false
 	var path := _reverse_points(cont.road.points) if cont.reversed else cont.road.points
-	car.continue_route(path, car.overshoot(), cont.road.segment_id, cont.reversed)
+	car.continue_route(path, car.overshoot(), cont.road.segment_id, cont.reversed, _lane_offset_for(cont.road))
 	return true
 
 
@@ -437,12 +437,28 @@ func _assign_to_road(car: TrafficCar, road: TrafficRoadNetwork.Road, start_dista
 	# smooth junction crossing.
 	if start_distance <= 0.001:
 		car.cruise_speed = _rng.randf_range(_SPEED_MIN, _SPEED_MAX)
-	car.set_route(path, start_distance, road.segment_id, reversed)
+	car.set_route(path, start_distance, road.segment_id, reversed, _lane_offset_for(road))
 	car.visible = true
 	# Seed a fresh long-term plan from this road/direction so the car has an
 	# intention the moment it's placed (rather than deciding only when it reaches
 	# the first junction).
 	_routes[car.get_instance_id()] = _network.plan_route(road, reversed, _PLAN_AHEAD, _rng)
+
+
+## How far right of the centreline a car on this road should drive, in meters.
+##
+## A two-way road carries traffic in both directions, so each direction gets half
+## the carriageway; a car sits in the middle of its half — a quarter of the full
+## width to the right of the centreline. A one-way road uses the whole
+## carriageway for one direction, so its cars stay centred (offset 0). The result
+## is clamped so a very wide road doesn't push a small block car off the edge of
+## the asphalt onto the verge.
+func _lane_offset_for(road: TrafficRoadNetwork.Road) -> float:
+	if road.one_way:
+		return 0.0
+	# Keep the car's centre inside the right half: half the half-width, minus a
+	# small margin so a wide car body still sits fully on the asphalt.
+	return maxf(road.width * 0.25, 0.0)
 
 
 ## Instance a new pooled traffic car and track it.
