@@ -2,6 +2,7 @@
 *.blend1
 *.tif
 *.osm.pbf
+/dist
 
 # Documentation used as inspiration
 /references
