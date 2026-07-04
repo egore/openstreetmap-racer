@@ -144,18 +144,25 @@ float transverse_coverage(
 
 // --- Value noise (cheap, tileable-free in world space) ----------------------
 
+// Deterministic pseudo-random in [0,1) from a 2D integer cell.
+//
+// The classic `fract(sin(dot(...)))` / `fract(p.x * p.y)` hashes correlate
+// strongly along axis lines, which on a large flat road ribbon lines the noise
+// cells up into big diagonal streaks (the "very large noise pattern"). This is
+// an integer bit-mix (Dave Hoskins' hash12) that decorrelates neighbouring
+// cells in every direction, so no coherent large-scale structure emerges.
 float hash(vec2 p) {
-	// Deterministic pseudo-random in [0,1) from a 2D cell.
-	p = fract(p * vec2(123.34, 345.45));
-	p += dot(p, p + 34.345);
-	return fract(p.x * p.y);
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
 float value_noise(vec2 p) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
-	// Smoothstep interpolation for C1-continuous noise.
-	vec2 u = f * f * (3.0 - 2.0 * f);
+	// Quintic (C2-continuous) interpolation — softer than smoothstep and hides
+	// the grid better, so cell boundaries don't read as faint square tiling.
+	vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
 	float a = hash(i + vec2(0.0, 0.0));
 	float b = hash(i + vec2(1.0, 0.0));
 	float c = hash(i + vec2(0.0, 1.0));
@@ -163,11 +170,24 @@ float value_noise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Two-octave fractal noise: fine grain + coarse patches.
+// Fractal (fBm) noise: several octaves of value noise summed at halving
+// amplitude and (roughly) doubling frequency. Each octave is rotated by an
+// irrational angle so the lobes of successive octaves don't stack on the same
+// axis — this is what actually kills the directional "large pattern" and gives
+// an even, isotropic grain. Four octaves are enough for asphalt while staying
+// cheap.
 float fbm(vec2 p) {
-	float n = value_noise(p);
-	n += 0.5 * value_noise(p * 2.17 + 11.3);
-	return n / 1.5;
+	// ~40 degree rotation reused per octave to break axis alignment.
+	const mat2 rot = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
+	float sum = 0.0;
+	float amp = 0.5;
+	for (int i = 0; i < 4; i++) {
+		sum += amp * value_noise(p);
+		p = rot * p * 2.0 + 17.3;
+		amp *= 0.5;
+	}
+	// Normalise 0.5+0.25+0.125+0.0625 = 0.9375 back to ~[0,1].
+	return sum / 0.9375;
 }
 
 void vertex() {
@@ -177,8 +197,15 @@ void vertex() {
 }
 
 void fragment() {
-	vec2 grain_uv = world_pos.xz / grain_scale;
-	vec2 patch_uv = world_pos.xz / patch_scale;
+	// World XZ can be several km from the dataset origin; dividing by the small
+	// grain_scale then pushes noise inputs into the tens-of-thousands, where
+	// float precision erodes the fractional part the hash depends on (visible as
+	// coarse blocky repetition). Wrap XZ into a large repeating window first: the
+	// window (1024 m) is far bigger than anything on screen at once, so the
+	// wrap seam is never visible, but coordinates stay small and precise.
+	vec2 wrapped_xz = mod(world_pos.xz, 1024.0);
+	vec2 grain_uv = wrapped_xz / grain_scale;
+	vec2 patch_uv = wrapped_xz / patch_scale;
 
 	float grain = fbm(grain_uv);
 	float patch = value_noise(patch_uv);
@@ -197,10 +224,10 @@ void fragment() {
 	// Faked bump: derive a gradient of the grain noise in world XZ and tilt the
 	// normal accordingly. Surface geometry is untouched (flat, collision-safe).
 	float e = 0.5 * grain_scale; // sample offset in meters
-	float hx = fbm((world_pos.xz + vec2(e, 0.0)) / grain_scale)
-		- fbm((world_pos.xz - vec2(e, 0.0)) / grain_scale);
-	float hz = fbm((world_pos.xz + vec2(0.0, e)) / grain_scale)
-		- fbm((world_pos.xz - vec2(0.0, e)) / grain_scale);
+	float hx = fbm((wrapped_xz + vec2(e, 0.0)) / grain_scale)
+		- fbm((wrapped_xz - vec2(e, 0.0)) / grain_scale);
+	float hz = fbm((wrapped_xz + vec2(0.0, e)) / grain_scale)
+		- fbm((wrapped_xz - vec2(0.0, e)) / grain_scale);
 	// Perturb in tangent space (Godot's NORMAL_MAP expects a [0,1] tangent normal).
 	vec3 n = normalize(vec3(-hx * bump_strength, -hz * bump_strength, 1.0));
 	NORMAL_MAP = n * 0.5 + 0.5;
