@@ -136,6 +136,7 @@ func _ready() -> void:
 		WaterwayHandler.new(),
 		BuildingHandler.new(),
 		BarrierHandler.new(),
+		PlatformHandler.new(),
 		ParkingHandler.new(),
 		AreaHandler.new(),
 		SurfaceHandler.new(),
@@ -927,6 +928,12 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 	if way.tags.get("public_transport", "") == "station":
 		return true
 	if way.tags.get("amenity", "") == "bus_station":
+		return true
+	# Open (linear) transit platforms carry no fillable surface; PlatformHandler
+	# claims only closed rings, so these expected skips are silenced here.
+	if way.tags.get("public_transport", "") == "platform" \
+			or way.tags.get("railway", "") == "platform" \
+			or way.tags.get("highway", "") == "platform":
 		return true
 	# Underground waterways (culverts/negative layer) are intentionally not drawn
 	# on the surface; suppress their skip noise.
