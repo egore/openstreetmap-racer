@@ -83,12 +83,18 @@ func build(way: OSMParser.OSMWay, ctx: OSMTileContext) -> Node3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, ctx.osm_data.nodes)
 	var surface_val: String = way.tags.get("surface", "")
 	var color: Color = SURFACE_COLORS.get(surface_val, DEFAULT_SURFACE_COLOR)
+	# Bare surface=* rings (plazas, courtyards) carry no landcover tag, so they
+	# aren't in the ground layer table. Rank them explicitly ABOVE generic
+	# landcover with the smaller-patch tiebreak on top, so they never z-fight the
+	# landuse/natural fill they overlay. See PolygonUtils.ground_render_priority.
+	var priority := PolygonUtils.SURFACE_GROUND_PRIORITY + roundi(
+		PolygonUtils.ground_tiebreak_bonus(PolygonUtils.polygon_area_xz(points)))
 	var mesh_instance: MeshInstance3D
 	if ctx.has_terrain:
 		mesh_instance = PolygonUtils.build_terrain_draped_mesh(
-			points, color, ctx.osm_data.height_provider, ctx.grid_step, 0.012, ctx.tile_clip)
+			points, color, ctx.osm_data.height_provider, ctx.grid_step, 0.012, ctx.tile_clip, priority)
 	else:
-		mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.012, true)
+		mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.012, true, priority)
 	if mesh_instance != null:
 		mesh_instance.name = "Surface_%d" % way.id
 	return mesh_instance

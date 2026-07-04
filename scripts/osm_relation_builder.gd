@@ -94,10 +94,12 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		var way: OSMParser.OSMWay = osm_data.ways[way_id]
 		var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
+		var priority := roundi(PolygonUtils.ground_render_priority(
+			rel.tags, PolygonUtils.polygon_area_xz(points)))
 		if is_scrub:
 			var hp: HeightProvider = height_provider if use_terrain else null
 			var gs: float = terrain_grid_step if use_terrain else 0.0
-			var scrub_node := PolygonUtils.build_scrub_area(points, hp, gs, 0.01, tile_clip_rect)
+			var scrub_node := PolygonUtils.build_scrub_area(points, hp, gs, 0.01, tile_clip_rect, priority)
 			if scrub_node != null:
 				scrub_node.name = "ScrubPart_%d" % way_id
 				root.add_child(scrub_node)
@@ -105,18 +107,22 @@ func _build_multipolygon_area(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		elif is_forest:
 			var hp: HeightProvider = height_provider if use_terrain else null
 			var gs: float = terrain_grid_step if use_terrain else 0.0
-			var forest_node := PolygonUtils.build_forest_area(points, hp, gs, 0.01, tile_clip_rect)
+			var forest_node := PolygonUtils.build_forest_area(points, hp, gs, 0.01, tile_clip_rect, priority)
 			if forest_node != null:
 				forest_node.name = "ForestPart_%d" % way_id
 				root.add_child(forest_node)
 				has_children = true
 		else:
+			# Same painter's-algorithm ground rank (priority) as scrub/forest and
+			# single-way areas: class order + smaller-patch tiebreak, depth-write
+			# disabled downstream so coplanar multipolygon parts don't z-fight the
+			# landcover they overlay.
 			var mesh_instance: MeshInstance3D
 			if use_terrain:
 				mesh_instance = PolygonUtils.build_terrain_draped_mesh(
-					points, color, height_provider, terrain_grid_step, 0.01, tile_clip_rect)
+					points, color, height_provider, terrain_grid_step, 0.01, tile_clip_rect, priority)
 			else:
-				mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true)
+				mesh_instance = PolygonUtils.build_flat_polygon_mesh(points, color, 0.01, true, priority)
 			if mesh_instance == null:
 				continue
 

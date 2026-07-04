@@ -53,14 +53,19 @@ func build(way: OSMParser.OSMWay, ctx: OSMTileContext) -> Node3D:
 	# paving_stones or asphalt); otherwise fall back to plain concrete.
 	var surface_val: String = way.tags.get("surface", "")
 	var color: Color = SurfaceHandler.SURFACE_COLORS.get(surface_val, PLATFORM_COLOR)
+	# Platforms sit at the top of the ground stack (highest y-offset, above any
+	# surface/landcover they overlay). Depth-write is dropped downstream so the
+	# platform deck never z-fights the plaza/surface it rests on.
+	var priority := PolygonUtils.PLATFORM_GROUND_PRIORITY + roundi(
+		PolygonUtils.ground_tiebreak_bonus(PolygonUtils.polygon_area_xz(points)))
 	var mesh_instance: MeshInstance3D
 	if ctx.has_terrain:
 		mesh_instance = PolygonUtils.build_terrain_draped_mesh(
 			points, color, ctx.osm_data.height_provider, ctx.grid_step,
-			PLATFORM_Y_OFFSET, ctx.tile_clip)
+			PLATFORM_Y_OFFSET, ctx.tile_clip, priority)
 	else:
 		mesh_instance = PolygonUtils.build_flat_polygon_mesh(
-			points, color, PLATFORM_Y_OFFSET, true)
+			points, color, PLATFORM_Y_OFFSET, true, priority)
 	if mesh_instance != null:
 		mesh_instance.name = "Platform_%d" % way.id
 	return mesh_instance
