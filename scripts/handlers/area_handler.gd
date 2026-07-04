@@ -14,7 +14,7 @@ extends OSMWayHandler
 const _MAN_MADE_AREA_VALUES := {
 	"wastewater_plant": true, "water_works": true, "works": true,
 	"reservoir_covered": true, "storage_tank": true, "wastewater": true,
-	"reinforced_slope": true,
+	"reinforced_slope": true, "pier": true, "bunker_silo": true,
 }
 
 
@@ -25,10 +25,15 @@ func handler_name() -> String:
 static func is_area(way: OSMParser.OSMWay) -> bool:
 	if way.tags.has("landuse") or way.tags.has("natural") or way.tags.has("leisure"):
 		return true
-	# Closed amenity/shop/power/area:highway/man_made rings render as flat
-	# colored ground.
+	# Closed amenity/shop/power/area:highway/man_made/tourism/playground rings
+	# render as flat colored ground. Open (linear) variants carry no fillable
+	# surface — the manager's _is_ignorable_way suppresses their skip noise.
 	if not OSMWayHandler.is_closed_way(way):
 		return false
+	# Tourism grounds (camp_site, caravan_site, chalet plots) and playground
+	# equipment footprints are closed land-cover rings.
+	if way.tags.has("tourism") or way.tags.has("playground"):
+		return true
 	if _MAN_MADE_AREA_VALUES.has(way.tags.get("man_made", "")):
 		return true
 	# Historic footprints (forts, castles, archaeological sites) are closed

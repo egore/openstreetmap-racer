@@ -20,6 +20,20 @@ const AREA_COLORS := {
 	"leisure": {
 		"park": Color(0.35, 0.7, 0.3),
 		"pitch": Color(0.3, 0.65, 0.25),
+		"playground": Color(0.7, 0.6, 0.35),          # sandy/bark playground ground
+	},
+	"tourism": {
+		"camp_site": Color(0.45, 0.65, 0.35),         # grassy camping ground
+		"caravan_site": Color(0.5, 0.62, 0.4),
+		"chalet": Color(0.6, 0.55, 0.45),             # holiday-cabin plot
+	},
+	"playground": {
+		# Playground equipment footprints (climbingframe, structure, etc.) get the
+		# same sandy/bark ground as leisure=playground; unlisted values fall back
+		# to that shared tone below.
+		"climbingframe": Color(0.7, 0.6, 0.35),
+		"structure": Color(0.7, 0.6, 0.35),
+		"sandpit": Color(0.85, 0.78, 0.55),
 	},
 	"amenity": {
 		"parking": Color(0.55, 0.55, 0.55),           # asphalt grey for surface lots
@@ -46,6 +60,8 @@ const AREA_COLORS := {
 		"storage_tank": Color(0.55, 0.55, 0.58),
 		"wastewater": Color(0.5, 0.52, 0.55),
 		"reinforced_slope": Color(0.52, 0.50, 0.46),  # riprap / reinforced embankment
+		"pier": Color(0.62, 0.58, 0.5),               # wooden/concrete pier deck
+		"bunker_silo": Color(0.55, 0.55, 0.55),       # concrete clamp silo
 	},
 	"historic": {
 		"fort": Color(0.45, 0.55, 0.35),              # grassy earthwork ramparts
