@@ -40,12 +40,22 @@ signal kudos_event(label: String, amount: int, is_penalty: bool)
 ## Roll angle (radians) past which the assist torque kicks in.
 @export var anti_roll_deadzone: float = 0.12
 
+## Body paint colour. Applied to the "Paintjob" surface of the car model at
+## startup via CarPaint; the rest of the car (glass, chrome, lights, tyres) gets
+## matching PBR materials so it reflects the sky/buildings under SSR. Change this
+## to repaint the car.
+@export var paint_color: Color = CarPaint.DEFAULT_PAINT_COLOR
+## When off, the imported model's original materials are left as-is (A/B compare
+## against the flat-shaded look, and a safety valve if a re-export changes names).
+@export var apply_car_paint: bool = true
+
 @onready var front_left_wheel: VehicleWheel3D = $FrontLeftWheel
 @onready var front_right_wheel: VehicleWheel3D = $FrontRightWheel
 @onready var rear_left_wheel: VehicleWheel3D = $RearLeftWheel
 @onready var rear_right_wheel: VehicleWheel3D = $RearRightWheel
 
 @onready var camera_pivot: Node3D = $CameraPivot
+@onready var car_mesh: Node3D = $CarMesh
 @onready var front_left_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Right
 @onready var front_right_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Left
 @onready var rear_left_wheel_mesh: Node3D = $CarMesh/Wheel_Rear_Right
@@ -125,6 +135,7 @@ func _ready() -> void:
 	# no built-in anti-roll bar, so a heavy roll inertia is the simplest stable fix.
 	inertia = Vector3(2200.0, 1400.0, 900.0)
 	_cache_wheel_mesh_rotations()
+	_apply_car_paint()
 	_setup_wheels()
 	# Pre-compute the gear speed bands from this car's top speed so the very first
 	# gear lookup is cheap and the HUD can show a gear immediately.
@@ -143,6 +154,18 @@ func _cache_wheel_mesh_rotations() -> void:
 	_wheel_mesh_rotations[front_right_wheel_mesh.name] = front_right_wheel_mesh.global_basis
 	_wheel_mesh_rotations[rear_left_wheel_mesh.name] = rear_left_wheel_mesh.global_basis
 	_wheel_mesh_rotations[rear_right_wheel_mesh.name] = rear_right_wheel_mesh.global_basis
+
+
+## Swap the imported model's flat materials for PBR car-paint/glass/chrome/tyre
+## materials so the car reads as a real vehicle and reflects the environment
+## under SSR. Applied to the whole CarMesh subtree (body + wheels). Uses surface
+## override materials, so the shared imported mesh resource is never mutated and
+## other instances of the model (traffic cars) are unaffected.
+func _apply_car_paint() -> void:
+	if not apply_car_paint or car_mesh == null:
+		return
+	var painter := CarPaint.new()
+	painter.apply_to(car_mesh, paint_color)
 
 
 func _setup_wheels() -> void:
