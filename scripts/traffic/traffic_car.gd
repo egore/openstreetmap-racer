@@ -25,6 +25,16 @@ extends RigidBody3D
 ## manager (with a little variance) so traffic isn't lock-step.
 var cruise_speed: float = 8.0
 
+## Lateral offset (meters) applied to the right of the road centreline so cars
+## keep to the right-hand lane instead of straddling the middle of the road.
+## Positive = right of travel direction. Set per-route by the manager from the
+## road width: a two-way road offsets by a quarter-width (the centre of the right
+## half); a one-way road stays on the centreline (0) since it uses the whole
+## carriageway. "Right" is derived from the *travel* direction each frame, so a
+## reversed traversal (points already flipped by the manager) still hugs the
+## correct kerb.
+var _lane_offset: float = 0.0
+
 ## The road polyline this car follows and its travel direction. Assigned by the
 ## manager when the car is (re)spawned onto a road.
 var _path: PackedVector3Array = PackedVector3Array()
@@ -106,12 +116,13 @@ func _randomize_color() -> void:
 ## teleport). Used for fresh spawns and recycling. way_id / reversed record which
 ## road (and direction) this is so the manager can count and continue the car
 ## correctly; pass way_id = -1 for an anonymous route (e.g. a test).
-func set_route(path: PackedVector3Array, start_distance: float, way_id: int = -1, reversed: bool = false) -> void:
+func set_route(path: PackedVector3Array, start_distance: float, way_id: int = -1, reversed: bool = false, lane_offset: float = 0.0) -> void:
 	_path = path
 	_path_length = _polyline_length(path)
 	_distance = clampf(start_distance, 0.0, _path_length)
 	_way_id = way_id
 	_reversed = reversed
+	_lane_offset = lane_offset
 	_overshoot = 0.0
 	_snap_to_path()
 
@@ -129,12 +140,13 @@ func set_route(path: PackedVector3Array, start_distance: float, way_id: int = -1
 ## advanced. Snapping to the seam is a sub-metre correction (invisible) that
 ## removes the ambiguity, and re-aiming the velocity kills the old heading so the
 ## car doesn't fight the new road's direction.
-func continue_route(path: PackedVector3Array, start_distance: float, way_id: int, reversed: bool) -> void:
+func continue_route(path: PackedVector3Array, start_distance: float, way_id: int, reversed: bool, lane_offset: float = 0.0) -> void:
 	_path = path
 	_path_length = _polyline_length(path)
 	_distance = clampf(start_distance, 0.0, _path_length)
 	_way_id = way_id
 	_reversed = reversed
+	_lane_offset = lane_offset
 	_overshoot = 0.0
 	_snap_to_path()
 	# Re-aim existing momentum down the new road so a detailed car crosses the
@@ -244,7 +256,11 @@ func _drive_detailed(delta: float) -> void:
 	# nearest point (which causes corner-cutting and jitter). Clamp short of the
 	# very end so the target always leads the car (never a zero-length vector).
 	var look := minf(_distance + _LOOK_AHEAD, _path_length - _END_TOLERANCE * 0.5)
-	var target := _point_at_distance(look)
+	# Aim at the look-ahead point shifted into the right-hand lane, so the pursuit
+	# controller both tracks along the road AND pulls the body over to the correct
+	# side. The lateral pull-back the centreline pursuit already provides now
+	# settles the car on the lane line rather than the middle of the carriageway.
+	var target := _lane_point_at_distance(look)
 	var here := global_position
 	var to_target := target - here
 	to_target.y = 0.0
@@ -289,10 +305,12 @@ func _advance(step: float) -> void:
 func _snap_to_path() -> void:
 	if _path_length <= 0.0:
 		return
-	var pos := _point_at_distance(_distance)
+	var pos := _lane_point_at_distance(_distance)
 	# Sample the point ahead *before* lifting `pos`, so the direction vector keeps
-	# the road's true rise/run and the car pitches with the grade.
-	var ahead := _point_at_distance(minf(_distance + 1.0, _path_length))
+	# the road's true rise/run and the car pitches with the grade. Offset the
+	# ahead point too so the heading follows the (parallel) lane path, not a line
+	# angling out from the centreline to the offset body.
+	var ahead := _lane_point_at_distance(minf(_distance + 1.0, _path_length))
 	var dir := ahead - pos
 	pos.y += _RIDE_HEIGHT
 	global_position = pos
@@ -406,6 +424,35 @@ func _point_at_distance(dist: float) -> Vector3:
 			return _path[i].lerp(_path[i + 1], t)
 		remaining -= seg
 	return _path[_path.size() - 1]
+
+
+## The point `dist` meters along the route, shifted `_lane_offset` meters to the
+## right of the centreline so the car keeps to its lane instead of the middle of
+## the road. "Right" is taken from the local travel direction (the tangent at
+## `dist`), computed in the XZ plane so the offset is purely lateral and never
+## lifts or drops the car off the road surface. With _lane_offset == 0 this is
+## exactly _point_at_distance, so one-way / centred routes are unaffected.
+func _lane_point_at_distance(dist: float) -> Vector3:
+	var pos := _point_at_distance(dist)
+	if absf(_lane_offset) < 0.0001 or _path_length <= 0.0:
+		return pos
+	# Local tangent (travel direction) in the ground plane. Sample a short step
+	# ahead, falling back to a step behind at the very end so the tangent is never
+	# zero-length. Because the manager reverses the polyline for reversed
+	# traversal, this tangent already points the way the car actually drives.
+	var ahead := _point_at_distance(minf(dist + 1.0, _path_length))
+	var tangent := Vector2(ahead.x - pos.x, ahead.z - pos.z)
+	if tangent.length_squared() < 0.0001:
+		var behind := _point_at_distance(maxf(dist - 1.0, 0.0))
+		tangent = Vector2(pos.x - behind.x, pos.z - behind.z)
+	if tangent.length_squared() < 0.0001:
+		return pos
+	# Driver's right in Godot's right-handed frame is forward × UP — the very same
+	# vector _slope_basis uses for the body's +X axis, so the offset lines up with
+	# the direction the car actually faces "right". For forward +X this yields +Z.
+	var forward := Vector3(tangent.x, 0.0, tangent.y)
+	var right := forward.cross(Vector3.UP).normalized()
+	return pos + right * _lane_offset
 
 
 ## Horizontal (ground-plane) distance between two world points. Slope is carried

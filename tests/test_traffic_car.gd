@@ -149,6 +149,60 @@ func test_closest_distance_clamps_past_end() -> void:
 	assert_float(car._closest_distance(Vector3(130, 0, 0))).is_equal_approx(100.0, 0.01)
 
 
+# ─── Right-hand lane offset (keep-right driving) ─────────────────────────────
+#
+# Cars must hug the right side of a two-way road rather than straddle the centre.
+# set_route takes a lane_offset (meters to the right of the centreline); the car
+# is placed offset laterally while its arc-length progress along the road is
+# unchanged. "Right" is derived from the travel direction, so a reversed
+# traversal offsets to the opposite world side (still the driver's right).
+
+func test_no_lane_offset_stays_on_centreline() -> void:
+	# Default (offset 0, e.g. a one-way road) is unchanged: dead on the centreline.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, 0)]), 50.0)
+	assert_float(car.global_position.z).is_equal_approx(0.0, 0.001)
+
+
+func test_lane_offset_places_car_to_the_right() -> void:
+	# Travelling east (+X), the driver's right is +Z. A 1.25 m offset puts the
+	# body 1.25 m to +Z of the centreline, without changing X (arc-length).
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, 0)]), 50.0, -1, false, 1.25)
+	assert_float(car.global_position.x).is_equal_approx(50.0, 0.01)
+	assert_float(car.global_position.z).is_equal_approx(1.25, 0.01)
+
+
+func test_lane_offset_flips_with_travel_direction() -> void:
+	# Same physical road driven the other way (the manager reverses the polyline
+	# for a reversed traversal). Now travel is west (-X), so the driver's right is
+	# -Z — the offset lands on the opposite world side, i.e. the other lane.
+	var car := _make_car()
+	var reversed_path := PackedVector3Array([Vector3(100, 0, 0), Vector3(0, 0, 0)])
+	car.set_route(reversed_path, 50.0, -1, true, 1.25)
+	assert_float(car.global_position.x).is_equal_approx(50.0, 0.01)
+	assert_float(car.global_position.z).is_equal_approx(-1.25, 0.01)
+
+
+func test_lane_offset_does_not_change_arc_length_projection() -> void:
+	# The offset is purely lateral: a body sitting in the right lane still projects
+	# onto the same arc-length along the centreline, so routing/finish logic is
+	# unaffected by which lane the car drives in.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(100, 0, 0)]), 30.0, -1, false, 1.5)
+	assert_float(car._closest_distance(car.global_position)).is_equal_approx(30.0, 0.01)
+
+
+func test_lane_offset_perpendicular_on_north_south_road() -> void:
+	# Travelling north (-Z in Godot, since a smaller Z is "forward" here we use a
+	# road heading +Z), confirm the offset is perpendicular to travel, not a fixed
+	# world axis. Road runs south→north along +Z: forward +Z, right is -X.
+	var car := _make_car()
+	car.set_route(PackedVector3Array([Vector3(0, 0, 0), Vector3(0, 0, 100)]), 40.0, -1, false, 2.0)
+	assert_float(car.global_position.z).is_equal_approx(40.0, 0.01)
+	assert_float(car.global_position.x).is_equal_approx(-2.0, 0.01)
+
+
 # ─── Slope orientation (the terrain-drape fix) ───────────────────────────────
 #
 # On a hill the car must sit *on* the road: pitch with the grade (nose up when
