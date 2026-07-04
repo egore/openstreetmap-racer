@@ -422,21 +422,23 @@ static func _connects(road: TrafficRoadNetwork.Road, reversed: bool, cont: Traff
 	return junction == enter
 
 
-## Place a car on a road: orient the polyline for the travel direction, keep the
-## car's speed (only randomise it on a *fresh* placement, i.e. start ~0), and
-## record the way id + direction so it can be counted and continued later.
-## start_distance seeds progress (0 at the entering junction).
+## Place a car on a road: orient the polyline for the travel direction, give it a
+## fresh cruise speed, and record the way id + direction so it can be counted and
+## continued later. start_distance seeds progress (0 at the entering junction).
+##
+## This is only ever a *fresh* placement (spawn or recycle) — cars flowing across
+## a junction go through continue_route(), not here. So a two-way road always gets
+## a direction coin-flip, which is what makes both lanes carry traffic. (The old
+## code gated the flip on start_distance <= 0.001 to mean "fresh placement", but
+## fresh cars are seeded at a *random* distance along the road, so the flip almost
+## never fired and every car drove the forward direction — no oncoming traffic.)
 func _assign_to_road(car: TrafficCar, road: TrafficRoadNetwork.Road, start_distance: float, reversed: bool = false) -> void:
 	# A two-way road with no forced direction gets a coin-flip so both directions
-	# see traffic; a continuation passes an explicit `reversed` and skips this.
-	if not reversed and not road.one_way and start_distance <= 0.001:
+	# see traffic; callers that want a specific direction pass `reversed` explicitly.
+	if not reversed and not road.one_way:
 		reversed = _rng.randf() < 0.5
 	var path := _reverse_points(road.points) if reversed else road.points
-	# Give a car a fresh cruise speed only when it's being placed anew (near the
-	# start); a continuation (overshoot-seeded) keeps its current speed for a
-	# smooth junction crossing.
-	if start_distance <= 0.001:
-		car.cruise_speed = _rng.randf_range(_SPEED_MIN, _SPEED_MAX)
+	car.cruise_speed = _rng.randf_range(_SPEED_MIN, _SPEED_MAX)
 	car.set_route(path, start_distance, road.segment_id, reversed, _lane_offset_for(road))
 	car.visible = true
 	# Seed a fresh long-term plan from this road/direction so the car has an
