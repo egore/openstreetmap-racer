@@ -389,3 +389,41 @@ func test_pier_color_is_deck() -> void:
 	var color := PolygonUtils.get_area_color({"man_made": "pier"})
 	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
 		.override_failure_message("man_made=pier has a dedicated color").is_false()
+
+
+# ─── Ignorable-way suppression tests ────────────────────────────────────────
+# _is_ignorable_way suppresses expected "Skipping way" log noise for features
+# that have no fillable surface. It is context-free, so we can call it on a
+# throwaway manager instance.
+
+func test_open_playground_equipment_is_ignorable() -> void:
+	# playground=climbingframe authored as an open / degenerate outline (not a
+	# closed ring) has no fillable surface, so it must be treated as ignorable
+	# rather than logged as an unmatched skip.
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"playground": "climbingframe"}, false)
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("open playground equipment -> ignorable").is_true()
+
+
+func test_closed_playground_equipment_not_ignorable() -> void:
+	# A closed climbingframe ring IS renderable ground (AreaHandler claims it),
+	# so it must NOT be suppressed as ignorable.
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"playground": "climbingframe"})
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("closed playground ring -> not ignorable").is_false()
+
+
+func test_dyke_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"man_made": "dyke"}, false)
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("man_made=dyke -> ignorable").is_true()
+
+
+func test_open_pier_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"man_made": "pier"}, false)
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("open man_made=pier -> ignorable").is_true()
