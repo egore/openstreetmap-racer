@@ -87,6 +87,130 @@ static func get_area_color(tags: Dictionary) -> Color:
 			return DEFAULT_AREA_COLOR
 	return DEFAULT_AREA_COLOR
 
+## ─── Ground layer ordering (the 3D analogue of Mapnik's layer stack) ─────────
+##
+## Overlapping ground polygons (a grass patch inside a park, a riverbank over a
+## meadow) are coplanar and z-fight when both write depth. We resolve them the
+## way Mapnik/OSM-Carto does — a fixed painter's-algorithm layer order — instead
+## of nudging y-offsets (which never fully stops flicker at grazing angles).
+##
+## The ground meshes disable depth-write (see build_flat_polygon_mesh) so the
+## GPU never fights over near-equal depths; draw order is decided purely by
+## Material.render_priority. This mirrors the road system in
+## RoadMaterialFactory. Values are used as the BASE render_priority; a small
+## area-based tiebreak is added on top (see ground_render_priority) so a smaller
+## patch of the SAME class still paints last.
+##
+## Higher = painted LATER = on top. Broad landcover sits low; water sits above
+## landcover; more specific/human features (pitches, playgrounds, parking,
+## paved surfaces) sit above that. Kept well BELOW the road range (roads start
+## around +1 but on their own depth-disabled layer above all ground) — ground
+## priorities are negative so they never paint over a road.
+const GROUND_LAYER_PRIORITY := {
+	# Broadest landcover — the base carpet everything else sits on.
+	"landuse=forest": -40,
+	"natural=wood": -40,
+	"landuse=farmland": -39,
+	"landuse=meadow": -38,
+	"landuse=grass": -37,
+	"natural=scrub": -37,
+	"landuse=residential": -36,
+	"landuse=commercial": -36,
+	"landuse=industrial": -36,
+	# Parks read as landcover but should sit above bare grass/residential fill.
+	"leisure=park": -34,
+	"leisure=garden": -34,
+	"leisure=nature_reserve": -35,
+	# Water above dry landcover (riverbanks, lakes drawn over meadows).
+	"natural=water": -30,
+	"natural=wetland": -31,
+	"natural=beach": -29,
+	# Specific human-made / recreation surfaces sit on top of the landcover.
+	"leisure=pitch": -20,
+	"leisure=playground": -19,
+	"playground=*": -19,
+	"amenity=school": -22,
+	"amenity=university": -22,
+	"amenity=college": -22,
+	"amenity=hospital": -22,
+	"amenity=parking": -12,
+	"amenity=bicycle_parking": -12,
+	"amenity=motorcycle_parking": -12,
+	"area:highway=*": -10,
+}
+## Fallback for a ground feature not named above (generic closed ring).
+const DEFAULT_GROUND_PRIORITY := -33
+
+## Rank for bare surface=* rings (plazas, courtyards) that carry no landcover
+## tag and so miss GROUND_LAYER_PRIORITY. Sits above generic landcover but below
+## parking/paved-highway, matching where a paved plaza reads in the stack.
+const SURFACE_GROUND_PRIORITY := -14
+
+## Rank for transport platform decks — the topmost ground layer, painted over
+## any surface/landcover it overlays (still below the road layer).
+const PLATFORM_GROUND_PRIORITY := -6
+
+## Sentinel passed to the mesh builders when the caller is NOT a ground layer
+## (roofs, etc.) — the material then keeps default depth-write and priority 0.
+## Chosen outside the ground range so it can never collide with a real rank.
+const GROUND_NO_PRIORITY := 127
+
+## Apply the painter's-algorithm ground layering to a material: disable
+## depth-write and set render_priority so overlapping coplanar ground patches
+## are ordered by paint order (never z-fight). A GROUND_NO_PRIORITY sentinel
+## leaves the material untouched (normal depth writes) for non-ground callers.
+static func _apply_ground_layering(mat: BaseMaterial3D, render_priority: int) -> void:
+	if render_priority == GROUND_NO_PRIORITY:
+		return
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = clampi(render_priority, -128, 127)
+
+## Priority band width reserved for the smaller-patch tiebreak. The base class
+## value is spaced by 1, so keep the tiebreak strictly inside (0, 1) — a smaller
+## polygon nudges up by at most just under 1 rank, never crossing into the next
+## class. This guarantees CLASS order dominates and AREA only breaks ties within
+## a class (and between adjacent classes only when their bases already touch).
+const _GROUND_TIEBREAK_SPAN := 0.9
+## Reference area (m²) at/above which a polygon gets NO smaller-patch bonus.
+## Anything smaller ramps toward the full tiebreak span as it shrinks.
+const _GROUND_TIEBREAK_REF_AREA := 40000.0  # ~200m x 200m
+
+## Look up the base layer rank for a ground feature's tags. Checks each tagged
+## category for an exact "key=value" entry, then a "key=*" wildcard, matching
+## get_area_color's category precedence (AREA_COLORS key order).
+static func ground_base_priority(tags: Dictionary) -> int:
+	for category: String in AREA_COLORS:
+		if tags.has(category):
+			var value: String = tags[category]
+			var exact := "%s=%s" % [category, value]
+			if GROUND_LAYER_PRIORITY.has(exact):
+				return GROUND_LAYER_PRIORITY[exact]
+			var wild := "%s=*" % category
+			if GROUND_LAYER_PRIORITY.has(wild):
+				return GROUND_LAYER_PRIORITY[wild]
+			return DEFAULT_GROUND_PRIORITY
+	return DEFAULT_GROUND_PRIORITY
+
+## Smaller-patch bonus in [0, _GROUND_TIEBREAK_SPAN): a smaller polygon gets a
+## larger bonus so it paints LAST (on top). Zero/negative area is treated as
+## "tiny" and gets the full span. Exposed on its own so callers with a fixed
+## base rank (e.g. SurfaceHandler) can add the same tiebreak.
+static func ground_tiebreak_bonus(area_xz: float) -> float:
+	if area_xz <= 0.0:
+		return _GROUND_TIEBREAK_SPAN
+	# Smaller area → bonus near _GROUND_TIEBREAK_SPAN; large area → ~0.
+	var t := clampf(area_xz / _GROUND_TIEBREAK_REF_AREA, 0.0, 1.0)
+	return (1.0 - t) * _GROUND_TIEBREAK_SPAN
+
+## Final float render_priority for a ground polygon: the class base rank plus a
+## smaller-patch bonus (ground_tiebreak_bonus). A smaller area_xz ⇒ larger bonus
+## ⇒ painted later ⇒ wins over the bigger polygon it sits inside, which is
+## exactly the requested behaviour ("smaller patches drawn last, always win").
+## Returns a float so callers can assign it verbatim to Material.render_priority
+## (Godot rounds/stores it; the ordering is what matters).
+static func ground_render_priority(tags: Dictionary, area_xz: float) -> float:
+	return float(ground_base_priority(tags)) + ground_tiebreak_bonus(area_xz)
+
 ## Collect world positions for a way's node_ids from osm_data.
 static func way_to_points(way_node_ids: Array[int], osm_data_nodes: Dictionary) -> PackedVector3Array:
 	var points: PackedVector3Array = []
@@ -109,7 +233,19 @@ static func triangulate_xz(points: PackedVector3Array) -> PackedInt32Array:
 ## When drape_terrain is true, each vertex keeps its own elevation (points[idx].y)
 ## and y is added as an offset, so the polygon follows the DEM. When false (the
 ## default, used by roofs), every vertex sits at the single height y.
-static func build_flat_polygon_mesh(points: PackedVector3Array, color: Color, y: float = 0.01, drape_terrain: bool = false) -> MeshInstance3D:
+## render_priority orders overlapping (coplanar) ground polygons in the
+## painter's-algorithm layer stack (see ground_render_priority). When it is set
+## to anything other than GROUND_NO_PRIORITY the material also disables
+## depth-write so overlapping coplanar patches are resolved by paint order
+## instead of z-fighting — the Mapnik model, matching the road system. Roofs
+## and other non-ground callers leave it default and keep normal depth writes.
+static func build_flat_polygon_mesh(
+		points: PackedVector3Array,
+		color: Color,
+		y: float = 0.01,
+		drape_terrain: bool = false,
+		render_priority: int = GROUND_NO_PRIORITY,
+) -> MeshInstance3D:
 	if points.size() < 3:
 		return null
 
@@ -122,6 +258,7 @@ static func build_flat_polygon_mesh(points: PackedVector3Array, color: Color, y:
 
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	_apply_ground_layering(mat, render_priority)
 	st.set_material(mat)
 
 	for i: int in range(indices.size()):
@@ -247,6 +384,23 @@ static func polygon_centroid(points: PackedVector3Array) -> Vector3:
 		cx += points[i].x
 		cz += points[i].z
 	return Vector3(cx / count, 0.0, cz / count)
+
+## Absolute XZ-plane area of a polygon (shoelace, winding-agnostic). Used to
+## rank overlapping ground patches so the SMALLER one paints on top (see
+## ground_render_priority) — a small grass patch inside a park must win.
+static func polygon_area_xz(points: PackedVector3Array) -> float:
+	var count := points.size()
+	# Exclude the closing duplicate vertex if present.
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	if count < 3:
+		return 0.0
+	var signed_area := 0.0
+	for i: int in range(count):
+		var a := points[i]
+		var b := points[(i + 1) % count]
+		signed_area += a.x * b.z - b.x * a.z
+	return absf(signed_area) * 0.5
 
 ## Return the AABB min/max in XZ plane as [min_x, max_x, min_z, max_z].
 static func polygon_bounds_xz(points: PackedVector3Array) -> Array[float]:
@@ -596,11 +750,12 @@ static func build_terrain_draped_mesh(
 		grid_step: float,
 		y_offset: float = 0.01,
 		clip_rect: Variant = null,  # null or Array[float] [min_x, max_x, min_z, max_z]
+		render_priority: int = GROUND_NO_PRIORITY,
 ) -> MeshInstance3D:
 	if points.size() < 3:
 		return null
 	if hp == null or not hp.is_ready():
-		return build_flat_polygon_mesh(points, color, y_offset, true)
+		return build_flat_polygon_mesh(points, color, y_offset, true, render_priority)
 
 	# Convert the polygon to 2D (XZ plane) for clipping operations.
 	var poly_2d: PackedVector2Array = []
@@ -658,6 +813,7 @@ static func build_terrain_draped_mesh(
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
+	_apply_ground_layering(mat, render_priority)
 	st.set_material(mat)
 
 	var has_tris := false
@@ -746,6 +902,7 @@ static func build_forest_area(
 		grid_step: float,
 		y_offset: float = 0.01,
 		clip_rect: Variant = null,
+		render_priority: int = GROUND_NO_PRIORITY,
 ) -> Node3D:
 	if points.size() < 3:
 		return null
@@ -755,9 +912,9 @@ static func build_forest_area(
 	# --- ground polygon ---
 	var ground: MeshInstance3D
 	if hp != null and hp.is_ready() and grid_step > 0.0:
-		ground = build_terrain_draped_mesh(points, FOREST_GROUND_COLOR, hp, grid_step, y_offset, clip_rect)
+		ground = build_terrain_draped_mesh(points, FOREST_GROUND_COLOR, hp, grid_step, y_offset, clip_rect, render_priority)
 	else:
-		ground = build_flat_polygon_mesh(points, FOREST_GROUND_COLOR, y_offset, true)
+		ground = build_flat_polygon_mesh(points, FOREST_GROUND_COLOR, y_offset, true, render_priority)
 	if ground != null:
 		ground.name = "ForestGround"
 		root.add_child(ground)
@@ -874,6 +1031,7 @@ static func build_scrub_area(
 		grid_step: float,
 		y_offset: float = 0.01,
 		clip_rect: Variant = null,
+		render_priority: int = GROUND_NO_PRIORITY,
 ) -> Node3D:
 	if points.size() < 3:
 		return null
@@ -883,9 +1041,9 @@ static func build_scrub_area(
 	# --- ground polygon ---
 	var ground: MeshInstance3D
 	if hp != null and hp.is_ready() and grid_step > 0.0:
-		ground = build_terrain_draped_mesh(points, SCRUB_GROUND_COLOR, hp, grid_step, y_offset, clip_rect)
+		ground = build_terrain_draped_mesh(points, SCRUB_GROUND_COLOR, hp, grid_step, y_offset, clip_rect, render_priority)
 	else:
-		ground = build_flat_polygon_mesh(points, SCRUB_GROUND_COLOR, y_offset, true)
+		ground = build_flat_polygon_mesh(points, SCRUB_GROUND_COLOR, y_offset, true, render_priority)
 	if ground != null:
 		ground.name = "ScrubGround"
 		root.add_child(ground)

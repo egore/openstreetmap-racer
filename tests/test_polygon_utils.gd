@@ -213,3 +213,92 @@ func test_clip_polyline_margin_extends_bounds() -> void:
 	assert_int(parts.size()).is_equal(1)
 	var part: PackedVector3Array = parts[0]
 	assert_float(part[part.size() - 1].x).override_failure_message("margin keeps point past raw edge").is_equal_approx(102.0, 0.01)
+
+
+# ─── Ground layer ordering (z-fighting fix) ──────────────────────────────────
+
+func _square(size: float) -> PackedVector3Array:
+	# Closed axis-aligned square of side `size` in the XZ plane, area == size².
+	return PackedVector3Array([
+		Vector3(0, 0, 0),
+		Vector3(size, 0, 0),
+		Vector3(size, 0, size),
+		Vector3(0, 0, size),
+		Vector3(0, 0, 0),
+	])
+
+
+func test_polygon_area_xz_matches_side_squared() -> void:
+	# Shoelace area of a 10x10 closed square is 100, winding-agnostic.
+	assert_float(PolygonUtils.polygon_area_xz(_square(10.0))) \
+		.override_failure_message("10x10 square area is 100").is_equal_approx(100.0, 0.001)
+	# Reversed winding must give the same (absolute) area.
+	assert_float(PolygonUtils.polygon_area_xz(PolygonUtils.reverse_polygon(_square(10.0)))) \
+		.override_failure_message("area is winding-agnostic").is_equal_approx(100.0, 0.001)
+	# Degenerate (<3 pts) is zero, not a crash.
+	assert_float(PolygonUtils.polygon_area_xz(PackedVector3Array([Vector3.ZERO, Vector3.ONE]))) \
+		.override_failure_message("degenerate polygon area is 0").is_equal(0.0)
+
+
+func test_ground_base_priority_follows_layer_stack() -> void:
+	# Water paints above dry landcover; parking above water; landcover lowest.
+	var grass := PolygonUtils.ground_base_priority({"landuse": "grass"})
+	var water := PolygonUtils.ground_base_priority({"natural": "water"})
+	var parking := PolygonUtils.ground_base_priority({"amenity": "parking"})
+	assert_int(water).override_failure_message("water paints above grass").is_greater(grass)
+	assert_int(parking).override_failure_message("parking paints above water").is_greater(water)
+
+
+func test_ground_base_priority_wildcard_and_default() -> void:
+	# playground=* wildcard resolves; an untabled closed ring falls back to default.
+	assert_int(PolygonUtils.ground_base_priority({"playground": "sandpit"})) \
+		.override_failure_message("playground wildcard resolves") \
+		.is_equal(PolygonUtils.GROUND_LAYER_PRIORITY["playground=*"])
+	assert_int(PolygonUtils.ground_base_priority({"shop": "supermarket"})) \
+		.override_failure_message("untabled area falls back to default") \
+		.is_equal(PolygonUtils.DEFAULT_GROUND_PRIORITY)
+
+
+func test_smaller_patch_wins_within_same_class() -> void:
+	# Two grass polygons of the same class: the SMALLER one must get a strictly
+	# higher render_priority so it paints last and wins (the requested behaviour).
+	var tags := {"landuse": "grass"}
+	var big := PolygonUtils.ground_render_priority(tags, 40000.0)   # ref area ⇒ ~no bonus
+	var small := PolygonUtils.ground_render_priority(tags, 25.0)    # tiny patch ⇒ big bonus
+	assert_float(small).override_failure_message("smaller grass patch paints on top").is_greater(big)
+
+
+func test_class_order_dominates_area_tiebreak() -> void:
+	# A big water polygon must still paint above a tiny grass patch — the class
+	# layer order dominates; the area tiebreak (< 1 rank) can't cross classes.
+	var big_water := PolygonUtils.ground_render_priority({"natural": "water"}, 1000000.0)
+	var tiny_grass := PolygonUtils.ground_render_priority({"landuse": "grass"}, 1.0)
+	assert_float(big_water).override_failure_message("water class beats grass regardless of size").is_greater(tiny_grass)
+
+
+func test_ground_tiebreak_bonus_bounds() -> void:
+	# Bonus is within [0, span): huge area ⇒ ~0, tiny/degenerate ⇒ full span.
+	assert_float(PolygonUtils.ground_tiebreak_bonus(1e9)) \
+		.override_failure_message("huge area gets no bonus").is_equal_approx(0.0, 0.001)
+	assert_float(PolygonUtils.ground_tiebreak_bonus(0.0)) \
+		.override_failure_message("degenerate area gets full span") \
+		.is_equal_approx(PolygonUtils._GROUND_TIEBREAK_SPAN, 0.001)
+
+
+func test_flat_polygon_mesh_disables_depth_write_when_layered() -> void:
+	# Passing a real ground priority must produce a material that drops depth-write
+	# (so coplanar patches are ordered by paint order, not z-fighting) and carries
+	# that priority. Without it (roof path) depth-write stays on.
+	var layered := PolygonUtils.build_flat_polygon_mesh(_square(10.0), Color.WHITE, 0.01, false, -30)
+	assert_object(layered).is_not_null()
+	var lmat := layered.mesh.surface_get_material(0) as BaseMaterial3D
+	assert_int(lmat.depth_draw_mode) \
+		.override_failure_message("layered ground disables depth write") \
+		.is_equal(BaseMaterial3D.DEPTH_DRAW_DISABLED)
+	assert_int(lmat.render_priority).override_failure_message("render_priority applied").is_equal(-30)
+
+	var roof := PolygonUtils.build_flat_polygon_mesh(_square(10.0), Color.WHITE, 0.01, false)
+	var rmat := roof.mesh.surface_get_material(0) as BaseMaterial3D
+	assert_int(rmat.depth_draw_mode) \
+		.override_failure_message("non-ground caller keeps default depth draw") \
+		.is_not_equal(BaseMaterial3D.DEPTH_DRAW_DISABLED)
