@@ -924,6 +924,11 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 	var man_made: String = way.tags.get("man_made", "")
 	if man_made == "bridge" or man_made == "embankment":
 		return true
+	# A reinforced_slope is only renderable as a closed ground ring (AreaHandler
+	# claims those). Open linear slopes carry no fillable surface, so suppress
+	# their expected skip noise.
+	if man_made == "reinforced_slope" and not OSMWayHandler.is_closed_way(way):
+		return true
 	# Bus/transport station outlines are represented elsewhere (nodes/areas).
 	if way.tags.get("public_transport", "") == "station":
 		return true
