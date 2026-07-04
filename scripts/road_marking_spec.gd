@@ -127,9 +127,9 @@ static func _classify(tags: Dictionary) -> int:
 ## marks this with crossing=zebra/marked/uncontrolled or crossing:markings=* /
 ## marking=*. Unmarked/informal crossings (crossing=unmarked, no) get no paint.
 static func _crossing_kind(tags: Dictionary) -> int:
-	var markings := String(tags.get("crossing:markings", tags.get("marking", "")))
-	if markings != "":
-		return 0 if (markings == "no") else Kind.ZEBRA
+	var crossing_markings := String(tags.get("crossing:markings", tags.get("marking", "")))
+	if crossing_markings != "":
+		return 0 if (crossing_markings == "no") else Kind.ZEBRA
 
 	var crossing := String(tags.get("crossing", ""))
 	match crossing:
