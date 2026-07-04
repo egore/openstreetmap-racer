@@ -313,7 +313,11 @@ func _build_roof_slab(points: PackedVector3Array, base_y: float, thickness: floa
 			Vector3(points[ia].x, base_y, points[ia].z),
 			Vector3(points[ic].x, base_y, points[ic].z),
 			Vector3(points[ib].x, base_y, points[ib].z))
-	# Side faces around the perimeter
+	# Side faces around the perimeter.
+	# Winding (bl, tl, top_r, br) makes the culling front face point OUTWARD for
+	# CCW-normalized footprints, matching _build_walls. The reversed order
+	# (bl, br, top_r, tl) faces inward and is backface-culled from outside —
+	# the slab edges would then only be visible from underneath the roof.
 	for i: int in range(points.size() - 1):
 		var p0 := points[i]
 		var p1 := points[i + 1]
@@ -321,7 +325,7 @@ func _build_roof_slab(points: PackedVector3Array, base_y: float, thickness: floa
 		var br := Vector3(p1.x, base_y, p1.z)
 		var top_r := Vector3(p1.x, top_y, p1.z)
 		var tl := Vector3(p0.x, top_y, p0.z)
-		RoofGeometry.add_quad(st, bl, br, top_r, tl)
+		RoofGeometry.add_quad(st, bl, tl, top_r, br)
 	return RoofGeometry.make_mesh(st, "Roof")
 
 ## Parse a height string value to meters. Handles:

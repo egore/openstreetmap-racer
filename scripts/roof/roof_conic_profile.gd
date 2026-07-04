@@ -90,20 +90,25 @@ static func build(points: PackedVector3Array, base_y: float, roof_h: float,
 			ring.append(Vector3(px, ring_y, pz))
 		rings.append(ring)
 
-	# Create quad strips between adjacent rings
+	# Create quad strips between adjacent rings.
+	# Winding is (lower[i], upper[i], upper[ni], lower[ni]) so the culling
+	# front face points OUTWARD for CCW-normalized footprints. The reversed
+	# order (lower[i], lower[ni], ...) would face inward and be backface-culled
+	# from outside — visible only from inside the roof.
 	for j: int in range(rows - 1):
 		var lower := rings[j]
 		var upper := rings[j + 1]
 		for i: int in range(n):
 			var ni := (i + 1) % n
-			RoofGeometry.add_quad(st, lower[i], lower[ni], upper[ni], upper[i])
+			RoofGeometry.add_quad(st, lower[i], upper[i], upper[ni], lower[ni])
 
-	# Top ring to apex: triangles
+	# Top ring to apex: triangles wound (top_ring[ni], top_ring[i], apex) so the
+	# front face points outward, matching the side-quad winding above.
 	var top_ring := rings[rows - 1]
 	var apex := Vector3(center.x, base_y + roof_h * profile[rows].y, center.z)
 	for i: int in range(n):
 		var ni := (i + 1) % n
-		RoofGeometry.add_tri(st, top_ring[i], top_ring[ni], apex)
+		RoofGeometry.add_tri(st, top_ring[ni], top_ring[i], apex)
 
 	var result: Array[Node3D] = []
 	result.append(RoofGeometry.make_mesh(st, "Roof"))
