@@ -945,6 +945,11 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 			or way.tags.get("railway", "") == "platform" \
 			or way.tags.get("highway", "") == "platform":
 		return true
+	# Playground equipment (climbingframe, swing, ...) is point-like structure.
+	# AreaHandler renders it when authored as a closed ground ring; an open or
+	# degenerate outline has no fillable surface, so suppress its skip noise.
+	if way.tags.has("playground") and not OSMWayHandler.is_closed_way(way):
+		return true
 	# Underground waterways (culverts/negative layer) are intentionally not drawn
 	# on the surface; suppress their skip noise.
 	if way.tags.has("waterway"):
