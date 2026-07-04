@@ -10,6 +10,7 @@
 [ext_resource type="Script" path="res://scripts/headlights.gd" id="8_headlights"]
 [ext_resource type="Script" path="res://scripts/street_lamp_lights.gd" id="9_lamps"]
 [ext_resource type="Script" path="res://scripts/traffic/traffic_manager.gd" id="10_traffic"]
+[ext_resource type="Script" path="res://scripts/post_processing.gd" id="11_postfx"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -39,11 +40,24 @@ sky = SubResource("Sky_main")
 ambient_light_source = 2
 ambient_light_color = Color(0.6, 0.65, 0.7, 1)
 ambient_light_energy = 0.5
-tonemap_mode = 2
+tonemap_mode = 3
+tonemap_exposure = 1.0
+ssr_enabled = true
+ssao_enabled = true
+ssil_enabled = true
+glow_enabled = true
+glow_intensity = 0.8
+glow_bloom = 0.05
+glow_blend_mode = 1
+glow_hdr_threshold = 1.0
 fog_enabled = true
 fog_light_color = Color(0.7, 0.75, 0.8, 1)
 fog_density = 0.002
 fog_aerial_perspective = 0.5
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.05
+adjustment_saturation = 1.12
 
 [sub_resource type="BoxShape3D" id="BoxShape_car"]
 size = Vector3(1.8, 1, 4.1)
@@ -82,6 +96,12 @@ directional_shadow_max_distance = 250.0
 script = ExtResource("7_skyctl")
 world_environment_path = NodePath("../WorldEnvironment")
 sun_light_path = NodePath("../DirectionalLight3D")
+start_in_day = true
+
+[node name="PostProcessing" type="Node" parent="." unique_id=1042673344]
+script = ExtResource("11_postfx")
+world_environment_path = NodePath("../WorldEnvironment")
+sky_controller_path = NodePath("../SkyController")
 start_in_day = true
 
 [node name="StreetLampLights" type="Node" parent="." unique_id=1042673342]
