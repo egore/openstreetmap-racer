@@ -26,6 +26,9 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 @onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
 @onready var headlights: Headlights = $Car/Headlights
 @onready var street_lamp_lights: StreetLampLights = $StreetLampLights
+## Wet-road weather. Self-wires via the global `wetness` shader uniform; kept
+## here so the debug key (F5) can toggle rain from the composition root.
+@onready var weather_controller: WeatherController = $WeatherController
 
 ## Active tween for the centre kudos popup's pop-and-fade, kept so a new event can
 ## kill the in-flight animation before starting its own (avoids stacked tweens).
@@ -114,6 +117,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		print("[trace] frame tracing %s" % ("ON" if on else "OFF"))
 	elif key.keycode == KEY_F4:
 		FrameTracerScript.dump_summary()
+	elif key.keycode == KEY_F5:
+		# Toggle wet-road weather (rain rolls in/out over a few seconds).
+		var wet := weather_controller.toggle()
+		print("[weather] %s" % ("WET" if wet else "DRY"))
 
 ## Pauses or resumes the game. Godot's scene-tree pause cleanly halts car
 ## physics, tile streaming and HUD updates without the hacky "near-zero

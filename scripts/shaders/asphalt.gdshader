@@ -26,6 +26,13 @@ render_mode cull_back, diffuse_burley, specular_schlick_ggx, depth_draw_never;
 // Per-road tint (set from ROAD_COLORS by RoadMaterialFactory).
 uniform vec4 base_color : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 
+// Global wetness 0..1 (dry..soaked), driven by WeatherController via a global
+// shader uniform so every road — streamed in or not — responds at once without
+// the CPU touching each material. Wet asphalt goes darker and much glossier so
+// SSR reflects the sky and lights, plus the bump is smoothed (a water film fills
+// the surface grain). See WeatherController and terrain.gdshader.
+global uniform float wetness;
+
 // Size of one noise "tile" in meters. Smaller = finer grain.
 uniform float grain_scale : hint_range(0.05, 5.0) = 0.35;
 // Size of the larger blotchy patches (oil stains, wear) in meters.
@@ -204,7 +211,13 @@ void fragment() {
 	// window (1024 m) is far bigger than anything on screen at once, so the
 	// wrap seam is never visible, but coordinates stay small and precise.
 	vec2 wrapped_xz = mod(world_pos.xz, 1024.0);
-	vec2 grain_uv = wrapped_xz / grain_scale;
+	// The fine grain divides by the small grain_scale, so even the 1024 m wrap
+	// leaves its noise input in the thousands — enough for the hash to degrade
+	// into coarse multi-metre blocks. Sample the grain from a tighter window so
+	// its input stays small and it reads as fine speckle, not big smears; the
+	// wear patches keep the wide window (they are metres-scale by design).
+	vec2 grain_wrapped = mod(world_pos.xz, 64.0);
+	vec2 grain_uv = grain_wrapped / grain_scale;
 	vec2 patch_uv = wrapped_xz / patch_scale;
 
 	float grain = fbm(grain_uv);
@@ -217,19 +230,36 @@ void fragment() {
 
 	// Roughness: rough overall, slightly polished where patches are darker
 	// (mimics oily/worn tire-track sheen).
-	ROUGHNESS = clamp(roughness_base - (patch - 0.5) * roughness_variation * 2.0, 0.0, 1.0);
+	float rough = clamp(roughness_base - (patch - 0.5) * roughness_variation * 2.0, 0.0, 1.0);
+	float spec = 0.4;
+
+	// Wet asphalt: darken the albedo (water soaks the surface dark), collapse the
+	// roughness toward a near-mirror so SSR paints the sky/lights onto the road,
+	// and lift specular. The `patch` term is reused so the wettest sheen pools in
+	// the low (darker) spots, reading as shallow puddles rather than a flat gloss.
+	float wet = clamp(wetness, 0.0, 1.0);
+	if (wet > 0.001) {
+		float puddle = wet * (0.6 + 0.4 * (1.0 - patch)); // wetter in the dips
+		ALBEDO = col * (1.0 - 0.45 * wet);
+		rough = mix(rough, 0.08, puddle);
+		spec = mix(spec, 0.85, wet);
+	}
+
+	ROUGHNESS = rough;
 	METALLIC = 0.0;
-	SPECULAR = 0.4;
+	SPECULAR = spec;
 
 	// Faked bump: derive a gradient of the grain noise in world XZ and tilt the
 	// normal accordingly. Surface geometry is untouched (flat, collision-safe).
+	// A water film smooths the surface, so fade the bump out as it gets wet.
+	float bump = bump_strength * (1.0 - 0.85 * wet);
 	float e = 0.5 * grain_scale; // sample offset in meters
-	float hx = fbm((wrapped_xz + vec2(e, 0.0)) / grain_scale)
-		- fbm((wrapped_xz - vec2(e, 0.0)) / grain_scale);
-	float hz = fbm((wrapped_xz + vec2(0.0, e)) / grain_scale)
-		- fbm((wrapped_xz - vec2(0.0, e)) / grain_scale);
+	float hx = fbm((grain_wrapped + vec2(e, 0.0)) / grain_scale)
+		- fbm((grain_wrapped - vec2(e, 0.0)) / grain_scale);
+	float hz = fbm((grain_wrapped + vec2(0.0, e)) / grain_scale)
+		- fbm((grain_wrapped - vec2(0.0, e)) / grain_scale);
 	// Perturb in tangent space (Godot's NORMAL_MAP expects a [0,1] tangent normal).
-	vec3 n = normalize(vec3(-hx * bump_strength, -hz * bump_strength, 1.0));
+	vec3 n = normalize(vec3(-hx * bump, -hz * bump, 1.0));
 	NORMAL_MAP = n * 0.5 + 0.5;
 	NORMAL_MAP_DEPTH = 1.0;
 

@@ -11,6 +11,7 @@
 [ext_resource type="Script" uid="uid://g842wxutlhd" path="res://scripts/street_lamp_lights.gd" id="9_lamps"]
 [ext_resource type="Script" uid="uid://cyga08n0yiaqs" path="res://scripts/traffic/traffic_manager.gd" id="10_traffic"]
 [ext_resource type="Script" uid="uid://bqgct3l1beqog" path="res://scripts/post_processing.gd" id="11_postfx"]
+[ext_resource type="Script" path="res://scripts/weather_controller.gd" id="12_weather"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -55,6 +56,12 @@ adjustment_enabled = true
 adjustment_contrast = 1.05
 adjustment_saturation = 1.12
 
+[sub_resource type="CameraAttributesPractical" id="CamAttrs_dof"]
+dof_blur_far_enabled = true
+dof_blur_far_distance = 180.0
+dof_blur_far_transition = 220.0
+dof_blur_amount = 0.1
+
 [sub_resource type="StandardMaterial3D" id="Material_lamp"]
 albedo_color = Color(0, 0, 0, 1)
 emission_enabled = true
@@ -95,6 +102,11 @@ sun_light_path = NodePath("../DirectionalLight3D")
 script = ExtResource("11_postfx")
 world_environment_path = NodePath("../WorldEnvironment")
 sky_controller_path = NodePath("../SkyController")
+camera_path = NodePath("../Car/CameraPivot/Camera3D")
+
+[node name="WeatherController" type="Node" parent="." unique_id=1042673345]
+script = ExtResource("12_weather")
+start_wet = false
 
 [node name="StreetLampLights" type="Node" parent="." unique_id=1042673342]
 script = ExtResource("9_lamps")
@@ -169,6 +181,7 @@ transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 2
 
 [node name="Camera3D" type="Camera3D" parent="Car/CameraPivot" unique_id=674512223]
 transform = Transform3D(1, 0, 0, 0, 0.966, 0.259, 0, -0.259, 0.966, 0, 3, 8)
+attributes = SubResource("CamAttrs_dof")
 fov = 70.0
 far = 2000.0
 

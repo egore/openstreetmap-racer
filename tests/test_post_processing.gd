@@ -37,6 +37,9 @@ func _settings(d: Dictionary) -> PostProcessing.PPSettings:
 	s.brightness = d.brightness
 	s.contrast = d.contrast
 	s.saturation = d.saturation
+	s.dof_far_distance = d.dof_far_distance
+	s.dof_far_transition = d.dof_far_transition
+	s.dof_far_amount = d.dof_far_amount
 	return s
 
 
@@ -53,15 +56,19 @@ func test_master_disabled_turns_everything_off() -> void:
 	pp.ssil_enabled = true
 	pp.ssr_enabled = true
 	pp.adjustments_enabled = true
+	pp.dof_enabled = true
 
 	var env := Environment.new()
 	pp.apply_to(env, _settings(DAY))
+	var attrs := CameraAttributesPractical.new()
+	pp.apply_dof_to(attrs, _settings(DAY))
 
 	assert_bool(env.glow_enabled).override_failure_message("master off disables glow").is_false()
 	assert_bool(env.ssao_enabled).override_failure_message("master off disables SSAO").is_false()
 	assert_bool(env.ssil_enabled).override_failure_message("master off disables SSIL").is_false()
 	assert_bool(env.ssr_enabled).override_failure_message("master off disables SSR").is_false()
 	assert_bool(env.adjustment_enabled).override_failure_message("master off disables grade").is_false()
+	assert_bool(attrs.dof_blur_far_enabled).override_failure_message("master off disables DOF").is_false()
 
 
 # ─── Per-effect toggles ──────────────────────────────────────────────────────
@@ -219,3 +226,52 @@ func test_presets_produce_different_environment() -> void:
 	assert_float(night_env.glow_bloom) \
 		.override_failure_message("day and night bloom differ on the Environment") \
 		.is_not_equal(day_env.glow_bloom)
+
+
+# ─── Depth of field ──────────────────────────────────────────────────────────
+
+## DOF on writes the far-blur distance/transition/amount to the camera attributes.
+func test_dof_values_applied() -> void:
+	var pp := _pp()
+	pp.enabled = true
+	pp.dof_enabled = true
+	var s := _settings(DAY)
+
+	var attrs := CameraAttributesPractical.new()
+	pp.apply_dof_to(attrs, s)
+
+	assert_bool(attrs.dof_blur_far_enabled).override_failure_message("DOF far enabled").is_true()
+	assert_float(attrs.dof_blur_far_distance).is_equal_approx(s.dof_far_distance, 0.0001)
+	assert_float(attrs.dof_blur_far_transition).is_equal_approx(s.dof_far_transition, 0.0001)
+	assert_float(attrs.dof_blur_amount).is_equal_approx(s.dof_far_amount, 0.0001)
+
+
+## DOF is gated by both its own toggle and the master switch, independently of
+## the Environment-side effects.
+func test_dof_toggle_is_independent() -> void:
+	# DOF off -> camera attrs far-blur off, but Environment effects still on.
+	var pp := _pp()
+	pp.enabled = true
+	pp.glow_enabled = true
+	pp.ssr_enabled = true
+	pp.dof_enabled = false
+
+	var env := Environment.new()
+	pp.apply_to(env, _settings(DAY))
+	var attrs := CameraAttributesPractical.new()
+	pp.apply_dof_to(attrs, _settings(DAY))
+
+	assert_bool(attrs.dof_blur_far_enabled).override_failure_message("DOF off").is_false()
+	assert_bool(env.glow_enabled).override_failure_message("glow unaffected by DOF toggle").is_true()
+	assert_bool(env.ssr_enabled).override_failure_message("SSR unaffected by DOF toggle").is_true()
+
+
+## Only the far side of DOF is used — the near blur is never enabled, so the car
+## and immediate road always stay sharp.
+func test_dof_near_stays_disabled() -> void:
+	var pp := _pp()
+	pp.enabled = true
+	pp.dof_enabled = true
+	var attrs := CameraAttributesPractical.new()
+	pp.apply_dof_to(attrs, _settings(DAY))
+	assert_bool(attrs.dof_blur_near_enabled).override_failure_message("near DOF stays off").is_false()

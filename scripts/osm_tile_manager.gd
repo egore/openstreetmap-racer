@@ -10,6 +10,10 @@ const OSMTileSourceScript := preload("res://scripts/osm_tile_source.gd")
 # Preloaded (not referenced by bare class_name) so it resolves during headless
 # test discovery regardless of class_name cache order.
 const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
+# Procedural grass/soil ground shader (world-space noise; no textures). One
+# shared material serves every ground tile — the pattern is driven by world XZ
+# so tiles need no per-instance state and it tiles seamlessly across borders.
+const TerrainShader: Shader = preload("res://scripts/shaders/terrain.gdshader")
 
 ## Emitted once the OSM file has been parsed and the spatial index is ready.
 signal data_loaded(osm_data: OSMParser.OSMData)
@@ -49,6 +53,9 @@ signal tile_unloaded(tile_key: Vector2i)
 # spatial index — it asks the source for each tile's self-contained data.
 var _tile_source: OSMTileSourceScript = null
 var _height_provider: HeightProvider = null   # map-wide; from the tile source
+## Lazily-built shared ground material (TerrainShader). One instance is reused by
+## every ground tile; see _get_terrain_material.
+var _terrain_material: ShaderMaterial = null
 var _loaded_tiles: Dictionary = {}    # Vector2i tile_key -> Node3D (tile root)
 var _current_tile: Vector2i = Vector2i(999999, 999999)
 
@@ -739,9 +746,7 @@ func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 	plane.size = Vector2(tile_size, tile_size)
 	ground.mesh = plane
 
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.35, 0.55, 0.25)  # grass green
-	ground.material_override = mat
+	ground.material_override = _get_terrain_material()
 	ground_body.add_child(ground)
 
 	var col_shape := CollisionShape3D.new()
@@ -752,6 +757,17 @@ func _build_flat_ground(parent: Node3D, tkey: Vector2i) -> void:
 	ground_body.add_child(col_shape)
 
 	parent.add_child(ground_body)
+
+## Shared procedural ground material, built once on first use. Every ground tile
+## (flat or DEM-displaced) reuses this one ShaderMaterial: the grass/soil detail
+## is driven from world-space XZ inside the shader, so there is nothing per-tile
+## to vary and one material keeps the draw-call state small.
+func _get_terrain_material() -> ShaderMaterial:
+	if _terrain_material == null:
+		_terrain_material = ShaderMaterial.new()
+		_terrain_material.shader = TerrainShader
+	return _terrain_material
+
 
 ## DEM-displaced ground: a subdivided grid sampled against the HeightProvider,
 ## with a trimesh collider matching the visible surface so the car drives on
@@ -777,9 +793,7 @@ func _build_terrain_ground(parent: Node3D, tkey: Vector2i, skip_visual: bool = f
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.35, 0.55, 0.25)  # grass green
-	st.set_material(mat)
+	st.set_material(_get_terrain_material())
 
 	for gz: int in range(subs):
 		for gx: int in range(subs):
