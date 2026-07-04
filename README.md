@@ -1,6 +1,9 @@
 # OpenStreetMap Racer
 
-A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environments.
+A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environments,
+with a physically-based, Forza-inspired visual treatment: screen-space reflections,
+glow, ambient occlusion, an ACES colour grade, clear-coat car paint, procedural
+brick/roof/grass materials, depth of field, and toggleable wet-road weather.
 
 ![Screenshot](docs/screenshot.png)
 
@@ -32,7 +35,15 @@ A Godot 4 driving game that dynamically renders OpenStreetMap data as 3D environ
 
 12. **Traffic** (`scripts/traffic/`) — AI cars that drive along the OSM roads around the player. `TrafficRoadNetwork` flattens every drivable `highway=*` way into a list of centreline polylines carrying a width and a width-scaled car *capacity* (**the larger the street, the more cars**), and forms a **road graph** by **splitting every way at its junction nodes** (any node shared by two or more ways) and indexing the resulting junction-to-junction *segments* by their endpoint OSM node ids — so a street that crosses another in the *middle* of both ways actually connects there, not just where way endpoints happen to coincide. Direction is honoured — `oneway=*` and the implicit one-way flow of `junction=roundabout`/`circular` — so cars never drive against traffic. `TrafficSpawnPolicy` picks the roads within a radius of the player and, widest-first, hands out a car budget so arterials stay busy when the global cap is tight. `TrafficManager` (a scene node wired to the car and tile manager) pools `TrafficCar` instances and gives each car a **rolling multi-segment route plan** (`TrafficRoadNetwork.plan_route`) — a *long-term intention* a few junctions ahead — so it commits to a coherent path rather than re-rolling the dice at every corner (the aimless wiggling of the first cut). When a car reaches the end of its road it **continues onto the next segment in its plan**, refilling the plan when it runs out; each hop still weights toward the straightest through-road and rejects hairpin U-turns unless it's the only exit — so cars flow segment-to-segment with no teleport (a detailed car keeps its exact position and momentum across the seam). In view, each block is steered by a closed-loop pursuit controller that re-derives its true progress by projecting its body position onto the road polyline each frame and aims at a look-ahead point down the road — so it tracks the centreline smoothly through curves and roundabouts instead of oscillating, and a bump just gets corrected. The whole system pauses with the scene. A car only gets recycled onto a fresh nearby road when it hits a genuine dead end or drifts out of range, so traffic is *consistently present near the player* rather than globally persistent. Each car has two levels of detail: **in view it is a full physics body** the player can collide with; **out of view it drops to a cheap kinematic mover** that just advances a scalar distance along its polyline, keeping a whole city of cars affordable. Cars are stub coloured blocks for now (`scenes/traffic_car.tscn`); tune `max_cars`, `active_radius`, and `detail_distance` on the `TrafficManager` node. The graph is **rebuilt from the region around the player** (via the same tile source the world streams from), so traffic works identically whether the map is a single `.osm` or a streamed country — and segment ids are derived from each road's way + endpoint nodes so they stay **stable across rebuilds**, letting cars keep driving across a rebuild instead of respawning. The road-network, graph-traversal and spawn-policy logic is pure and unit-tested (`tests/test_traffic_*.gd`).
 
-13. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. A lamp's body can be refined by the OSM `support=*` subtag: `support=bent_mast` swaps the placeholder pole for the `street_lamp-bent_mast.blend` model, whose built-in mesh named `light` becomes the glowing head (its material is driven for the glow and the cast light is placed at that mesh's centre, so the bent arm is correctly lit out over the road). Unknown or absent `support` values fall back to the placeholder pole. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
+13. **Post-Processing** (`scripts/post_processing.gd`) — Owns the screen-space effect stack on the `WorldEnvironment` and the camera's depth-of-field, layered on top of the sky and fog to give the scene an "AAA" finish: **glow/bloom**, **SSAO** (contact shadows), **SSIL** (indirect bounce light), **SSR** (screen-space reflections — glossy roads, car paint and glass reflect the world), an **ACES tonemap + colour grade** (exposure/contrast/saturation), and a **far depth-of-field** blur that softens distant geometry while the car and near road stay sharp. Every effect is an independent exported boolean so you can flip any of them at runtime to find where the frame rate falls off (SSR is the usual cliff). It follows the sky controller's `day_night_changed` signal, so bloom pushes harder and exposure lifts at night — emissive headlights, street lamps and lit windows blaze against the dark frame. Shares the `Environment` with the Sky Controller (which owns fog/ambient) without conflict. DOF in Godot 4 is a camera attribute, so it is applied to a `CameraAttributesPractical` on the player camera rather than the environment.
+
+14. **Car Paint** (`scripts/car_paint.gd`) — Swaps the car model's flat imported materials for physically-based ones at startup, keyed by the model's surface *names* (`Paintjob`, `Glas`, `Chrome`, `Rear Lights`, `Tire`) so a re-export that reorders surfaces still resolves. The hero material is the body: a **metallic base coat under a clear-coat lacquer** (the two-layer highlight of real automotive paint) that reflects the sky/buildings under SSR. Glass is dark and near-mirror-smooth, chrome is a full mirror, the rear lights self-illuminate (so they bloom at night), and the tyres are matte rubber. `CarController` applies it via surface overrides, so the shared imported mesh is never mutated (traffic cars keep the stock look) and the body colour is exposed as `paint_color`.
+
+15. **Building & Terrain Materials** (`scripts/building_material_factory.gd`, `scripts/shaders/building_wall.gdshader`, `roof.gdshader`, `terrain.gdshader`) — Procedural-PBR surface detail for buildings and the ground, in the same texture-free, world-space-noise spirit as the asphalt shader (no image files). Walls read as **smooth** plaster, **masonry** (running-bond brick/stone courses with recessed mortar) or **panel** (concrete/metal/glass) depending on the OSM `building:material`; roofs read as **tiles**, **flat membrane** or **standing-seam metal** from `roof:material`. Terrain replaces the flat green with two-tint grass patchiness and a fine blade grain. `BuildingMaterialFactory` maps the OSM material tags to a shader "surface kind" and stamps the shaders onto the finished meshes (reading back the per-building tint), and the ground shares one terrain material driven entirely from world-space position. Joint/grain relief is faked by tilting the normal from a tangent frame built in the shader, since the meshes carry no UVs.
+
+16. **Weather / Wet Roads** (`scripts/weather_controller.gd`) — Owns a single dry↔wet state and tweens it in over a few seconds. It drives one **global shader uniform** (`wetness`, declared in `project.godot`'s `[shader_globals]`) that the asphalt and terrain shaders read — so every road and ground tile, including ones that stream in later, respond at once without the CPU touching individual materials. Wet asphalt darkens, collapses to a near-mirror (so the SSR reflects the sky and lights, like a Forza wet track) and smooths out its surface grain; grass gains a gentler damp sheen. Toggle it at runtime with **F5**.
+
+17. **Street Lamp Lights** (`scripts/street_lamp_lights.gd`) — The street-lamp counterpart to the headlights. Each `highway=street_lamp` node is built by the Asset Placer as a dark pole with a glowing emissive bulb head and an `OmniLight3D` that pools warm light on the road below. A lamp's body can be refined by the OSM `support=*` subtag: `support=bent_mast` swaps the placeholder pole for the `street_lamp-bent_mast.blend` model, whose built-in mesh named `light` becomes the glowing head (its material is driven for the glow and the cast light is placed at that mesh's centre, so the bent arm is correctly lit out over the road). Unknown or absent `support` values fall back to the placeholder pole. Because lamps are placed per tile and stream in and out as the car drives, they can't be collected once like the car's headlights: each tile registers its lamp lights with this controller as it loads (and unregisters on unload). The controller drives every registered lamp from a single shared brightness, so a tile streaming in at night — or mid-fade — spawns already lit at exactly the right level. Like the headlights it exposes a single `set_on(bool)` intent and is wired to the sky controller's `day_night_changed` signal in `main.gd`, so the lamps **switch on automatically after dark and off by day**.
 
 ### Dynamic Loading
 
@@ -162,20 +173,24 @@ count for slope smoothness.
 
 ### Running
 
-1. Open this project in Godot 4.6+
+1. Open this project in Godot 4.7+
 2. Ensure `data/map.osm` exists with your desired map data
-3. Press F5 to run
+3. Press F5 in the editor to run
 
 ### Controls
 
 - **W / S** — Accelerate / Brake
 - **A / D** — Steer left / right
 - **Escape** — Pause / resume (frees the mouse for the menu)
+- **F3** — Toggle the frame tracer (prints slow main-thread spans)
+- **F4** — Dump the frame-tracer timing summary
+- **F5** — Toggle wet-road weather (rain rolls in/out over a few seconds)
 
 The pause menu has a **Day / Night** toggle that crossfades the sky, sun, clouds,
 fog and shadows between the two presets. The car's **headlights and the street
 lamps turn on and off automatically** with the time of day — no manual control
-needed.
+needed. The post-processing grade (bloom/exposure) also shifts with the time of
+day so the world reads correctly from noon to midnight.
 
 ## Testing
 
@@ -204,6 +219,19 @@ suite. gdUnit4 writes XML/HTML results under `reports/` (gitignored).
 `test_polygon_utils.gd` pins the winding-order logic in `PolygonUtils` — the
 CW/CCW normalization OSM data depends on — so refactors can't silently invert
 faces or break orientation handling.
+
+The visual systems are covered too, focused on the pure logic rather than pixels:
+`test_post_processing.gd` (effect toggles, day/night grade, DOF applied to the
+camera attributes), `test_car_paint.gd` (material-by-surface-name resolution and
+the clear-coat body), `test_building_material_factory.gd` (OSM material → shader
+"surface kind" mapping and mesh routing) and `test_weather_controller.gd` (dry/wet
+state and the tweened `wetness` level).
+
+> **Note:** adding a new `class_name` script requires Godot to register it in its
+> global class cache before the headless test runner can see it. If a fresh suite
+> reports *"Identifier not declared"* on first run, open the project in the editor
+> once (or run `godot --editor --headless --path . --quit-after 300`) to refresh
+> the cache, then re-run the tests.
 
 ## Customization
 
@@ -268,6 +296,41 @@ the glowing bulb and the cast light is placed at that mesh's centre, so the head
 is positioned by the model, not hard-coded. `support=bent_mast` →
 `street_lamp-bent_mast.blend` ships as the first example; unknown or missing
 `support` values fall back to the placeholder pole.
+
+### Visuals & Post-Processing
+
+The screen-space effect stack is on the **`PostProcessing`** node in `main.tscn`.
+Each effect is an independent exported boolean, so you can flip any of them in the
+inspector (or from code) to isolate its cost — handy for finding the frame-rate
+cliff, which is almost always **SSR**:
+
+- `glow_enabled`, `ssao_enabled`, `ssil_enabled`, `ssr_enabled` — the screen-space
+  effects (cheapest to most expensive, roughly glow → SSAO → SSIL → SSR).
+- `adjustments_enabled` — the ACES tonemap + colour grade (nearly free).
+- `dof_enabled` — far depth-of-field blur.
+- `enabled` — master switch; off restores the plain environment as an A/B baseline.
+
+The day and night values (bloom strength, exposure, DOF distances) live in the
+`DAY` / `NIGHT` constant dictionaries in `scripts/post_processing.gd` and crossfade
+with the sky.
+
+**Car paint** — recolour the body with the `paint_color` export on the `Car`
+node, or set `apply_car_paint = false` to keep the model's stock materials. Finish
+constants (metallic/clear-coat/glass/chrome) live in `scripts/car_paint.gd`.
+
+**Building & terrain surfaces** — the look of each material family is tuned by the
+shader uniform defaults in `scripts/shaders/building_wall.gdshader` (brick course
+height, panel size, joint depth, grain), `roof.gdshader` (tile/seam spacing) and
+`terrain.gdshader` (grass tints, patch/grain scale). Which family a surface uses is
+decided from the OSM `building:material` / `roof:material` tags by the tables in
+`scripts/building_material_factory.gd`.
+
+**Wet roads** — the `WeatherController` node drives a global `wetness` uniform
+(0 = dry, 1 = soaked). Toggle it in-game with **F5**, or set `start_wet = true` on
+the node to begin wet. `WET_LEVEL` and `TRANSITION_TIME` in
+`scripts/weather_controller.gd` control how wet it gets and how fast the rain rolls
+in; the per-surface response (darkening, gloss, puddle pooling) lives in the
+`wetness` blocks of `asphalt.gdshader` and `terrain.gdshader`.
 
 ### Scaling Up
 

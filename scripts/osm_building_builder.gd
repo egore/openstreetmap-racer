@@ -151,6 +151,12 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	if tags.has("roof:direction"):
 		roof_direction = tags["roof:direction"].to_float()
 
+	# Procedural-PBR surface kinds, inferred once from the OSM material tags. The
+	# actual shader materials are stamped onto the finished meshes just before we
+	# return (see _apply_surface_materials), keeping the geometry code unchanged.
+	var wall_kind := BuildingMaterialFactory.wall_kind_for(tags.get("building:material", ""))
+	var roof_kind := BuildingMaterialFactory.roof_kind_for(tags.get("roof:material", ""))
+
 	var root := Node3D.new()
 	root.name = "Building_%d" % id
 
@@ -167,6 +173,7 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	#  "building" tag specifically rather than the merged building_type.)
 	if tags.get("building", "") == "roof":
 		_build_open_roof(root, points, height, min_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
+		_apply_surface_materials(root, wall_kind, roof_kind)
 		if tags.has("name") and tags["name"] != "":
 			root.add_child(_create_building_label(tags["name"], points, height))
 		return root
@@ -194,12 +201,28 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	if collider != null:
 		root.add_child(collider)
 
+	# Swap the geometry's flat fallback materials for the procedural-PBR wall/roof
+	# shaders (before the label, which carries no surface). Done here in one place
+	# so all roof families and the wall mesh get consistent treatment.
+	_apply_surface_materials(root, wall_kind, roof_kind)
+
 	# Add floating label if building has a name tag
 	if tags.has("name") and tags["name"] != "":
 		var label := _create_building_label(tags["name"], points, height)
 		root.add_child(label)
 
 	return root
+
+
+## Stamp the procedural wall/roof ShaderMaterials onto every mesh under `root`.
+## Delegates the node-name → material routing to BuildingMaterialFactory; the
+## per-building/roof tints are read back off the flat fallback materials the
+## geometry builders baked, so colours resolved from tags carry through.
+func _apply_surface_materials(
+		root: Node3D,
+		wall_kind: BuildingMaterialFactory.WallKind,
+		roof_kind: BuildingMaterialFactory.RoofKind) -> void:
+	BuildingMaterialFactory.apply_to_building(root, wall_kind, roof_kind)
 
 ## Build an open roof structure (building=roof): a roof held up by thin support
 ## posts, with no enclosing walls. The roof underside ("ceiling") sits at

@@ -37,6 +37,13 @@ class PPSettings:
 	var brightness: float
 	var contrast: float
 	var saturation: float
+	## Depth-of-field far blur: everything beyond dof_far_distance starts to
+	## soften, reaching full blur (dof_far_amount) by dof_far_distance +
+	## dof_far_transition. Keeps the car and near road crisp while distant
+	## buildings melt into a cinematic haze.
+	var dof_far_distance: float
+	var dof_far_transition: float
+	var dof_far_amount: float
 
 ## Daytime grade: neutral-to-slightly-punchy. Bloom is subtle — bright sky and
 ## sunlit asphalt highlights bleed a little, but the frame stays clean. A gentle
@@ -49,6 +56,11 @@ const DAY := {
 	"brightness": 1.0,
 	"contrast": 1.05,
 	"saturation": 1.12,
+	# Distant buildings past ~180 m soften over a 220 m band. Subtle by day so it
+	# reads as aerial depth, not a blurry frame.
+	"dof_far_distance": 180.0,
+	"dof_far_transition": 220.0,
+	"dof_far_amount": 0.10,
 }
 
 ## Nighttime grade: bloom pushed hard and its HDR threshold dropped so the
@@ -63,6 +75,11 @@ const NIGHT := {
 	"brightness": 1.0,
 	"contrast": 1.1,
 	"saturation": 1.02,
+	# A touch stronger at night so distant lights bloom into soft bokeh rather
+	# than sharp pinpoints — the classic night-driving look.
+	"dof_far_distance": 150.0,
+	"dof_far_transition": 200.0,
+	"dof_far_amount": 0.14,
 }
 
 ## Seconds for the day<->night post-processing crossfade. Matches
@@ -114,6 +131,13 @@ const TRANSITION_TIME := 1.5
 		adjustments_enabled = v
 		_reapply()
 
+## Depth-of-field far blur — softens distant geometry for a cinematic depth cue.
+## Moderate cost (a blur pass); disable to isolate its FPS impact.
+@export var dof_enabled: bool = true:
+	set(v):
+		dof_enabled = v
+		_reapply()
+
 # --- Wiring ------------------------------------------------------------------
 
 ## Path to the WorldEnvironment we drive (same node SkyController uses).
@@ -121,11 +145,18 @@ const TRANSITION_TIME := 1.5
 ## Path to the SkyController so we can follow its day/night transitions. Optional
 ## — without it we simply apply the day preset and never change.
 @export var sky_controller_path: NodePath
+## Path to the Camera3D that gets depth-of-field. DOF in Godot 4 is a camera
+## attribute, not an Environment setting, so we attach a CameraAttributesPractical
+## to this camera. Optional — without it DOF is simply skipped.
+@export var camera_path: NodePath
 ## Whether we start on the daytime grade. Kept in sync with the sky by wiring
 ## the signal below; this is just the frame-one value.
 @export var start_in_day: bool = true
 
 var environment: Environment
+## Camera attributes resource we own and drive DOF through (created in _ready if
+## a camera is wired). Kept so _reapply can restamp it on every toggle/blend.
+var _camera_attrs: CameraAttributesPractical
 var _sky: SkyController
 var _is_day: bool = true
 var _tween: Tween
@@ -137,6 +168,16 @@ func _ready() -> void:
 	var we := get_node_or_null(world_environment_path) as WorldEnvironment
 	if we != null:
 		environment = we.environment
+
+	# Attach a camera-attributes resource for DOF. Reuse the camera's existing
+	# practical attributes if it already has some; otherwise create one.
+	var cam := get_node_or_null(camera_path) as Camera3D
+	if cam != null:
+		if cam.attributes is CameraAttributesPractical:
+			_camera_attrs = cam.attributes
+		else:
+			_camera_attrs = CameraAttributesPractical.new()
+			cam.attributes = _camera_attrs
 
 	_sky = get_node_or_null(sky_controller_path) as SkyController
 	if _sky != null:
@@ -185,6 +226,9 @@ func _blend_step(weight: float, from: PPSettings, to: PPSettings) -> void:
 	_current.brightness = lerpf(from.brightness, to.brightness, weight)
 	_current.contrast = lerpf(from.contrast, to.contrast, weight)
 	_current.saturation = lerpf(from.saturation, to.saturation, weight)
+	_current.dof_far_distance = lerpf(from.dof_far_distance, to.dof_far_distance, weight)
+	_current.dof_far_transition = lerpf(from.dof_far_transition, to.dof_far_transition, weight)
+	_current.dof_far_amount = lerpf(from.dof_far_amount, to.dof_far_amount, weight)
 	_reapply()
 
 
@@ -193,9 +237,10 @@ func _blend_step(weight: float, from: PPSettings, to: PPSettings) -> void:
 ## Re-applies the whole stack to the Environment from the current toggles + live
 ## settings. Cheap enough to call any time a toggle flips or a blend steps.
 func _reapply() -> void:
-	if environment == null:
-		return
-	apply_to(environment, _current)
+	if environment != null:
+		apply_to(environment, _current)
+	if _camera_attrs != null:
+		apply_dof_to(_camera_attrs, _current)
 
 
 ## Pure-ish writer: stamps the effect toggles and the given continuous settings
@@ -244,6 +289,24 @@ func apply_to(env: Environment, s: PPSettings) -> void:
 		env.adjustment_saturation = s.saturation
 
 
+## Stamp the depth-of-field settings onto a CameraAttributesPractical. DOF in
+## Godot 4 lives on the camera's attributes resource, not the Environment, so
+## this is applied separately to whatever camera attributes the controller holds.
+## Only the far side is used (near stays sharp so the car and immediate road are
+## always crisp). Split out and pure so tests can drive it with a throwaway
+## CameraAttributesPractical.
+func apply_dof_to(attrs: CameraAttributesPractical, s: PPSettings) -> void:
+	if not enabled or not dof_enabled:
+		attrs.dof_blur_far_enabled = false
+		return
+	attrs.dof_blur_far_enabled = true
+	attrs.dof_blur_far_distance = s.dof_far_distance
+	attrs.dof_blur_far_transition = s.dof_far_transition
+	attrs.dof_blur_amount = s.dof_far_amount
+	# Never blur the near field — the car must always stay sharp.
+	attrs.dof_blur_near_enabled = false
+
+
 # --- Preset plumbing ---------------------------------------------------------
 
 func _preset_dict(target_is_day: bool) -> Dictionary:
@@ -258,6 +321,9 @@ func _copy_preset_into(d: Dictionary, out: PPSettings) -> void:
 	out.brightness = d.brightness
 	out.contrast = d.contrast
 	out.saturation = d.saturation
+	out.dof_far_distance = d.dof_far_distance
+	out.dof_far_transition = d.dof_far_transition
+	out.dof_far_amount = d.dof_far_amount
 
 
 func _copy_struct(src: PPSettings, dst: PPSettings) -> void:
@@ -268,3 +334,6 @@ func _copy_struct(src: PPSettings, dst: PPSettings) -> void:
 	dst.brightness = src.brightness
 	dst.contrast = src.contrast
 	dst.saturation = src.saturation
+	dst.dof_far_distance = src.dof_far_distance
+	dst.dof_far_transition = src.dof_far_transition
+	dst.dof_far_amount = src.dof_far_amount
