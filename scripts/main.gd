@@ -18,6 +18,10 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/QuitButton
 @onready var sky_controller: SkyController = $SkyController
+## Post-processing stack (glow/SSAO/SSIL/SSR/grade). Self-wires to the
+## WorldEnvironment and SkyController via its exported paths; referenced here for
+## discoverability and so effect toggles can be reached from the composition root.
+@onready var post_processing: PostProcessing = $PostProcessing
 @onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
 @onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
 @onready var headlights: Headlights = $Car/Headlights
