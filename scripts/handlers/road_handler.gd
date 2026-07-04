@@ -8,7 +8,13 @@ func handler_name() -> String:
 
 
 static func is_road(way: OSMParser.OSMWay) -> bool:
-	return way.tags.has("highway")
+	if not way.tags.has("highway"):
+		return false
+	# highway=platform is a transit-platform area, not a road ribbon; let the
+	# PlatformHandler claim it (registered later in the dispatch order).
+	if way.tags.get("highway", "") == "platform":
+		return false
+	return true
 
 
 func matches(way: OSMParser.OSMWay, _ctx: OSMTileContext) -> bool:

@@ -25,6 +25,7 @@ var _handlers: Array[OSMWayHandler] = [
 	WaterwayHandler.new(),
 	BuildingHandler.new(),
 	BarrierHandler.new(),
+	PlatformHandler.new(),
 	ParkingHandler.new(),
 	AreaHandler.new(),
 	SurfaceHandler.new(),
@@ -237,3 +238,36 @@ func test_surface_with_amenity_is_area() -> void:
 	var w := _way({"amenity": "school", "surface": "asphalt"})
 	assert_str(_classify(w)) \
 		.override_failure_message("amenity + surface -> area").is_equal("area")
+
+
+# ─── Platform tests ─────────────────────────────────────────────────────────
+
+func test_public_transport_platform_is_platform() -> void:
+	# The reported unmatched way: a bare public_transport=platform ring with
+	# only bench/shelter attributes. It must now resolve to the platform handler.
+	var w := _way({"bench": "no", "public_transport": "platform", "shelter": "no"})
+	assert_str(_classify(w)) \
+		.override_failure_message("public_transport=platform ring -> platform").is_equal("platform")
+
+
+func test_railway_platform_is_platform() -> void:
+	# railway=platform slips past RailwayHandler (track-value whitelist) and must
+	# be claimed by the platform handler as a closed ring.
+	var w := _way({"railway": "platform"})
+	assert_str(_classify(w)) \
+		.override_failure_message("railway=platform ring -> platform").is_equal("platform")
+
+
+func test_highway_platform_is_platform() -> void:
+	# highway=platform is a closed ring; RoadHandler builds linear ribbons so it
+	# should not claim a platform area — the platform handler does.
+	var w := _way({"highway": "platform"})
+	assert_str(_classify(w)) \
+		.override_failure_message("highway=platform ring -> platform").is_equal("platform")
+
+
+func test_open_platform_unmatched() -> void:
+	# A linear (open) platform way has no fillable surface; no handler claims it.
+	var w := _way({"public_transport": "platform"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open platform way -> unmatched").is_equal("")
