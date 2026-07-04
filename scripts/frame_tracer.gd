@@ -154,7 +154,7 @@ static func dump_summary() -> void:
 		var s: Dictionary = snapshot[label]
 		var count := int(s["count"])
 		var total := int(s["total_us"])
-		var avg := total / maxi(1, count)
+		var avg := float(total) / maxi(1, count)
 		print("[trace]   %-28s n=%-5d total=%8.2f ms  avg=%6.2f ms  max=%6.2f ms" % [
 			label, count, total / 1000.0, avg / 1000.0, int(s["max_us"]) / 1000.0])
 	print("[trace] ─────────────────────────────────────────")
