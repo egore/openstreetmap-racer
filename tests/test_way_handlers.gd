@@ -318,3 +318,74 @@ func test_reinforced_slope_color_is_riprap() -> void:
 	var color := PolygonUtils.get_area_color({"man_made": "reinforced_slope"})
 	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
 		.override_failure_message("reinforced_slope has a dedicated color").is_false()
+
+
+# ─── Tourism / playground / man_made area tests ─────────────────────────────
+# The reported unmatched ways: closed tourism grounds (camp_site, caravan_site,
+# chalet), a playground=climbingframe footprint, and man_made=pier/bunker_silo
+# rings. All are closed land-cover rings the area handler now claims.
+
+func test_camp_site_ring_is_area() -> void:
+	var w := _way({
+		"name": "Toppershoedje", "tourism": "camp_site",
+		"brand": "RCN vakantieparken",
+	})
+	assert_str(_classify(w)) \
+		.override_failure_message("tourism=camp_site ring -> area").is_equal("area")
+
+
+func test_caravan_site_ring_is_area() -> void:
+	var w := _way({"tourism": "caravan_site", "name": "Drive-in Camperpark"})
+	assert_str(_classify(w)) \
+		.override_failure_message("tourism=caravan_site ring -> area").is_equal("area")
+
+
+func test_chalet_ring_is_area() -> void:
+	var w := _way({"name": "Jonkerstee", "tourism": "chalet"})
+	assert_str(_classify(w)) \
+		.override_failure_message("tourism=chalet ring -> area").is_equal("area")
+
+
+func test_playground_climbingframe_ring_is_area() -> void:
+	var w := _way({"playground": "climbingframe"})
+	assert_str(_classify(w)) \
+		.override_failure_message("playground=climbingframe ring -> area").is_equal("area")
+
+
+func test_bunker_silo_ring_is_area() -> void:
+	var w := _way({"man_made": "bunker_silo"})
+	assert_str(_classify(w)) \
+		.override_failure_message("man_made=bunker_silo ring -> area").is_equal("area")
+
+
+func test_closed_pier_ring_is_area() -> void:
+	var w := _way({"area": "yes", "man_made": "pier"})
+	assert_str(_classify(w)) \
+		.override_failure_message("closed man_made=pier ring -> area").is_equal("area")
+
+
+func test_open_pier_unmatched() -> void:
+	# A linear pier carries no fillable surface; no handler claims it (the
+	# manager suppresses its skip noise).
+	var w := _way({"man_made": "pier"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open man_made=pier -> unmatched").is_equal("")
+
+
+func test_open_tourism_way_unmatched() -> void:
+	# An open (linear) tourism way has no fillable surface.
+	var w := _way({"tourism": "camp_site"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open tourism way -> unmatched").is_equal("")
+
+
+func test_camp_site_color_is_grassy() -> void:
+	var color := PolygonUtils.get_area_color({"tourism": "camp_site"})
+	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
+		.override_failure_message("tourism=camp_site has a dedicated color").is_false()
+
+
+func test_pier_color_is_deck() -> void:
+	var color := PolygonUtils.get_area_color({"man_made": "pier"})
+	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
+		.override_failure_message("man_made=pier has a dedicated color").is_false()
