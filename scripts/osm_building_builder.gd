@@ -20,6 +20,21 @@ const DEFAULT_ROOF_HEIGHT := 3.0  # meters for pitched roofs when not specified
 const ROOF_SUPPORT_RADIUS := 0.12 # meters; radius of support posts for building=roof
 const ROOF_SLAB_THICKNESS := 0.3  # meters; thickness of a flat building=roof slab
 
+## When true, every building gets a StaticBody3D collider so the car crashes into
+## it instead of driving through. We use a single extruded ConvexPolygonShape3D
+## per building (footprint × wall height) rather than a concave trimesh: convex
+## shapes are the cheapest static primitive for the physics broadphase/narrowphase
+## and — unlike create_trimesh_shape() — carry no per-tile "cook" cost, so adding
+## collision to hundreds of buildings per tile does not hitch the frame the way a
+## trimesh would. Concave (e.g. L-shaped) footprints get their concavity slightly
+## "filled in" by the convex hull, but a car at street level cannot tell.
+## Set false to fall back to the old visual-only behaviour.
+var enable_collision: bool = true
+
+## Buildings below this height (meters) are treated as too short to block the car
+## and get no collider — avoids spending physics on kerb-height map noise.
+const MIN_COLLIDER_HEIGHT := 1.0
+
 const BUILDING_COLORS := {
 	"residential": Color(0.75, 0.7, 0.6),
 	"commercial": Color(0.65, 0.65, 0.7),
@@ -172,6 +187,13 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	for node: Node3D in roof_nodes:
 		root.add_child(node)
 
+	# Add a cheap extruded convex collider so the car crashes into the building
+	# instead of driving through it. Spans the full footprint from the wall base
+	# (min_height, for elevated parts) up to the total building height.
+	var collider := _build_footprint_collider(points, height - min_height, BUILDING_Y + min_height)
+	if collider != null:
+		root.add_child(collider)
+
 	# Add floating label if building has a name tag
 	if tags.has("name") and tags["name"] != "":
 		var label := _create_building_label(tags["name"], points, height)
@@ -197,11 +219,18 @@ func _build_open_roof(root: Node3D, points: PackedVector3Array, height: float,
 	var ceiling_y := maxf(height - effective_roof_h, min_height + 0.5)
 
 	# Support posts at each footprint vertex (skip the duplicated closing vertex).
+	# An open canopy (building=roof) must NOT block the car with a full footprint
+	# collider — the whole point is that you can drive under it. Instead each thin
+	# support post gets its own small box collider, so the car can pass through the
+	# opening but still crashes into a post.
 	var post_color := wall_color
 	for i: int in range(points.size() - 1):
 		var post := _build_support_post(points[i], BUILDING_Y, ceiling_y, post_color)
 		if post != null:
 			post.name = "Support_%d" % i
+			var post_col := _build_post_collider(points[i], BUILDING_Y, ceiling_y)
+			if post_col != null:
+				post.add_child(post_col)
 			root.add_child(post)
 
 	# Roof sits on top of the posts at the ceiling height.
@@ -214,6 +243,30 @@ func _build_open_roof(root: Node3D, points: PackedVector3Array, height: float,
 		var roof_nodes := RoofBuilder.build_roof_shape(points, ceiling_y, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
 		for node: Node3D in roof_nodes:
 			root.add_child(node)
+
+## Build a StaticBody3D box collider matching a single support post (square prism
+## of side 2*ROOF_SUPPORT_RADIUS) spanning base_y..top_y. Returns null when
+## collision is disabled or the post is degenerate. Cheap: one BoxShape3D.
+func _build_post_collider(xz: Vector3, base_y: float, top_y: float) -> StaticBody3D:
+	if not enable_collision:
+		return null
+	var h := top_y - base_y
+	if h <= 0.0:
+		return null
+	var side := ROOF_SUPPORT_RADIUS * 2.0
+	var box := BoxShape3D.new()
+	box.size = Vector3(side, h, side)
+	var body := StaticBody3D.new()
+	body.name = "Collision"
+	var col := CollisionShape3D.new()
+	col.name = "CollisionShape"
+	col.shape = box
+	# Box is centred on its origin; place the body at the post centre in xz and at
+	# the vertical midpoint. The parent post mesh sits at the root's local origin,
+	# so these coordinates are local to the root too.
+	body.position = Vector3(xz.x, base_y + h * 0.5, xz.z)
+	body.add_child(col)
+	return body
 
 ## Build a single vertical support post (square prism) from base_y to top_y at xz.
 func _build_support_post(xz: Vector3, base_y: float, top_y: float, color: Color) -> MeshInstance3D:
@@ -418,6 +471,44 @@ func _create_building_label(text: String, points: PackedVector3Array, height: fl
 	var centroid := PolygonUtils.polygon_centroid(points)
 	label.position = Vector3(centroid.x, BUILDING_Y + height + 1.0, centroid.z)
 	return label
+
+## Build a single StaticBody3D whose collider is the building footprint extruded
+## from base_y up to base_y + height. Uses a ConvexPolygonShape3D built from the
+## 2N corner points (N bottom + N top) — no trimesh cook, so this is cheap enough
+## to run for every building without tanking the frame. Returns null when
+## collision is disabled, the footprint is degenerate, or the building is too
+## short to be worth colliding with.
+func _build_footprint_collider(points: PackedVector3Array, height: float, base_y: float = 0.0) -> StaticBody3D:
+	if not enable_collision:
+		return null
+	if height < MIN_COLLIDER_HEIGHT:
+		return null
+	# Drop the duplicated closing vertex if the ring is closed; a convex hull does
+	# not need it and duplicate points only bloat the shape.
+	var ring := points
+	if ring.size() > 1 and ring[0].distance_to(ring[ring.size() - 1]) < 0.01:
+		ring = ring.slice(0, ring.size() - 1)
+	if ring.size() < 3:
+		return null
+
+	var top_y := base_y + height
+	var hull_points := PackedVector3Array()
+	for p: Vector3 in ring:
+		hull_points.append(Vector3(p.x, base_y, p.z))
+		hull_points.append(Vector3(p.x, top_y, p.z))
+
+	var shape := ConvexPolygonShape3D.new()
+	# set_points computes the convex hull of the given point cloud; the extruded
+	# prism above yields exactly the hull we want (footprint × height).
+	shape.points = hull_points
+
+	var body := StaticBody3D.new()
+	body.name = "Collision"
+	var col := CollisionShape3D.new()
+	col.name = "CollisionShape"
+	col.shape = shape
+	body.add_child(col)
+	return body
 
 func _build_walls(points: PackedVector3Array, height: float, color: Color, base_y: float = 0.0) -> MeshInstance3D:
 	# Points are always CCW (normalized in _build_building_mesh)
