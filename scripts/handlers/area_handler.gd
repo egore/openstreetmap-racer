@@ -9,10 +9,12 @@ extends OSMWayHandler
 ## lines, gantries, parking, ...) claim their closed rings first.
 
 ## Closed man_made values that describe a ground footprint (treatment plants,
-## works, reservoirs, ...) rather than a point structure or linear feature.
+## works, reservoirs, reinforced embankment slopes, ...) rather than a point
+## structure or linear feature.
 const _MAN_MADE_AREA_VALUES := {
 	"wastewater_plant": true, "water_works": true, "works": true,
 	"reservoir_covered": true, "storage_tank": true, "wastewater": true,
+	"reinforced_slope": true,
 }
 
 
@@ -28,6 +30,11 @@ static func is_area(way: OSMParser.OSMWay) -> bool:
 	if not OSMWayHandler.is_closed_way(way):
 		return false
 	if _MAN_MADE_AREA_VALUES.has(way.tags.get("man_made", "")):
+		return true
+	# Historic footprints (forts, castles, archaeological sites) are closed
+	# ground rings — often earthwork ramparts (historic=fort + ruins=yes) with no
+	# other feature tag. Render them as colored ground.
+	if way.tags.has("historic"):
 		return true
 	return way.tags.has("amenity") or way.tags.has("shop") \
 		or way.tags.has("power") or way.tags.has("area:highway")

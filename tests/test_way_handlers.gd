@@ -271,3 +271,50 @@ func test_open_platform_unmatched() -> void:
 	var w := _way({"public_transport": "platform"}, false)
 	assert_str(_classify(w)) \
 		.override_failure_message("open platform way -> unmatched").is_equal("")
+
+
+# ─── man_made=reinforced_slope + historic area tests ────────────────────────
+
+func test_reinforced_slope_ring_is_area() -> void:
+	# A closed man_made=reinforced_slope ground ring (3dShapes source) renders as
+	# a colored area rather than logging an unmatched skip.
+	var w := _way({
+		"man_made": "reinforced_slope",
+		"operator": "Waterschap Hollandse Delta",
+		"source": "3dShapes",
+	})
+	assert_str(_classify(w)) \
+		.override_failure_message("reinforced_slope ring -> area").is_equal("area")
+
+
+func test_open_reinforced_slope_unmatched() -> void:
+	# An open (linear) reinforced_slope carries no fillable surface; no handler
+	# claims it (the manager suppresses its skip noise).
+	var w := _way({"man_made": "reinforced_slope"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open reinforced_slope -> unmatched").is_equal("")
+
+
+func test_historic_fort_is_area() -> void:
+	# A closed historic=fort ring (earthwork rampart footprint) renders as area.
+	var w := _way({
+		"historic": "fort",
+		"name": "De Schans",
+		"ruins": "yes",
+		"wheelchair": "no",
+	})
+	assert_str(_classify(w)) \
+		.override_failure_message("historic=fort ring -> area").is_equal("area")
+
+
+func test_historic_fort_color_is_earthwork() -> void:
+	# The fort renders with its dedicated grassy-rampart color, not the default.
+	var color := PolygonUtils.get_area_color({"historic": "fort"})
+	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
+		.override_failure_message("historic=fort has a dedicated color").is_false()
+
+
+func test_reinforced_slope_color_is_riprap() -> void:
+	var color := PolygonUtils.get_area_color({"man_made": "reinforced_slope"})
+	assert_bool(color == PolygonUtils.DEFAULT_AREA_COLOR) \
+		.override_failure_message("reinforced_slope has a dedicated color").is_false()

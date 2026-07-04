@@ -45,6 +45,13 @@ const AREA_COLORS := {
 		"reservoir_covered": Color(0.45, 0.5, 0.55),
 		"storage_tank": Color(0.55, 0.55, 0.58),
 		"wastewater": Color(0.5, 0.52, 0.55),
+		"reinforced_slope": Color(0.52, 0.50, 0.46),  # riprap / reinforced embankment
+	},
+	"historic": {
+		"fort": Color(0.45, 0.55, 0.35),              # grassy earthwork ramparts
+		"citadel": Color(0.45, 0.55, 0.35),
+		"castle": Color(0.55, 0.52, 0.48),            # stone footprint
+		"archaeological_site": Color(0.55, 0.50, 0.42),
 	},
 	"area:highway": {
 		"traffic_island": Color(0.6, 0.6, 0.58),
