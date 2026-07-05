@@ -145,6 +145,45 @@ const _FOV_KICK_LERP := 4.0
 ## that marks a landing (and read the impact speed at that moment).
 var _was_airborne: bool = false
 
+## True while the driver is commanding deceleration this frame (handbrake, or the
+## foot brake actively slowing a forward car). Captured in _physics_process where
+## the input is read, and handed to the kudos tracker so a hard handbrake stop
+## isn't misread as a crash (which was firing the impact sound + shake).
+var _braking_this_frame: bool = false
+
+## Decides when to screech the tyres and how loud impacts should be. Pure logic;
+## the two AudioStreamPlayers below turn its numbers into sound. See
+## car_audio_triggers.gd for the feel curves.
+var _audio_triggers := CarAudioTriggers.new()
+## Looping tyre-screech player. Volume follows _audio_triggers.screech_level; the
+## loop starts/stops as the level crosses ~0. Optional — silent if the file is absent.
+var _screech_sound: AudioStreamPlayer = null
+## One-shot impact/crash player. Restarted (with a fresh volume) on each qualifying
+## crash. Optional — silent if the file is absent.
+var _impact_sound: AudioStreamPlayer = null
+## Optional sound files. Missing files degrade gracefully (warn once, stay silent),
+## exactly like the dirt-driving sound, so the game runs without any extra assets.
+## WAV is used (rather than OGG) because it imports losslessly and natively in
+## Godot and the screech loop wants a clean, click-free loop point.
+const _SCREECH_SOUND_PATH := "res://sounds/tire_screech.wav"
+const _IMPACT_SOUND_PATH := "res://sounds/impact.wav"
+## Screech volume (linear) floor/ceiling. Mapped from screech_level 0..1. The floor
+## is only ~10 dB below the ceiling so that even a light drift (low level) is clearly
+## audible over the engine — a -30 dB floor made gentle drifts effectively silent.
+const _SCREECH_VOLUME_MIN_DB := -14.0
+const _SCREECH_VOLUME_MAX_DB := -3.0
+## Below this screech_level the loop is ducked to silence (but kept playing, to
+## avoid restart-thrash from frame-to-frame flicker around the threshold).
+const _SCREECH_AUDIBLE_LEVEL := 0.02
+## Volume (dB) the ducked/idle screech loop sits at — effectively inaudible.
+const _SCREECH_SILENT_DB := -60.0
+## Impact one-shot volume (linear) floor/ceiling. Mapped from register_impact volume.
+const _IMPACT_VOLUME_MIN_DB := -16.0
+const _IMPACT_VOLUME_MAX_DB := 0.0
+## The kudos event label that represents an actual collision. Only this event
+## plays the impact/crash sound; spin-outs and flips shake but don't "clang".
+const _CRASH_EVENT_LABEL := "CRASH"
+
 ## Style scorer ("kudos"). Pure logic: every physics frame we hand it a snapshot
 ## of how the car is moving and it integrates a score, reporting drifts, crashes,
 ## near misses, etc. The HUD listens to the signals above; the car never embeds
@@ -165,6 +204,9 @@ func set_engine_muted(muted: bool) -> void:
 		if muted:
 			_dirt_sound.stop()
 		# Dirt sound restarts naturally via _update_dirt_sound() when un-muted.
+	if muted and _screech_sound != null:
+		_screech_sound.stop()
+		# Screech restarts naturally via _update_screech_sound() when un-muted.
 
 
 func _ready() -> void:
@@ -183,6 +225,7 @@ func _ready() -> void:
 	_transmission.build_for_max_speed(max_speed * 3.6)
 	_setup_wheel_particles()
 	_setup_dirt_sound()
+	_setup_impact_sounds()
 	add_child(_engine_sound)
 	# Remember the camera's authored framing so shake/FOV-kick always relax back to it.
 	if camera != null:
@@ -265,15 +308,110 @@ func _setup_dirt_sound() -> void:
 	if stream is AudioStreamWAV:
 		# Loop the sample seamlessly so it plays continuously while on grass.
 		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-		# loop_begin defaults to 0; loop_end = -1 tells the engine to loop to
-		# the very last sample frame regardless of bit depth or channel count.
-		stream.loop_end = -1
+		# loop_end must be the real last sample frame. A runtime loop_end of -1
+		# yields an empty [0, -1] loop and the stream plays silent (see
+		# _wav_frame_count / the tyre-screech fix).
+		stream.loop_begin = 0
+		stream.loop_end = _wav_frame_count(stream)
 		_dirt_sound.stream = stream
 	elif stream is AudioStream:
 		_dirt_sound.stream = stream
 	else:
 		push_warning("CarController: could not load dirt sound at %s" % _DIRT_SOUND_PATH)
 	add_child(_dirt_sound)
+
+
+## Create the tyre-screech (looping) and impact (one-shot) players. Both sound
+## files are OPTIONAL: if a file is missing the player is left with no stream and
+## the corresponding update method no-ops, so the game runs silently rather than
+## crashing (same graceful-degradation contract as the dirt sound).
+func _setup_impact_sounds() -> void:
+	_screech_sound = AudioStreamPlayer.new()
+	_screech_sound.name = "TireScreechSound"
+	_screech_sound.bus = &"Master"
+	_screech_sound.volume_db = _SCREECH_VOLUME_MIN_DB
+	_screech_sound.process_mode = Node.PROCESS_MODE_PAUSABLE
+	var screech := load(_SCREECH_SOUND_PATH) if ResourceLoader.exists(_SCREECH_SOUND_PATH) else null
+	if screech is AudioStreamWAV:
+		screech.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		# loop_end must be the actual last sample frame. Setting it to -1 at RUNTIME
+		# (the "end of sample" sentinel only valid in import settings) creates an
+		# empty [0, -1] loop region and the stream plays SILENT. Use the real length.
+		screech.loop_begin = 0
+		screech.loop_end = _wav_frame_count(screech)
+		_screech_sound.stream = screech
+	elif screech is AudioStream:
+		_screech_sound.stream = screech
+	else:
+		push_warning("CarController: tyre-screech sound absent at %s (silent)" % _SCREECH_SOUND_PATH)
+	add_child(_screech_sound)
+
+	_impact_sound = AudioStreamPlayer.new()
+	_impact_sound.name = "ImpactSound"
+	_impact_sound.bus = &"Master"
+	_impact_sound.process_mode = Node.PROCESS_MODE_PAUSABLE
+	var impact := load(_IMPACT_SOUND_PATH) if ResourceLoader.exists(_IMPACT_SOUND_PATH) else null
+	if impact is AudioStream:
+		_impact_sound.stream = impact
+	else:
+		push_warning("CarController: impact sound absent at %s (silent)" % _IMPACT_SOUND_PATH)
+	add_child(_impact_sound)
+
+
+## Number of sample frames in a 16-bit PCM AudioStreamWAV, for setting a valid
+## loop_end (the count of frames, i.e. data bytes / bytes-per-frame). Returns 0 if
+## the format is unexpected, which disables looping rather than risking silence.
+func _wav_frame_count(wav: AudioStreamWAV) -> int:
+	var bytes := wav.data.size()
+	# format 2 (FORMAT_16_BITS) => 2 bytes per channel per frame.
+	var channels := 2 if wav.stereo else 1
+	var bytes_per_frame := 2 * channels
+	if wav.format != AudioStreamWAV.FORMAT_16_BITS or bytes_per_frame == 0:
+		return 0
+	return bytes / bytes_per_frame
+
+
+## Fire the impact one-shot for a crash of the given severity (the absolute kudos
+## penalty). The trigger logic gates on severity + a cooldown so a multi-frame
+## crash thumps once, not in a burst. No-ops if the sound file is absent.
+func _play_impact(severity: float) -> void:
+	var decision := _audio_triggers.register_impact(severity)
+	if not decision["play"]:
+		return
+	if _impact_sound == null or _impact_sound.stream == null:
+		return
+	var vol: float = decision["volume"]
+	_impact_sound.volume_db = lerpf(_IMPACT_VOLUME_MIN_DB, _IMPACT_VOLUME_MAX_DB, vol)
+	_impact_sound.play()
+
+
+## Update the looping tyre-screech volume/playback from the current screech level.
+## Called each frame with the smoothed level the triggers computed. No-ops if the
+## sound file is absent.
+##
+## The loop is kept PLAYING continuously and gated by volume, not by stop()/play().
+## The screech level flickers above and below the audible floor from frame to frame
+## during a drift; toggling the player on and off each time restarted the sample
+## from zero every few frames and produced no audible sound at all. Instead we let
+## the loop run and just duck the volume to (near) silent when there's no slip.
+func _update_screech_sound() -> void:
+	if _screech_sound == null or _screech_sound.stream == null:
+		return
+	var level := _audio_triggers.screech_level
+	if level >= _SCREECH_AUDIBLE_LEVEL:
+		_screech_sound.volume_db = lerpf(_SCREECH_VOLUME_MIN_DB, _SCREECH_VOLUME_MAX_DB, level)
+		# Slightly raise pitch with intensity for a more urgent squeal.
+		_screech_sound.pitch_scale = lerpf(0.9, 1.15, level)
+		if not _screech_sound.playing:
+			_screech_sound.play()
+	elif _screech_sound.playing:
+		# Duck to inaudible rather than stopping, so a brief dip below the floor
+		# mid-drift doesn't restart the sample and swallow the sound. Only once the
+		# level has fully settled to zero (drift clearly over) do we stop the loop
+		# to free the voice.
+		_screech_sound.volume_db = _SCREECH_SILENT_DB
+		if level <= 0.0:
+			_screech_sound.stop()
 
 
 func _set_rear_friction(lowered: bool) -> void:
@@ -319,6 +457,11 @@ func _physics_process(_delta: float) -> void:
 		drive_force = 0.0
 		rear_brake = handbrake_force_value * handbrake_input
 	_set_rear_friction(handbrake_active)
+
+	# Record whether the driver is commanding deceleration this frame: the handbrake,
+	# or the foot brake actively slowing a forward car (brake_force lifted above the
+	# idle drag). The kudos tracker reads this so a hard stop isn't scored as a crash.
+	_braking_this_frame = handbrake_active or brake_force > idle_brake_force
 
 	front_left_wheel.steering = steer_input * steer_limit
 	front_right_wheel.steering = steer_input * steer_limit
@@ -498,6 +641,7 @@ func _update_kudos(delta: float, forward_speed: float) -> void:
 	t.wheels_on_ground = _count_wheels_on_ground()
 	t.on_road = _majority_on_road()
 	t.nearest_obstacle_dist = _nearest_obstacle_distance(t.speed)
+	t.braking = _braking_this_frame
 
 	# Hard-landing shake: on the airborne→grounded transition, read the downward
 	# speed and thump the camera if the car came down fast. Airtime scoring already
@@ -509,15 +653,29 @@ func _update_kudos(delta: float, forward_speed: float) -> void:
 			_camera_shake.add_trauma((down_speed - _LANDING_SOFT_THRESHOLD) * _LANDING_TRAUMA_PER_MS)
 	_was_airborne = airborne_now
 
+	# Tyre screech: reuse the slip/speed telemetry. The car is "gripping" unless the
+	# handbrake has dropped rear grip (a deliberate drift) — a broken-traction slide
+	# squeals louder than a clean-tyre chirp. Skip while airborne (no tyre contact).
+	var gripping := not _rear_grip_lowered
+	var screech_speed := 0.0 if airborne_now else t.speed
+	_audio_triggers.update_screech(t.slip_angle, screech_speed, gripping, delta)
+	_update_screech_sound()
+
 	var events := _kudos.update(t, delta)
 	for ev: KudosTracker.KudosEvent in events:
 		kudos_event.emit(ev.label, ev.amount, ev.is_penalty)
-		# A crash/flip/spin is exactly the "jarring impact" the shake exists for.
-		# Scale trauma by how much the hit cost (bigger penalty = harder hit).
-		if ev.is_penalty:
-			var severity := float(absi(ev.amount))
-			var trauma := maxf(_CRASH_TRAUMA_MIN, severity * _CRASH_TRAUMA_PER_KMH)
-			_camera_shake.add_trauma(trauma)
+		if not ev.is_penalty:
+			continue
+		var severity := float(absi(ev.amount))
+		# Camera shake fits any jarring mistake (crash, flip, spin-out), so shake on
+		# every penalty.
+		_camera_shake.add_trauma(maxf(_CRASH_TRAUMA_MIN, severity * _CRASH_TRAUMA_PER_KMH))
+		# The impact one-shot is a COLLISION sound (metal-on-metal), so it must only
+		# fire on an actual crash — NOT on a spin-out or flip, which are loss-of-
+		# control events. Otherwise a handbrake drift that spins the car past the
+		# yaw threshold plays the crash sound (the bug we're fixing).
+		if ev.label == _CRASH_EVENT_LABEL:
+			_play_impact(severity)
 
 	var total := _kudos.get_kudos()
 	if total != _last_kudos_total:

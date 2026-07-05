@@ -57,6 +57,11 @@ class Telemetry:
 	## Distance (m) to the nearest solid obstacle along the travel direction this
 	## frame, or a large sentinel if nothing is close. Used for near-miss scoring.
 	var nearest_obstacle_dist: float = 999.0
+	## True when the driver is commanding deceleration this frame (foot brake or
+	## handbrake). A locked-wheel handbrake stop produces the same large per-frame
+	## speed drop as hitting a wall, so crash detection uses this to tell an
+	## intentional hard stop apart from a genuine impact.
+	var braking: bool = false
 
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
@@ -104,8 +109,14 @@ var flip_uprightness_threshold: float = 0.3
 var flip_penalty: float = 150.0
 
 ## Crash detection: a drop in speed (m/s) within a single frame larger than this
-## is treated as an impact. Hard braking is gentler than this per-frame.
+## is treated as an impact.
 var crash_decel_threshold: float = 6.0
+## Crash threshold (m/s per frame) used while the driver is commanding braking
+## (foot brake or handbrake). A locked-wheel handbrake stop decelerates hard
+## enough to trip the normal threshold, so while braking we require a much larger,
+## impact-only spike before calling it a crash. Tuned above any decel the brakes
+## alone can produce in a single frame, but below a real high-speed collision.
+var crash_decel_threshold_braking: float = 14.0
 ## Penalty per m/s of speed lost in a crash (a fast head-on hurts more).
 var crash_penalty_per_ms: float = 20.0
 
@@ -198,10 +209,13 @@ func _score_mistakes(t: Telemetry, events: Array[KudosEvent]) -> bool:
 	var hard_mistake := false
 
 	# Crash: a large single-frame speed drop. _prev_speed < 0 means "first frame",
-	# skip it so spawning doesn't read as a crash.
+	# skip it so spawning doesn't read as a crash. While the driver is braking we
+	# require a much bigger spike, so a hard handbrake stop isn't mistaken for an
+	# impact (which was firing the crash sound/shake on every handbrake slam).
 	if _prev_speed >= 0.0:
 		var decel := _prev_speed - t.speed
-		if decel >= crash_decel_threshold:
+		var threshold := crash_decel_threshold_braking if t.braking else crash_decel_threshold
+		if decel >= threshold:
 			var penalty := decel * crash_penalty_per_ms
 			_apply_penalty("CRASH", penalty, events)
 			hard_mistake = true

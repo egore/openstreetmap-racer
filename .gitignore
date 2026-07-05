@@ -3,6 +3,7 @@
 *.tif
 *.osm.pbf
 /dist
+/raw_sources
 
 # Documentation used as inspiration
 /references
