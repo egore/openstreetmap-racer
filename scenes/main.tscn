@@ -332,6 +332,24 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "Debug Labels"
 
+[node name="WetWeatherToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100010]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Wet Weather"
+
+[node name="FrameTracerToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100011]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Frame Tracer"
+
+[node name="DumpFrameTimesButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100012]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Dump Frame Times"
+
 [node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100006]
 custom_minimum_size = Vector2(0, 48)
 layout_mode = 2

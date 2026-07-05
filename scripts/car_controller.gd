@@ -184,6 +184,10 @@ const _IMPACT_VOLUME_MAX_DB := 0.0
 ## plays the impact/crash sound; spin-outs and flips shake but don't "clang".
 const _CRASH_EVENT_LABEL := "CRASH"
 
+## One-shot spark/debris burst fired on a collision. Created in _ready and parented
+## to the car; burst() is called at the crash point on CRASH events.
+var _impact_particles: ImpactParticles = null
+
 ## Style scorer ("kudos"). Pure logic: every physics frame we hand it a snapshot
 ## of how the car is moving and it integrates a score, reporting drifts, crashes,
 ## near misses, etc. The HUD listens to the signals above; the car never embeds
@@ -226,6 +230,9 @@ func _ready() -> void:
 	_setup_wheel_particles()
 	_setup_dirt_sound()
 	_setup_impact_sounds()
+	_impact_particles = ImpactParticles.new()
+	_impact_particles.name = "ImpactParticles"
+	add_child(_impact_particles)
 	add_child(_engine_sound)
 	# Remember the camera's authored framing so shake/FOV-kick always relax back to it.
 	if camera != null:
@@ -368,6 +375,8 @@ func _wav_frame_count(wav: AudioStreamWAV) -> int:
 	var bytes_per_frame := 2 * channels
 	if wav.format != AudioStreamWAV.FORMAT_16_BITS or bytes_per_frame == 0:
 		return 0
+	# Integer division is intended: a whole number of sample frames.
+	@warning_ignore("integer_division")
 	return bytes / bytes_per_frame
 
 
@@ -383,6 +392,24 @@ func _play_impact(severity: float) -> void:
 	var vol: float = decision["volume"]
 	_impact_sound.volume_db = lerpf(_IMPACT_VOLUME_MIN_DB, _IMPACT_VOLUME_MAX_DB, vol)
 	_impact_sound.play()
+
+
+## Spray a spark/debris burst for a collision of the given severity. The sparks
+## originate at the front of the car (the most likely contact point when driving
+## into something) and spray upward-and-outward. No-ops if the burst node is absent
+## or the severity is below the burst threshold.
+func _burst_impact_particles(severity: float) -> void:
+	if _impact_particles == null:
+		return
+	# Front of the car: the collision box is ~4.1 m long, so ~2 m ahead of centre
+	# along the nose axis (basis.z is the car's forward in VehicleBody convention),
+	# lifted to roughly bumper height.
+	var nose := global_transform.basis.z.normalized()
+	var origin := global_position + nose * 2.0 + Vector3(0.0, 0.4, 0.0)
+	# Spray up and back toward the driver: mostly upward with a component opposing
+	# travel so sparks fly back over the bonnet rather than straight ahead.
+	var dir := (Vector3.UP * 1.5 - nose).normalized()
+	_impact_particles.burst(origin, severity, dir)
 
 
 ## Update the looping tyre-screech volume/playback from the current screech level.
@@ -676,6 +703,7 @@ func _update_kudos(delta: float, forward_speed: float) -> void:
 		# yaw threshold plays the crash sound (the bug we're fixing).
 		if ev.label == _CRASH_EVENT_LABEL:
 			_play_impact(severity)
+			_burst_impact_particles(severity)
 
 	var total := _kudos.get_kudos()
 	if total != _last_kudos_total:
