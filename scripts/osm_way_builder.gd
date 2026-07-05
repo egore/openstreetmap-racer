@@ -85,20 +85,15 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 		return null
 
 	var highway_type: String = way.tags.get("highway", "unclassified")
-	var width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
 	var color: Color = ROAD_COLORS.get(highway_type, DEFAULT_COLOR)
 
-	# Check for lanes tag to adjust width based on lane count
-	if way.tags.has("lanes"):
-		var lanes: int = way.tags["lanes"].to_int()
-		if lanes > 0:
-			width = lanes * 3.5
+	# Lane layout parsed from OSM tags (lanes, lanes:forward/backward, oneway).
+	# Drives both the procedural markings AND, below, the carriageway width when
+	# it isn't given explicitly. lane_count already carries a sensible per-type
+	# default (2 for two-way, 1 for one-way) when no lanes tag is present.
+	var lane_spec := RoadLaneSpec.from_tags(highway_type, way.tags)
 
-	# Explicit width tag takes highest precedence (width excluding sidewalk)
-	if way.tags.has("width"):
-		var explicit_width: float = way.tags["width"].to_float()
-		if explicit_width > 0.0:
-			width = explicit_width
+	var width: float = _road_width(highway_type, way.tags, lane_spec)
 
 	# Roads are kept FULL-LENGTH: where ways share a node they overlap and merge
 	# into one connected surface (the Mapnik model), rather than being trimmed
@@ -108,14 +103,19 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# render_priority (RoadMaterialFactory), so a bigger road paints on top of a
 	# smaller one at a junction, exactly like Mapnik draws casings then fills.
 
+	# Lane attachment: when this narrow (single-lane) road ends at the terminal
+	# endpoint of a wider (multi-lane) road, nudge its endpoint sideways so its
+	# centreline lines up with one of that road's *lane centres* instead of its
+	# middle. Two branches meeting the same wide end take the two different lanes.
+	# Applied to the RAW centreline before subdivision/clipping so the shift flows
+	# through UVs, markings and terrain-conforming untouched.
+	points = _attach_endpoints_to_lanes(points, way, lane_spec, osm_data)
+
 	# Subdivide long segments so the ribbon follows the terrain.
 	if terrain_grid_step > 0.0:
 		points = PolygonUtils.subdivide_polyline_to_terrain(
 			points, height_provider, terrain_grid_step)
 
-	# Lane layout parsed from OSM tags (lanes, lanes:forward/backward, oneway).
-	# Drives the procedural markings painted by the asphalt shader.
-	var lane_spec := RoadLaneSpec.from_tags(highway_type, way.tags)
 	# Transverse markings from OSM nodes ON this way (zebra crossings, stop and
 	# give-way lines). Built from the RAW node polyline so each marking's
 	# metres-along matches the ribbon UV.x (terrain subdivision below only adds
@@ -188,6 +188,229 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 
 	mesh_instance.mesh = mesh
 	return mesh_instance
+
+
+## Carriageway width (metres, excluding sidewalks) for a road way. Precedence:
+##
+##   1. An explicit `width` tag always wins (it is the real measured width).
+##   2. Otherwise the width scales with the lane count: width = lanes × per-lane,
+##      where the per-lane width is the type's default treated as a nominal
+##      TWO-lane carriageway (default / 2), floored at LANE_WIDTH so lanes never
+##      get unrealistically thin. This is the key fix for one-way single-lane
+##      roads: a `oneway=yes` tertiary with no `lanes` tag is one lane, so it now
+##      renders at ~half the width of the two-lane tertiary it branches from,
+##      instead of inheriting the (two-lane) type default and looking just as
+##      wide. Multi-lane roads still widen to read as wide as they really are.
+##   3. Unmarked/soft ways (footway, path, cycleway, track, pedestrian) are NOT
+##      carriageways and keep their literal type default regardless of any
+##      (defaulted) lane count.
+func _road_width(highway_type: String, tags: Dictionary, lane_spec: RoadLaneSpec) -> float:
+	# Explicit width tag takes highest precedence (width excluding sidewalk).
+	if tags.has("width"):
+		var explicit_width: float = String(tags["width"]).to_float()
+		if explicit_width > 0.0:
+			return explicit_width
+
+	var default_width: float = ROAD_WIDTHS.get(highway_type, DEFAULT_WIDTH)
+
+	# Non-carriageway ways (paths, footways, …) aren't lane-based; keep default.
+	if lane_spec == null or not lane_spec.marked:
+		return default_width
+
+	# Per-lane width: half the type default (which assumes a ~2-lane road),
+	# but never thinner than a real lane. Width is then lanes × that.
+	var per_lane: float = maxf(default_width * 0.5, RoadLaneSpec.LANE_WIDTH)
+	return lane_spec.lane_count * per_lane
+
+
+## Distance (metres) over which an endpoint lane-attachment offset tapers back to
+## the road's true centreline, so only the tip near the junction is nudged.
+const LANE_ATTACH_TAPER := 8.0
+
+
+## Shift a single-lane road's endpoint(s) sideways so they meet a *lane centre* of
+## a wider road they terminate against, rather than that road's middle. Returns a
+## new centreline (a copy) with a tapered lateral offset baked into the tip
+## point(s); returns `points` unchanged when no attachment applies.
+##
+## Only the way's two terminal nodes are considered (a T- or Y-join at a wide
+## road's END). The offset is perpendicular to the WIDE road's direction at the
+## shared node and equal to the wide road's lane-centre position; when several
+## single-lane branches share the same wide endpoint they are handed distinct
+## lanes deterministically (sorted by way id) so two branches take the two lanes.
+func _attach_endpoints_to_lanes(
+		points: PackedVector3Array, way: OSMParser.OSMWay,
+		lane_spec: RoadLaneSpec, osm_data: OSMParser.OSMData) -> PackedVector3Array:
+	# Only single-lane branches attach; wider roads keep their own centreline.
+	if lane_spec == null or lane_spec.lane_count != 1:
+		return points
+	if way.node_ids.size() < 2 or points.size() < 2:
+		return points
+
+	var start_node: int = way.node_ids[0]
+	var end_node: int = way.node_ids[way.node_ids.size() - 1]
+
+	var start_off := _lane_attach_offset(start_node, way, osm_data)
+	var end_off := _lane_attach_offset(end_node, way, osm_data)
+	if start_off == Vector3.ZERO and end_off == Vector3.ZERO:
+		return points
+
+	# Bake a tapered offset into a copy: full at the tip, zero past the taper
+	# length (measured along the polyline from that end). If the road is shorter
+	# than 2× the taper the two ends share the budget by their along-fraction.
+	var along := _cumulative_along(points)
+	var total: float = along[along.size() - 1]
+	if total <= 0.0001:
+		return points
+
+	var out := PackedVector3Array()
+	out.resize(points.size())
+	for i: int in range(points.size()):
+		var p := points[i]
+		var d_start := along[i]
+		var d_end := total - along[i]
+		var w_start := _taper_weight(d_start)
+		var w_end := _taper_weight(d_end)
+		var off := start_off * w_start + end_off * w_end
+		out[i] = Vector3(p.x + off.x, p.y, p.z + off.z)
+	return out
+
+
+## Linear taper weight: 1 at the endpoint, falling to 0 at LANE_ATTACH_TAPER m.
+func _taper_weight(dist_from_end: float) -> float:
+	if dist_from_end >= LANE_ATTACH_TAPER:
+		return 0.0
+	return 1.0 - dist_from_end / LANE_ATTACH_TAPER
+
+
+## Lateral offset (XZ, y=0) to move `way`'s endpoint at `node_id` onto a lane
+## centre of a wider road that TERMINATES at that same node. Vector3.ZERO when
+## there is no such single wide anchor (so no attachment happens).
+func _lane_attach_offset(
+		node_id: int, way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> Vector3:
+	if not osm_data.nodes.has(node_id):
+		return Vector3.ZERO
+
+	# Find the wide anchor: a road (!= way) that has node_id as its OWN terminal
+	# endpoint and carries 2+ lanes. If there isn't exactly one, don't attach —
+	# an ambiguous junction (two wide roads, or a mid-way crossing) is left alone.
+	var anchor: OSMParser.OSMWay = null
+	var branches: Array[OSMParser.OSMWay] = []
+	for other: OSMParser.OSMWay in osm_data.ways.values():
+		if other == way or not RoadHandler.is_road(other):
+			continue
+		if other.node_ids.size() < 2:
+			continue
+		var o_start: int = other.node_ids[0]
+		var o_end: int = other.node_ids[other.node_ids.size() - 1]
+		var terminal := (o_start == node_id or o_end == node_id)
+		if not terminal:
+			continue
+		var o_lanes := _way_lane_count(other)
+		if o_lanes >= 2:
+			if anchor != null:
+				return Vector3.ZERO  # more than one wide anchor → ambiguous
+			anchor = other
+		elif o_lanes == 1:
+			branches.append(other)
+	if anchor == null:
+		return Vector3.ZERO
+
+	# This way is itself a single-lane branch at the node.
+	branches.append(way)
+
+	# Wide road direction AT the shared node, pointing into the anchor (away from
+	# the node), and the right-hand lateral used to place lane centres.
+	var anchor_dir := _anchor_dir_at(anchor, node_id, osm_data)
+	if anchor_dir == Vector3.ZERO:
+		return Vector3.ZERO
+	var lateral := Vector3(-anchor_dir.z, 0.0, anchor_dir.x).normalized()
+
+	var anchor_lanes := _way_lane_count(anchor)
+	var anchor_spec := RoadLaneSpec.from_tags(
+		anchor.tags.get("highway", "unclassified"), anchor.tags)
+	var anchor_width := _road_width(
+		anchor.tags.get("highway", "unclassified"), anchor.tags, anchor_spec)
+	var lane_w: float = anchor_width / float(anchor_lanes)
+
+	# Assign each branch to a distinct lane. Preference is which side the branch
+	# leans relative to the anchor's lateral (so a branch coming in from the right
+	# takes a right-hand lane — no crossover); ties and overflow fall back to a
+	# stable id order. Greedy in preference order, filling nearest free lane.
+	var lane_k := _assign_branch_lane(
+		branches, way, node_id, lateral, anchor_lanes, osm_data)
+
+	# Lane centres, left→right: (k + 0.5 - lanes/2) * lane_w for k in [0, lanes).
+	var lane_center := (lane_k + 0.5 - anchor_lanes / 2.0) * lane_w
+	return lateral * lane_center
+
+
+## Deterministically hand each single-lane branch at a shared node a distinct
+## lane of the wide anchor (0 = leftmost). Branches are ranked by how far right
+## they lean relative to `lateral` (their outgoing direction · lateral), so the
+## left-leaning branch takes a left lane and the right-leaning one a right lane;
+## id order breaks ties. Returns the lane index assigned to `way`, capped to
+## [0, anchor_lanes).
+func _assign_branch_lane(
+		branches: Array[OSMParser.OSMWay], way: OSMParser.OSMWay,
+		node_id: int, lateral: Vector3, anchor_lanes: int,
+		osm_data: OSMParser.OSMData) -> int:
+	# Rank: left-leaning (most negative lateral projection) first → lowest lane.
+	var ranked := branches.duplicate()
+	ranked.sort_custom(func(a: OSMParser.OSMWay, b: OSMParser.OSMWay) -> bool:
+		var pa := _branch_side(a, node_id, lateral, osm_data)
+		var pb := _branch_side(b, node_id, lateral, osm_data)
+		if is_equal_approx(pa, pb):
+			return a.id < b.id
+		return pa < pb)
+	var idx := ranked.find(way)
+	if idx < 0:
+		idx = 0
+	return clampi(idx, 0, anchor_lanes - 1)
+
+
+## Signed lean of a branch relative to the anchor lateral at the shared node:
+## the branch's outgoing direction (from the node into the branch) projected onto
+## `lateral`. Negative = leans left, positive = leans right.
+func _branch_side(
+		branch: OSMParser.OSMWay, node_id: int, lateral: Vector3,
+		osm_data: OSMParser.OSMData) -> float:
+	var dir := _anchor_dir_at(branch, node_id, osm_data)
+	if dir == Vector3.ZERO:
+		return 0.0
+	return dir.dot(lateral)
+
+
+## Lane count for any road way (defaults included), reusing RoadLaneSpec so the
+## branch/anchor classification matches the markings and width logic exactly.
+func _way_lane_count(way: OSMParser.OSMWay) -> int:
+	var ht: String = way.tags.get("highway", "unclassified")
+	return RoadLaneSpec.from_tags(ht, way.tags).lane_count
+
+
+## Unit direction of `anchor` at its terminal node `node_id`, pointing from the
+## node toward the road's interior (so the lateral is consistent). Vector3.ZERO
+## for a degenerate anchor.
+func _anchor_dir_at(
+		anchor: OSMParser.OSMWay, node_id: int, osm_data: OSMParser.OSMData) -> Vector3:
+	var n := anchor.node_ids.size()
+	if not osm_data.nodes.has(node_id):
+		return Vector3.ZERO
+	var neighbor_id: int
+	if anchor.node_ids[0] == node_id:
+		neighbor_id = anchor.node_ids[1]
+	elif anchor.node_ids[n - 1] == node_id:
+		neighbor_id = anchor.node_ids[n - 2]
+	else:
+		return Vector3.ZERO
+	if not osm_data.nodes.has(neighbor_id):
+		return Vector3.ZERO
+	var here: Vector3 = osm_data.nodes[node_id].local_pos
+	var there: Vector3 = osm_data.nodes[neighbor_id].local_pos
+	var d := Vector3(there.x - here.x, 0.0, there.z - here.z)
+	if d.length_squared() < 0.0001:
+		return Vector3.ZERO
+	return d.normalized()
 
 
 ## Emit one ribbon (road surface + optional sidewalks) for a single centreline
