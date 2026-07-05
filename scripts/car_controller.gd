@@ -55,6 +55,10 @@ signal kudos_event(label: String, amount: int, is_penalty: bool)
 @onready var rear_right_wheel: VehicleWheel3D = $RearRightWheel
 
 @onready var camera_pivot: Node3D = $CameraPivot
+## The camera itself hangs off the pivot at a fixed "boom" offset. Shake and the
+## speed FOV-kick are applied to THIS node (on top of its rest transform) so they
+## layer cleanly over the pivot's smooth rotational follow.
+@onready var camera: Camera3D = $CameraPivot/Camera3D
 @onready var car_mesh: Node3D = $CarMesh
 @onready var front_left_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Right
 @onready var front_right_wheel_mesh: Node3D = $CarMesh/Wheel_Front_Left
@@ -104,6 +108,43 @@ const _DIRT_VOLUME_MAX_DB := -6.0
 const _DIRT_PITCH_MIN := 0.7
 const _DIRT_PITCH_MAX := 1.4
 
+## Camera shake for impact/landing feedback. Pure logic: we feed it trauma on a
+## crash or hard landing and each frame add its decaying offset onto the camera's
+## rest transform. See camera_shake.gd for the trauma model.
+var _camera_shake := CameraShake.new()
+## The camera's rest transform (captured at _ready), i.e. the boom offset from the
+## pivot with no shake applied. Shake and FOV-kick are composed relative to this so
+## they always settle back to the exact authored framing.
+var _camera_rest_transform := Transform3D.IDENTITY
+## The camera's authored resting FOV (captured at _ready). The speed kick widens
+## the FOV above this and relaxes back to it when slow.
+var _camera_rest_fov: float = 70.0
+
+## Trauma added for a crash, scaled by the crash's severity. A gentle bump adds a
+## little; a full-speed head-on adds a lot (clamped inside CameraShake to 1.0).
+const _CRASH_TRAUMA_PER_KMH := 0.012
+## Minimum trauma for any crash the kudos tracker reports, so even a light tap has
+## a perceptible thump.
+const _CRASH_TRAUMA_MIN := 0.25
+## Trauma added on a hard landing, scaled by downward speed at touchdown.
+const _LANDING_TRAUMA_PER_MS := 0.06
+## Downward speed (m/s) at touchdown below which a landing is "soft" (no shake).
+const _LANDING_SOFT_THRESHOLD := 4.0
+
+## How far (in km/h of forward speed) the FOV kick ramps in. At/above this the kick
+## is at full strength; it scales linearly from zero at standstill.
+const _FOV_KICK_FULL_SPEED_KMH := 120.0
+## Maximum extra FOV (degrees) added at full speed. A subtle widening reads as
+## "fast" without the fisheye distortion a big number would cause.
+const _FOV_KICK_MAX_DEGREES := 12.0
+## How quickly the FOV eases toward its target (per-second lerp weight). Keeps the
+## kick from snapping when speed changes abruptly (e.g. a crash).
+const _FOV_KICK_LERP := 4.0
+
+## Wheels-on-ground last frame, so we can detect the airborne→grounded transition
+## that marks a landing (and read the impact speed at that moment).
+var _was_airborne: bool = false
+
 ## Style scorer ("kudos"). Pure logic: every physics frame we hand it a snapshot
 ## of how the car is moving and it integrates a score, reporting drifts, crashes,
 ## near misses, etc. The HUD listens to the signals above; the car never embeds
@@ -143,6 +184,10 @@ func _ready() -> void:
 	_setup_wheel_particles()
 	_setup_dirt_sound()
 	add_child(_engine_sound)
+	# Remember the camera's authored framing so shake/FOV-kick always relax back to it.
+	if camera != null:
+		_camera_rest_transform = camera.transform
+		_camera_rest_fov = camera.fov
 
 
 func _cache_wheel_mesh_rotations() -> void:
@@ -291,6 +336,9 @@ func _physics_process(_delta: float) -> void:
 	_broadcast_speed()
 	_update_gear(forward_speed)
 	_update_kudos(_delta, forward_speed)
+	# After kudos (which may have added crash/landing trauma this frame) apply the
+	# shake and speed FOV-kick to the camera.
+	_update_camera_effects(_delta)
 
 
 func _apply_anti_roll(_delta: float) -> void:
@@ -387,6 +435,34 @@ func _update_camera_pivot(delta: float) -> void:
 	var target_basis := Basis.looking_at(flat_forward, Vector3.UP)
 	camera_pivot.global_basis = camera_pivot.global_basis.slerp(target_basis, clamp(delta * 6.0, 0.0, 1.0))
 
+
+## Layer the shake and the speed FOV-kick onto the camera each frame, on top of
+## its authored rest transform. Called after _update_camera_pivot so the pivot
+## owns the smooth "look where we're going" rotation and this owns the local jitter.
+func _update_camera_effects(delta: float) -> void:
+	if camera == null:
+		return
+	# 1) Shake: decay trauma, then add its offset to the rest transform. When fully
+	# settled the offset is exactly zero so the camera snaps back to authored framing.
+	_camera_shake.tick(delta)
+	var shaken := _camera_rest_transform
+	if _camera_shake.is_active():
+		var off := _camera_shake.get_offset()
+		var pos_off := off["position"] as Vector3
+		var rot_off := off["rotation"] as Vector3
+		shaken.origin += pos_off
+		shaken.basis = shaken.basis * Basis.from_euler(rot_off)
+	camera.transform = shaken
+
+	# 2) FOV kick: widen the field of view with speed for a sense of speed, easing
+	# toward the target so it never snaps. Uses forward speed magnitude so reversing
+	# fast doesn't count.
+	var speed_kmh := linear_velocity.length() * 3.6
+	var kick := clampf(speed_kmh / _FOV_KICK_FULL_SPEED_KMH, 0.0, 1.0) * _FOV_KICK_MAX_DEGREES
+	var target_fov := _camera_rest_fov + kick
+	camera.fov = lerpf(camera.fov, target_fov, clampf(delta * _FOV_KICK_LERP, 0.0, 1.0))
+
+
 func _broadcast_speed() -> void:
 	var speed_kmh: float = linear_velocity.length() * 3.6
 	speed_changed.emit(speed_kmh)
@@ -423,9 +499,25 @@ func _update_kudos(delta: float, forward_speed: float) -> void:
 	t.on_road = _majority_on_road()
 	t.nearest_obstacle_dist = _nearest_obstacle_distance(t.speed)
 
+	# Hard-landing shake: on the airborne→grounded transition, read the downward
+	# speed and thump the camera if the car came down fast. Airtime scoring already
+	# lives in the kudos tracker; this is purely the visual/feel side of touchdown.
+	var airborne_now := t.wheels_on_ground == 0
+	if _was_airborne and not airborne_now:
+		var down_speed := maxf(0.0, -linear_velocity.y)
+		if down_speed > _LANDING_SOFT_THRESHOLD:
+			_camera_shake.add_trauma((down_speed - _LANDING_SOFT_THRESHOLD) * _LANDING_TRAUMA_PER_MS)
+	_was_airborne = airborne_now
+
 	var events := _kudos.update(t, delta)
 	for ev: KudosTracker.KudosEvent in events:
 		kudos_event.emit(ev.label, ev.amount, ev.is_penalty)
+		# A crash/flip/spin is exactly the "jarring impact" the shake exists for.
+		# Scale trauma by how much the hit cost (bigger penalty = harder hit).
+		if ev.is_penalty:
+			var severity := float(absi(ev.amount))
+			var trauma := maxf(_CRASH_TRAUMA_MIN, severity * _CRASH_TRAUMA_PER_KMH)
+			_camera_shake.add_trauma(trauma)
 
 	var total := _kudos.get_kudos()
 	if total != _last_kudos_total:
