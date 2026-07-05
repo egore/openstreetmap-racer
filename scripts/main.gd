@@ -24,6 +24,9 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 @onready var post_processing: PostProcessing = $PostProcessing
 @onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
 @onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
+@onready var wet_weather_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/WetWeatherToggle
+@onready var frame_tracer_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/FrameTracerToggle
+@onready var dump_frame_times_button: Button = $PauseMenu/CenterContainer/Panel/DumpFrameTimesButton
 @onready var headlights: Headlights = $Car/Headlights
 @onready var street_lamp_lights: StreetLampLights = $StreetLampLights
 ## Wet-road weather. Self-wires via the global `wetness` shader uniform; kept
@@ -88,6 +91,19 @@ func _ready() -> void:
 	debug_labels_toggle.button_pressed = false
 	debug_labels_toggle.toggled.connect(_on_debug_labels_toggled)
 
+	# Wet-weather toggle: reflect the controller's starting state, then let the user
+	# flip rain on/off. Mirrors the F5 shortcut, which shares the same setter so the
+	# checkbox and key never disagree.
+	wet_weather_toggle.button_pressed = weather_controller.is_wet()
+	wet_weather_toggle.toggled.connect(_on_wet_weather_toggled)
+
+	# Frame-tracer toggle: reflect the tracer's current state (it can be enabled
+	# non-interactively via OSMRACER_TRACE=1), then let the user flip it. Shares the
+	# same setter as the F3 shortcut. The "Dump Frame Times" button mirrors F4.
+	frame_tracer_toggle.button_pressed = FrameTracerScript.is_enabled()
+	frame_tracer_toggle.toggled.connect(_on_frame_tracer_toggled)
+	dump_frame_times_button.pressed.connect(FrameTracerScript.dump_summary)
+
 	# Headlights and street lamps both follow the time of day automatically: on
 	# after dark, off by day. Each owns its own lights; the sky controller decides
 	# when it's dark. Wiring them here keeps all three ignorant of each other
@@ -112,15 +128,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == null or not key.pressed or key.echo:
 		return
 	if key.keycode == KEY_F3:
-		var on := not FrameTracerScript.is_enabled()
-		FrameTracerScript.set_enabled(on)
-		print("[trace] frame tracing %s" % ("ON" if on else "OFF"))
+		# Flip the frame tracer via the checkbox so the key and menu stay in sync
+		# (setting button_pressed emits toggled, which runs the real handler).
+		frame_tracer_toggle.button_pressed = not FrameTracerScript.is_enabled()
 	elif key.keycode == KEY_F4:
 		FrameTracerScript.dump_summary()
 	elif key.keycode == KEY_F5:
-		# Toggle wet-road weather (rain rolls in/out over a few seconds).
-		var wet := weather_controller.toggle()
-		print("[weather] %s" % ("WET" if wet else "DRY"))
+		# Flip wet-road weather via the checkbox (keeps key and menu in sync).
+		wet_weather_toggle.button_pressed = not weather_controller.is_wet()
 
 ## Pauses or resumes the game. Godot's scene-tree pause cleanly halts car
 ## physics, tile streaming and HUD updates without the hacky "near-zero
@@ -205,6 +220,17 @@ func _on_debug_labels_toggled(enabled: bool) -> void:
 	tile_manager.set_show_debug_labels(enabled)
 	for label: Node in get_tree().get_nodes_in_group("debug_labels"):
 		label.visible = enabled
+
+## Menu toggle (or F5) flipped: drive the world's wetness to the requested state.
+## Uses set_wet rather than toggle() so the checkbox's on/off value is authoritative
+## and pressing F5 (which sets button_pressed) can't get out of phase.
+func _on_wet_weather_toggled(wet: bool) -> void:
+	weather_controller.set_wet(wet)
+
+## Menu toggle (or F3) flipped: enable/disable the frame tracer.
+func _on_frame_tracer_toggled(enabled: bool) -> void:
+	FrameTracerScript.set_enabled(enabled)
+	print("[trace] frame tracing %s" % ("ON" if enabled else "OFF"))
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
 	speed_label.text = "%d km/h" % int(speed_kmh)
