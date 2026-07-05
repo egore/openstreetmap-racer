@@ -182,6 +182,52 @@ func test_crash_penalises() -> void:
 		.override_failure_message("CRASH amount is negative").is_less(0)
 
 
+func test_handbrake_stop_is_not_a_crash() -> void:
+	# Slamming the handbrake locks the wheels and drops speed hard in one frame —
+	# the same signature as an impact. With t.braking set, that must NOT register as
+	# a crash (this is the bug where a handbrake slam fired the crash sound + shake).
+	var k := _make()
+	var t := _cruising()
+	k.update(t, STEP)  # seed _prev_speed at 20 m/s
+	# A hard handbrake decel: lose ~10 m/s in one frame (above the normal 6.0
+	# threshold, below the 14.0 braking threshold) with braking commanded.
+	t.speed = 10.0
+	t.braking = true
+	var events := k.update(t, STEP)
+	assert_int(_count_label(events, "CRASH")) \
+		.override_failure_message("a handbrake stop must not be scored as a crash").is_equal(0)
+
+
+func test_hard_impact_while_braking_still_crashes() -> void:
+	# Braking must not make the car invincible: a genuine high-speed collision
+	# (a huge single-frame drop past the raised braking threshold) still crashes,
+	# even if the driver happened to be on the brakes at the moment of impact.
+	var k := _make()
+	var t := _cruising()
+	t.forward_speed = 30.0
+	t.speed = 30.0
+	k.update(t, STEP)  # seed _prev_speed at 30 m/s
+	t.speed = 5.0      # lost 25 m/s in one frame = a real wall hit
+	t.braking = true
+	var events := k.update(t, STEP)
+	assert_int(_count_label(events, "CRASH")) \
+		.override_failure_message("a real impact still crashes even while braking").is_equal(1)
+
+
+func test_moderate_stop_without_braking_still_crashes() -> void:
+	# Guard the discriminator from the other side: the SAME moderate decel that a
+	# handbrake produces, but with no braking commanded, is a genuine impact and
+	# must still register (e.g. clipping something that stopped you without input).
+	var k := _make()
+	var t := _cruising()
+	k.update(t, STEP)  # seed _prev_speed at 20 m/s
+	t.speed = 10.0     # lose 10 m/s (> normal 6.0 threshold)
+	t.braking = false
+	var events := k.update(t, STEP)
+	assert_int(_count_label(events, "CRASH")) \
+		.override_failure_message("a hard decel with no braking input is still a crash").is_equal(1)
+
+
 func test_offroad_bleeds_kudos() -> void:
 	var k := _make()
 	_bank_kudos(k, 2.0)
