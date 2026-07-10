@@ -15,6 +15,10 @@ const _MAN_MADE_AREA_VALUES := {
 	"wastewater_plant": true, "water_works": true, "works": true,
 	"reservoir_covered": true, "storage_tank": true, "wastewater": true,
 	"reinforced_slope": true, "pier": true, "bunker_silo": true,
+	# Coastal flood-defence structures authored as closed footprints render as
+	# flat colored ground (rock/stone/concrete banks). Their open linear variants
+	# carry no fillable surface — the manager's _is_ignorable_way silences those.
+	"breakwater": true, "groyne": true,
 }
 
 

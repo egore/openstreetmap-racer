@@ -406,9 +406,16 @@ func _plan_tile_features(
 	for way: OSMParser.OSMWay in bucket["ways"]:
 		if processed_way_ids.has(way.id):
 			continue
-		processed_way_ids[way.id] = true
 		if relation_way_ids.has(way.id):
+			processed_way_ids[way.id] = true
 			continue
+		# building:part ways are built in their own dedicated pass below; don't
+		# also queue them as a generic WAY (no way handler claims them, which
+		# would otherwise emit a spurious "Skipping way" for every part). Leave
+		# them unmarked here so the building_part loop still picks them up.
+		if _is_building_part(way):
+			continue
+		processed_way_ids[way.id] = true
 		var w := FeatureWork.new()
 		w.kind = FeatureWork.Kind.WAY
 		w.tile_key = tkey
@@ -910,6 +917,18 @@ static func _way_has_own_feature(way: OSMParser.OSMWay) -> bool:
 		or way.tags.has("leisure") or way.tags.has("amenity") \
 		or way.tags.has("power") or way.tags.has("man_made")
 
+## True when a way carries a secondary feature key that a handler claims only on
+## a CLOSED ring (tourism grounds, playground equipment, historic footprints,
+## shop/area:highway rings, surface areas, transit platforms). These aren't in
+## _way_has_own_feature (which lists always-claimed primary keys), but a closed
+## ring keyed on one of them IS renderable ground, so the styling-only skip
+## suppression must not swallow it.
+static func _has_renderable_area_tag(way: OSMParser.OSMWay) -> bool:
+	return way.tags.has("tourism") or way.tags.has("playground") \
+		or way.tags.has("historic") or way.tags.has("shop") \
+		or way.tags.has("area:highway") or way.tags.has("surface") \
+		or way.tags.has("public_transport")
+
 ## Ways we deliberately do not render: untagged ring members consumed by their
 ## parent relation, explicitly removed features, and abstract man_made outlines
 ## that carry no usable surface geometry. Returning true suppresses the
@@ -934,9 +953,24 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 	# A bare "area=yes/no" with no feature tag carries no surface to render.
 	if way.tags.size() == 1 and way.tags.has("area"):
 		return true
+	# Ways carrying only styling/metadata tags (material, colour, source,
+	# operator, website, ...) with no primary feature key of their own are
+	# relation members that get their meaning from a parent relation; they have
+	# no independently renderable geometry, so suppress their skip noise. Guarded
+	# on _is_renderable_area_tag so a closed land-cover ring keyed only on
+	# tourism/playground/historic/shop/... (which AreaHandler DOES claim) is not
+	# swallowed here — those must still fall through to their handler.
+	if not _way_has_own_feature(way) and not _has_renderable_area_tag(way):
+		return true
 	# Abstract structural outlines without their own renderable footprint.
 	var man_made: String = way.tags.get("man_made", "")
 	if man_made == "bridge" or man_made == "embankment":
+		return true
+	# Coastal flood-defence structures (breakwater/groyne): closed footprints
+	# render as ground via AreaHandler. Open linear variants carry no fillable
+	# surface, so suppress their expected skip noise.
+	if (man_made == "breakwater" or man_made == "groyne") \
+			and not OSMWayHandler.is_closed_way(way):
 		return true
 	# A dyke is a linear flood-defence embankment carrying no fillable surface
 	# (rendered elsewhere as terrain relief, not as a way); suppress skip noise.
@@ -952,6 +986,11 @@ func _is_ignorable_way(way: OSMParser.OSMWay) -> bool:
 	if way.tags.get("public_transport", "") == "station":
 		return true
 	if way.tags.get("amenity", "") == "bus_station":
+		return true
+	# Street furniture mapped as an open way (bench, waste_basket, ...) is
+	# point-like structure with no fillable surface; AreaHandler renders it only
+	# when authored as a closed ground ring. Suppress the open-variant skip noise.
+	if way.tags.get("amenity", "") == "bench" and not OSMWayHandler.is_closed_way(way):
 		return true
 	# Open (linear) transit platforms carry no fillable surface; PlatformHandler
 	# claims only closed rings, so these expected skips are silenced here.
