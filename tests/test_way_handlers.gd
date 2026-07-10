@@ -427,3 +427,104 @@ func test_open_pier_is_ignorable() -> void:
 	var w := _way({"man_made": "pier"}, false)
 	assert_bool(mgr._is_ignorable_way(w)) \
 		.override_failure_message("open man_made=pier -> ignorable").is_true()
+
+
+# ─── Coastal flood-defence (breakwater / groyne) tests ──────────────────────
+# The reported unmatched ways: man_made=breakwater and man_made=groyne, both
+# closed footprints (rock/stone/concrete banks) and open linear variants. Closed
+# rings render as ground via AreaHandler; open variants are ignorable.
+
+func test_closed_breakwater_ring_is_area() -> void:
+	var w := _way({
+		"area": "yes", "man_made": "breakwater", "material": "stone",
+		"operator": "Waterschap Hollandse Delta", "source": "3dShapes",
+	})
+	assert_str(_classify(w)) \
+		.override_failure_message("closed man_made=breakwater ring -> area").is_equal("area")
+
+
+func test_closed_groyne_ring_is_area() -> void:
+	var w := _way({"area": "yes", "man_made": "groyne", "material": "stone"})
+	assert_str(_classify(w)) \
+		.override_failure_message("closed man_made=groyne ring -> area").is_equal("area")
+
+
+func test_open_breakwater_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"man_made": "breakwater"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open man_made=breakwater -> unmatched").is_equal("")
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("open man_made=breakwater -> ignorable").is_true()
+
+
+func test_open_groyne_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"man_made": "groyne"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("open man_made=groyne -> unmatched").is_equal("")
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("open man_made=groyne -> ignorable").is_true()
+
+
+# ─── Bare styling / metadata way tests ──────────────────────────────────────
+# Ways carrying only material/source/operator/website with no primary feature
+# key are relation members; they must be ignorable (no skip noise).
+
+func test_material_only_way_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"material": "concrete"}, false)
+	assert_str(_classify(w)) \
+		.override_failure_message("bare material way -> unmatched").is_equal("")
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("bare material way -> ignorable").is_true()
+
+
+func test_metadata_only_way_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({
+		"material": "wood", "operator": "Waterschap Hollandse Delta",
+		"source": "PDOK Luchtfoto", "website": "https://www.wshd.nl/",
+	}, false)
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("bare metadata way -> ignorable").is_true()
+
+
+# ─── Street-furniture (bench) tests ─────────────────────────────────────────
+# amenity=bench mapped as an open way is point-like furniture with no fillable
+# surface; it must be ignorable rather than logged as an unmatched skip.
+
+func test_open_bench_way_is_ignorable() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"amenity": "bench"}, false)
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("open amenity=bench -> ignorable").is_true()
+
+
+func test_closed_bench_ring_not_ignorable() -> void:
+	# A closed amenity ring is renderable ground (AreaHandler claims amenity
+	# rings), so it must NOT be suppressed as ignorable.
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"amenity": "bench"})
+	assert_bool(mgr._is_ignorable_way(w)) \
+		.override_failure_message("closed amenity=bench ring -> not ignorable").is_false()
+
+
+# ─── building:part not routed through the WAY handler chain ─────────────────
+# building:part ways are built in a dedicated pass (BUILDING_PART), never the
+# generic way chain — so no way handler should claim them (which would emit a
+# spurious "Skipping way"). _is_building_part gates that routing.
+
+func test_building_part_is_recognized() -> void:
+	var mgr := auto_free(OSMTileManager.new()) as OSMTileManager
+	var w := _way({"building:part": "industrial"})
+	assert_bool(mgr._is_building_part(w)) \
+		.override_failure_message("building:part=industrial -> building part").is_true()
+
+
+func test_building_part_unmatched_by_way_handlers() -> void:
+	# building:part=industrial carries no other feature key a way handler claims;
+	# it is rendered only by the dedicated building-part pass.
+	var w := _way({"building:part": "industrial"})
+	assert_str(_classify(w)) \
+		.override_failure_message("building:part -> not claimed by way handlers").is_equal("")

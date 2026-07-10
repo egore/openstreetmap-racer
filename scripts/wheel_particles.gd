@@ -10,6 +10,13 @@ extends Node3D
 ## Usage: create one WheelParticles per wheel, parent it to the car, and call
 ## update_particles() every physics frame with the wheel's contact point and
 ## the current surface type.
+##
+## Uses CPUParticles3D rather than GPUParticles3D. The GPU emitter allocates a
+## ParticlesShaderRD in the RenderingServer whose lifetime outlives the scene
+## tree, so it is reported as "leaked at exit" on quit (and the GPU compute path
+## has crashed the renderer on some macOS/Metal drivers — see ImpactParticles).
+## The per-wheel counts here are tiny (<= MAX_PARTICLES), so CPU simulation is
+## cheap and the visual result is identical.
 
 ## Minimum car speed (m/s) before particles start. Avoids particles when
 ## idling on grass.
@@ -38,27 +45,26 @@ const SCALE_MAX := 0.08
 ## Gravity pulling particles back down.
 const GRAVITY := Vector3(0.0, -6.0, 0.0)
 
-var _particles: GPUParticles3D = null
-var _material: ParticleProcessMaterial = null
+var _particles: CPUParticles3D = null
 
 
 func _ready() -> void:
-	_material = _create_process_material()
-	_particles = GPUParticles3D.new()
+	_particles = CPUParticles3D.new()
 	_particles.name = "GrassParticles"
 	_particles.amount = MAX_PARTICLES
 	_particles.lifetime = LIFETIME
-	_particles.process_material = _material
 	_particles.emitting = false
 	# One-shot false: continuous emission while driving on grass.
 	_particles.one_shot = false
 	# Particles live in world space so they don't follow the car after emission.
 	_particles.local_coords = false
-	# Flat colored quad for each particle — a tiny green rectangle that reads
-	# as a leaf / grass blade without needing a texture.
-	_particles.draw_pass_1 = _create_particle_mesh()
+	_particles.draw_order = CPUParticles3D.DRAW_ORDER_VIEW_DEPTH
 	# Don't cast shadows — the quads are tiny and shadow maps waste fill on them.
 	_particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_configure_emission()
+	# Flat colored quad for each particle — a tiny green rectangle that reads
+	# as a leaf / grass blade without needing a texture.
+	_particles.mesh = _create_particle_mesh()
 	add_child(_particles)
 
 
@@ -82,41 +88,40 @@ func update_particles(wheel_global_pos: Vector3, surface: SurfaceDetector.Surfac
 		var speed_factor := clampf((car_speed - MIN_SPEED) / 15.0, 0.0, 1.0)
 		_particles.amount = clampi(int(speed_factor * MAX_PARTICLES), 1, MAX_PARTICLES)
 		# Scale initial velocity with speed so the spray is more dramatic.
-		_material.initial_velocity_min = INITIAL_VELOCITY_MIN + car_speed * 0.15
-		_material.initial_velocity_max = INITIAL_VELOCITY_MAX + car_speed * 0.25
+		_particles.initial_velocity_min = INITIAL_VELOCITY_MIN + car_speed * 0.15
+		_particles.initial_velocity_max = INITIAL_VELOCITY_MAX + car_speed * 0.25
 
 
-func _create_process_material() -> ParticleProcessMaterial:
-	var mat := ParticleProcessMaterial.new()
+## Set the emission shape, spray cone, gravity, scale, colour ramp and tumble
+## directly on the CPUParticles3D (the CPU emitter carries these fields itself
+## rather than delegating to a ParticleProcessMaterial).
+func _configure_emission() -> void:
 	# Emit from a point (the wheel contact).
-	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	mat.emission_sphere_radius = 0.15
+	_particles.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	_particles.emission_sphere_radius = 0.15
 	# Spray upward in a cone.
-	mat.direction = Vector3(0, 1, 0)
-	mat.spread = SPREAD_ANGLE
-	mat.initial_velocity_min = INITIAL_VELOCITY_MIN
-	mat.initial_velocity_max = INITIAL_VELOCITY_MAX
+	_particles.direction = Vector3(0, 1, 0)
+	_particles.spread = SPREAD_ANGLE
+	_particles.initial_velocity_min = INITIAL_VELOCITY_MIN
+	_particles.initial_velocity_max = INITIAL_VELOCITY_MAX
 	# Gravity pulls particles down after the initial spray.
-	mat.gravity = GRAVITY
+	_particles.gravity = GRAVITY
 	# Randomise scale for organic variation.
-	mat.scale_min = SCALE_MIN
-	mat.scale_max = SCALE_MAX
+	_particles.scale_amount_min = SCALE_MIN
+	_particles.scale_amount_max = SCALE_MAX
 	# Fade out over the lifetime (alpha curve).
-	mat.color = Color(0.3, 0.6, 0.15, 0.9)  # grass green, slightly transparent
-	var color_ramp := GradientTexture1D.new()
+	_particles.color = Color(0.3, 0.6, 0.15, 0.9)  # grass green, slightly transparent
 	var gradient := Gradient.new()
 	gradient.set_color(0, Color(0.35, 0.65, 0.18, 1.0))  # bright green start
 	gradient.add_point(0.5, Color(0.3, 0.55, 0.15, 0.8))
 	gradient.set_color(1, Color(0.25, 0.45, 0.1, 0.0))  # fade to transparent
-	color_ramp.gradient = gradient
-	mat.color_ramp = color_ramp
+	_particles.color_ramp = gradient
 	# Slight angular velocity for tumbling leaves.
-	mat.angular_velocity_min = -180.0
-	mat.angular_velocity_max = 180.0
+	_particles.angular_velocity_min = -180.0
+	_particles.angular_velocity_max = 180.0
 	# Damping so particles slow down in the air.
-	mat.damping_min = 2.0
-	mat.damping_max = 5.0
-	return mat
+	_particles.damping_min = 2.0
+	_particles.damping_max = 5.0
 
 
 func _create_particle_mesh() -> Mesh:
