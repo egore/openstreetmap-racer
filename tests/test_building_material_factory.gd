@@ -106,6 +106,50 @@ func test_wall_and_roof_use_different_shaders() -> void:
 		.override_failure_message("wall and roof use different shaders").is_false()
 
 
+# ─── Weathering defaults ─────────────────────────────────────────────────────
+
+## Every wall material carries a weathering strength in the shader's [0,1] range.
+func test_wall_material_sets_weathering_in_range() -> void:
+	for kind: int in [BuildingMaterialFactory.WallKind.SMOOTH,
+			BuildingMaterialFactory.WallKind.MASONRY,
+			BuildingMaterialFactory.WallKind.PANEL]:
+		var w = BuildingMaterialFactory.create_wall_material(Color.WHITE, kind)
+		var wv = float(w.get_shader_parameter("weathering"))
+		assert_float(wv) \
+			.override_failure_message("wall weathering for kind %d in [0,1]" % kind) \
+			.is_between(0.0, 1.0)
+
+
+## Masonry weathers more than a glass/metal panel (brick soaks up grime; panels
+## self-clean). Pins the intended relative ordering, not exact magnitudes.
+func test_masonry_weathers_more_than_panel() -> void:
+	var masonry := BuildingMaterialFactory.create_wall_material(Color.WHITE, BuildingMaterialFactory.WallKind.MASONRY)
+	var panel := BuildingMaterialFactory.create_wall_material(Color.WHITE, BuildingMaterialFactory.WallKind.PANEL)
+	assert_float(float(masonry.get_shader_parameter("weathering"))) \
+		.override_failure_message("masonry grimes up more than a panel wall") \
+		.is_greater(float(panel.get_shader_parameter("weathering")))
+
+
+## Every roof material carries a weathering strength in the shader's [0,1] range.
+func test_roof_material_sets_weathering_in_range() -> void:
+	for kind: int in [BuildingMaterialFactory.RoofKind.TILES,
+			BuildingMaterialFactory.RoofKind.FLAT,
+			BuildingMaterialFactory.RoofKind.METAL]:
+		var r = BuildingMaterialFactory.create_roof_material(Color.WHITE, kind)
+		assert_float(float(r.get_shader_parameter("weathering"))) \
+			.override_failure_message("roof weathering for kind %d in [0,1]" % kind) \
+			.is_between(0.0, 1.0)
+
+
+## Tiled roofs moss/fade more than a metal roof.
+func test_tiles_weather_more_than_metal() -> void:
+	var tiles := BuildingMaterialFactory.create_roof_material(Color.WHITE, BuildingMaterialFactory.RoofKind.TILES)
+	var metal := BuildingMaterialFactory.create_roof_material(Color.WHITE, BuildingMaterialFactory.RoofKind.METAL)
+	assert_float(float(tiles.get_shader_parameter("weathering"))) \
+		.override_failure_message("tiled roofs weather more than metal") \
+		.is_greater(float(metal.get_shader_parameter("weathering")))
+
+
 # ─── apply_to_building over a subtree ────────────────────────────────────────
 
 ## A MeshInstance3D named `n` carrying a flat StandardMaterial3D of `color` on

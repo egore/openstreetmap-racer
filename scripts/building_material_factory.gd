@@ -83,21 +83,43 @@ static func roof_kind_for(material: String) -> RoofKind:
 	return ROOF_KIND_BY_MATERIAL.get(key, RoofKind.TILES)
 
 
-## Build a wall ShaderMaterial tinted `color` with the given kind.
+## Per-wall-kind weathering strength. Masonry grimes up the most (brick soaks
+## up dirt and streaks), panels the least (glass/metal self-clean in rain).
+const WALL_WEATHERING_BY_KIND := {
+	WallKind.SMOOTH: 0.32,
+	WallKind.MASONRY: 0.42,
+	WallKind.PANEL: 0.18,
+}
+
+## Per-roof-kind weathering strength. Tiles collect the most moss/fade; metal
+## the least; flat membranes sit in between.
+const ROOF_WEATHERING_BY_KIND := {
+	RoofKind.TILES: 0.5,
+	RoofKind.FLAT: 0.35,
+	RoofKind.METAL: 0.2,
+}
+
+
+## Build a wall ShaderMaterial tinted `color` with the given kind. The kind also
+## picks a default weathering strength (masonry grimes most, panels least) so a
+## brick terrace and a glass tower don't wear identically.
 static func create_wall_material(color: Color, kind: WallKind = WallKind.SMOOTH) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = WALL_SHADER
 	mat.set_shader_parameter("base_color", color)
 	mat.set_shader_parameter("surface_kind", float(kind))
+	mat.set_shader_parameter("weathering", float(WALL_WEATHERING_BY_KIND.get(kind, 0.32)))
 	return mat
 
 
-## Build a roof ShaderMaterial tinted `color` with the given kind.
+## Build a roof ShaderMaterial tinted `color` with the given kind. The kind picks
+## a default weathering strength (tiles moss/fade most, metal least).
 static func create_roof_material(color: Color, kind: RoofKind = RoofKind.TILES) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = ROOF_SHADER
 	mat.set_shader_parameter("base_color", color)
 	mat.set_shader_parameter("surface_kind", float(kind))
+	mat.set_shader_parameter("weathering", float(ROOF_WEATHERING_BY_KIND.get(kind, 0.4)))
 	return mat
 
 
