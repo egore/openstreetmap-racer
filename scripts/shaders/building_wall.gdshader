@@ -43,6 +43,22 @@ uniform float albedo_variation : hint_range(0.0, 0.6) = 0.10;
 // Base roughness; masonry is rough, panels a little smoother.
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.85;
 
+// --- Weathering ------------------------------------------------------------
+// Real walls are never a flat, even colour: rain washes dirt down in vertical
+// streaks, the base is grimier than the top, and per-brick/per-panel tone
+// varies. These three terms add that grime without any texture files, which is
+// most of what separates a "plausible" wall from an obvious blockout tint.
+
+// Overall strength of the dirt/streak darkening (0 = pristine, 1 = filthy).
+uniform float weathering : hint_range(0.0, 1.0) = 0.35;
+// Extra grime toward the base of the wall (rising damp / splash-back).
+uniform float base_grime : hint_range(0.0, 1.0) = 0.4;
+// Metres of wall over which the base grime fades out going up.
+uniform float base_grime_height : hint_range(0.5, 12.0) = 4.0;
+// Per-unit (brick / panel / course) tonal spread — makes masonry read as many
+// individually-fired bricks rather than one flat sheet.
+uniform float unit_tone_variation : hint_range(0.0, 0.5) = 0.12;
+
 varying vec3 world_pos;
 varying vec3 world_normal;
 
@@ -91,6 +107,29 @@ float joint_line(float coord, float soft) {
 	return 1.0 - smoothstep(0.0, soft, d);
 }
 
+// Signed [-1,1] per-cell random keyed on integer grid cell `cell`. Used to give
+// each brick / panel its own slight tonal offset so the wall reads as many
+// discrete units, not one flat sheet.
+float cell_tone(vec2 cell) {
+	return hash(floor(cell) + 0.5) * 2.0 - 1.0;
+}
+
+// Rain-driven dirt streaks: predominantly vertical smears that darken the wall,
+// stronger toward the base. `u` runs along the wall, `y` is height in metres.
+// Returns a 0..1 grime mask (1 = fully grimy). Kept UV/texture-free by driving
+// everything from world-space noise stretched hard in Y so it streaks downward.
+float weather_grime(float u, float y) {
+	// Vertical streaks: sample noise that is stretched ~8x in the vertical so
+	// features smear top-to-bottom the way rain runoff does.
+	float streak = fbm(vec2(u * 0.9, y * 0.12) + vec2(11.0, 3.0));
+	// Broad blotches so the streaks aren't perfectly regular.
+	float blotch = fbm(vec2(u * 0.18, y * 0.09) + vec2(41.0, 7.0));
+	float streaks = clamp(streak * 0.7 + blotch * 0.5 - 0.35, 0.0, 1.0);
+	// Base grime: a soft ramp that is strong at y=0 and gone by base_grime_height.
+	float base = base_grime * (1.0 - smoothstep(0.0, base_grime_height, y));
+	return clamp(streaks * weathering + base, 0.0, 1.0);
+}
+
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -137,6 +176,11 @@ void fragment() {
 		jv = joint_line(course, 0.12);            // horizontal mortar lines
 		jh = joint_line(along, 0.06);             // vertical (staggered) joints
 		mortar = max(jv, jh);
+		// Per-brick tone: each brick (row, column) gets its own slight shade so
+		// the wall looks fired one brick at a time. Cell index staggers with the
+		// running-bond offset so tone changes at the real brick boundaries.
+		float brick_tone = cell_tone(vec2(floor(along), row));
+		col = clamp(col * (1.0 + brick_tone * unit_tone_variation), vec3(0.0), vec3(1.0));
 		// Mortar is a lighter grey and rougher than the brick face.
 		col = mix(col, col * 0.75 + vec3(0.12), mortar * 0.8);
 		rough = mix(roughness_base, 1.0, mortar);
@@ -145,6 +189,9 @@ void fragment() {
 		jh = joint_line(u / panel_width, 0.03);
 		jv = joint_line(v / panel_height, 0.03);
 		mortar = max(jh, jv);
+		// Per-panel tone so a curtain wall reads as separate cast/glazed units.
+		float panel_tone = cell_tone(vec2(floor(u / panel_width), floor(v / panel_height)));
+		col = clamp(col * (1.0 + panel_tone * unit_tone_variation * 0.6), vec3(0.0), vec3(1.0));
 		col = mix(col, col * 0.7, mortar);
 		rough = clamp(roughness_base - 0.25, 0.15, 1.0);
 		spec = 0.6;
@@ -152,6 +199,16 @@ void fragment() {
 
 	// Fine grain on the albedo (kept subtle so light walls don't look noisy).
 	col = clamp(col + vec3((grain - 0.5) * albedo_variation), vec3(0.0), vec3(1.0));
+
+	// Weathering: rain streaks + base grime darken the albedo and roughen the
+	// surface. Applied after joints/grain so grime settles over the whole wall,
+	// and mortar valleys get a touch extra grime (dirt collects in recesses).
+	float grime = weather_grime(u, world_pos.y) + mortar * 0.15 * weathering;
+	grime = clamp(grime, 0.0, 1.0);
+	// Dirt is a desaturated dark brown-grey, not pure black.
+	vec3 dirt = vec3(0.14, 0.13, 0.11);
+	col = mix(col, dirt, grime * 0.55);
+	rough = clamp(rough + grime * 0.25, 0.0, 1.0);
 
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.0, 1.0);
