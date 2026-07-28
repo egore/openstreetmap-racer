@@ -60,6 +60,22 @@ this closes the input/handling half:
   handbrake deliberately bypasses ABS and mostly escapes stability control, so
   deliberate drifting still works.
 
+### 6. Instrument cluster — ✅ DONE
+The plain "0 km/h" / "N" corner labels are gone, replaced by a drawn dial
+(`scripts/dial_cluster.gd` + `scripts/tachometer_model.gd`):
+- ✅ **Swept rev counter** with tick marks, a red zone, and a needle that eases
+  rather than teleporting — so an upshift reads as a quick sweep down, the
+  familiar tacho sawtooth.
+- ✅ **Shift light** — the rim, hub and needle wash to red as the limiter nears,
+  ramping with how deep into the redline the engine is.
+- ✅ **Gear in the hub** and a digital speed readout below it.
+- ✅ **TC / ABS / ESC telltales** — lit while the corresponding driver aid is
+  intervening, so the assists are visible instead of invisible magic.
+
+Revs are derived from the existing `Transmission` gear band (bottom of a gear =
+just-shifted revs, top = the limiter), so the dial needs no new physics. Drawn
+with Godot primitives, matching the project's texture-free approach.
+
 ## Medium-effort polish
 
 - ✅ **Wet-road / rain weather mode** — `scripts/weather_controller.gd`, global `wetness` uniform, toggle with **F5** (or the pause-menu checkbox). Reuses SSR beautifully.
@@ -69,10 +85,6 @@ this closes the input/handling half:
 - ✅ **Impact feedback** — one-shot spark/debris **impact particles** (`impact_particles.gd`) plus **tire-screech** and **impact** audio (`car_audio_triggers.gd`).
 
 ### Still open
-- ↔️ **Dial-cluster HUD** — speed/gear are plain corner labels; a tachometer with
-  a redline and a proper cluster is a large part of Forza's on-screen identity.
-  The assists already expose `tcs_cut` / `abs_release` / `stability_intervention`
-  for dashboard telltales.
 - ↔️ **Motion blur** at speed — not implemented.
 - ↔️ **Better trees / vegetation** — still placeholder boxes / simple models; instanced billboard/LOD trees would fill the world.
 - ↔️ **Reflection probes** in dense areas — SSR only reflects on-screen geometry; probes would give off-screen local reflections.

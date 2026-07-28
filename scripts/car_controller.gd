@@ -19,6 +19,17 @@ signal kudos_changed(total: int, combo: float)
 ## the HUD can colour them red.
 signal kudos_event(label: String, amount: int, is_penalty: bool)
 
+## Emitted every physics frame with how far through the current gear's speed band
+## the car is (0 = just shifted in, 1 = about to upshift). The instrument cluster
+## turns this into the rev-counter sweep. Sent continuously rather than only on a
+## shift, because the needle moves constantly within a gear.
+signal gear_ratio_changed(ratio: float)
+
+## Emitted every physics frame with how hard each driver aid is currently working
+## (0 = idle, 1 = full intervention). Drives the TC/ABS/ESC telltales on the
+## cluster, so the player can see the car helping them.
+signal assists_changed(tcs: float, abs_level: float, stability: float)
+
 @export var max_speed: float = 55.0
 @export var reverse_max_speed: float = 18.0
 @export var engine_force_value: float = 3200.0
@@ -571,6 +582,7 @@ func _physics_process(_delta: float) -> void:
 	front_left_wheel.brake = brake_force * 0.35
 	front_right_wheel.brake = brake_force * 0.35
 	_apply_stability_control(steer_angle, speed_now, forward_speed, handbrake_active)
+	_broadcast_assist_levels()
 	_apply_anti_roll(_delta)
 	_sync_wheel_meshes()
 	_update_camera_pivot(_delta)
@@ -796,6 +808,19 @@ func _broadcast_speed() -> void:
 	speed_changed.emit(speed_kmh)
 
 
+## Report how hard each driver aid is working, for the cluster's telltales.
+##
+## The stability figure is normalised against the aid's own ceiling so the lamp
+## reads 0..1 like the other two, rather than exposing raw newton-metres to the HUD.
+func _broadcast_assist_levels() -> void:
+	var stability := 0.0
+	if _assists.stability_max_torque > 0.0:
+		stability = clampf(
+			_assists.stability_intervention / _assists.stability_max_torque, 0.0, 1.0
+		)
+	assists_changed.emit(_assists.tcs_cut, _assists.abs_release, stability)
+
+
 ## Resolves the current gear from the signed forward speed, emits gear_changed
 ## on a real shift, and feeds the engine sound with the current gear/RPM.
 ## forward_speed is in m/s (the car's native unit); the transmission works in
@@ -809,6 +834,9 @@ func _update_gear(forward_speed: float) -> void:
 		gear_changed.emit(gear)
 	var gear_ratio := _transmission.gear_ratio_for_speed(speed_kmh, max_kmh)
 	_engine_sound.update_engine(absf(speed_kmh), gear, gear_ratio)
+	# The cluster's rev needle sweeps within a gear, so this goes out every frame
+	# rather than only when the gear itself changes.
+	gear_ratio_changed.emit(gear_ratio)
 
 
 ## Build a telemetry snapshot from the current physics state, feed it to the kudos

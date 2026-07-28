@@ -8,8 +8,9 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
-@onready var speed_label: Label = $HUD/SpeedLabel
-@onready var gear_label: Label = $HUD/GearLabel
+## Instrument cluster: swept rev counter, gear in the hub, digital speed and the
+## driver-aid telltales. Replaces the old plain speed/gear corner labels.
+@onready var dial_cluster: DialCluster = $HUD/DialCluster
 @onready var info_label: Label = $HUD/InfoLabel
 @onready var kudos_label: Label = $HUD/KudosLabel
 @onready var combo_label: Label = $HUD/ComboLabel
@@ -44,9 +45,13 @@ func _ready() -> void:
 	# Capture mouse for camera control
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
-	# Dependency injection: the car broadcasts its speed and gear, the HUD reacts.
+	# Dependency injection: the car broadcasts its telemetry, the HUD reacts. The
+	# cluster takes speed/gear/revs and the assist levels straight from the car's
+	# signals, so neither side reaches across the tree for the other.
 	car.speed_changed.connect(_on_car_speed_changed)
 	car.gear_changed.connect(_on_car_gear_changed)
+	car.gear_ratio_changed.connect(dial_cluster.set_gear_ratio)
+	car.assists_changed.connect(dial_cluster.set_assist_levels)
 	car.kudos_changed.connect(_on_car_kudos_changed)
 	car.kudos_event.connect(_on_car_kudos_event)
 
@@ -233,10 +238,10 @@ func _on_frame_tracer_toggled(enabled: bool) -> void:
 	print("[trace] frame tracing %s" % ("ON" if enabled else "OFF"))
 
 func _on_car_speed_changed(speed_kmh: float) -> void:
-	speed_label.text = "%d km/h" % int(speed_kmh)
+	dial_cluster.set_speed(speed_kmh)
 
 func _on_car_gear_changed(gear: int) -> void:
-	gear_label.text = Transmission.gear_label(gear)
+	dial_cluster.set_gear(gear)
 
 ## Running kudos total changed: update the persistent score readout and the combo
 ## multiplier line. The combo line is hidden at x1 to keep the HUD quiet during
