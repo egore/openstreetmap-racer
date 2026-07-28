@@ -24,10 +24,26 @@ uniform float surface_kind : hint_range(0.0, 2.0) = 0.0;
 uniform float tile_course : hint_range(0.1, 1.5) = 0.33;
 uniform float seam_spacing : hint_range(0.1, 2.0) = 0.55;
 
+// Tile length along the course direction (metres): sets where the vertical
+// gaps between neighbouring tiles in a row fall.
+uniform float tile_length : hint_range(0.1, 1.5) = 0.42;
+
 uniform float relief_depth : hint_range(0.0, 2.0) = 0.9;
 uniform float grain_scale : hint_range(0.02, 2.0) = 0.22;
 uniform float albedo_variation : hint_range(0.0, 0.6) = 0.10;
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.8;
+
+// --- Weathering ------------------------------------------------------------
+// Roofs age faster than walls: tiles fade unevenly, moss/algae grows in the
+// damp shaded gaps between courses, and per-tile colour varies a lot (kiln
+// batches, replacements). These add that without textures.
+
+// Overall strength of tile fade + moss (0 = new roof, 1 = old & weathered).
+uniform float weathering : hint_range(0.0, 1.0) = 0.4;
+// Greenish moss/algae tint that collects in the shaded course gaps.
+uniform vec4 moss_color : source_color = vec4(0.18, 0.24, 0.12, 1.0);
+// Per-tile tonal spread so a roof reads as thousands of individual tiles.
+uniform float unit_tone_variation : hint_range(0.0, 0.5) = 0.14;
 
 varying vec3 world_pos;
 varying vec3 world_normal;
@@ -66,6 +82,12 @@ float joint_line(float coord, float soft) {
 	return 1.0 - smoothstep(0.0, soft, d);
 }
 
+// Signed [-1,1] per-cell random keyed on integer grid cell. Gives each tile /
+// seam panel its own slight tonal offset.
+float cell_tone(vec2 cell) {
+	return hash(floor(cell) + 0.5) * 2.0 - 1.0;
+}
+
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -86,23 +108,40 @@ void fragment() {
 	float spec = 0.5;
 	float ridge = 0.0;   // signed relief gradient fed into the normal
 
+	float gap_shade = 0.0;   // course-gap darkness, drives where moss collects
+
 	if (surface_kind < 0.5) {
 		// Tiles: rows running along X, gaps between courses along Z.
 		float course = wrapped.y / tile_course;
-		float gap = joint_line(course, 0.18);
+		float row = floor(course);
+		// Alternate rows shift by half a tile so tiles interlock like real ones.
+		float along = wrapped.x / tile_length + mod(row, 2.0) * 0.5;
+		float gap = joint_line(course, 0.18);          // horizontal course gaps
+		float side = joint_line(along, 0.05);          // vertical gaps between tiles
+		gap_shade = max(gap, side * 0.6);
+		// Per-tile tone: each tile (row, column) gets a shade so the roof reads
+		// as thousands of individually-fired tiles, some faded/replaced.
+		float tile_tone = cell_tone(vec2(floor(along), row));
+		col = clamp(col * (1.0 + tile_tone * unit_tone_variation), vec3(0.0), vec3(1.0));
 		// A rounded tile face: darker in the gap, lifting toward the row centre.
-		col = mix(col, col * 0.7, gap * 0.8);
-		rough = mix(roughness_base, 1.0, gap);
+		col = mix(col, col * 0.7, gap_shade * 0.8);
+		rough = mix(roughness_base, 1.0, gap_shade);
 		// Relief: each course bulges (a half-cylinder tile), so the normal tips
 		// across the course direction.
 		ridge = (fract(course) - 0.5);
 	} else if (surface_kind < 1.5) {
 		// Flat membrane/gravel/grass: matte, just mottled by grain.
 		rough = clamp(roughness_base, 0.7, 1.0);
+		// Broad uneven fade so a flat roof isn't one dead-flat colour.
+		gap_shade = clamp(fbm(wrapped * 0.15) * 0.5, 0.0, 1.0);
 	} else {
 		// Standing-seam metal: vertical ribs spaced along X.
 		float seam = wrapped.x / seam_spacing;
 		float rib = joint_line(seam, 0.05);
+		gap_shade = rib;
+		// Per-panel tone between seams (subtle — metal is fairly uniform).
+		float panel_tone = cell_tone(vec2(floor(seam), 0.0));
+		col = clamp(col * (1.0 + panel_tone * unit_tone_variation * 0.4), vec3(0.0), vec3(1.0));
 		col = mix(col, col * 0.85, rib);
 		rough = clamp(roughness_base - 0.45, 0.1, 1.0);
 		metallic = 0.6;
@@ -111,6 +150,17 @@ void fragment() {
 	}
 
 	col = clamp(col + vec3((grain - 0.5) * albedo_variation), vec3(0.0), vec3(1.0));
+
+	// Weathering: uneven sun-fade over the whole roof plus moss/algae that
+	// collects in the damp, shaded course gaps. Metal roofs barely take moss, so
+	// scale it down when metallic. Texture-free — all from world-space noise.
+	float fade = fbm(wrapped * 0.08 + vec2(23.0, 5.0));
+	col = mix(col, col * 0.82, fade * weathering * 0.5);
+	float moss_amt = fbm(wrapped * 0.3 + vec2(60.0, 12.0));
+	moss_amt = clamp(moss_amt * 1.4 - 0.4, 0.0, 1.0) * gap_shade;
+	moss_amt *= weathering * (1.0 - metallic * 0.8);
+	col = mix(col, moss_color.rgb, moss_amt * 0.6);
+	rough = clamp(rough + moss_amt * 0.3, 0.0, 1.0);
 
 	ALBEDO = col;
 	ROUGHNESS = clamp(rough, 0.0, 1.0);
