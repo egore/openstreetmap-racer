@@ -302,3 +302,111 @@ func test_flat_polygon_mesh_disables_depth_write_when_layered() -> void:
 	assert_int(rmat.depth_draw_mode) \
 		.override_failure_message("non-ground caller keeps default depth draw") \
 		.is_not_equal(BaseMaterial3D.DEPTH_DRAW_DISABLED)
+
+
+# ─── Forest tree mesh ────────────────────────────────────────────────────────
+
+## Build (once) the cached lollipop mesh and return it. Resets the cache first so
+## the test always exercises the builder rather than a stale cache from another
+## suite.
+func _fresh_tree_mesh() -> ArrayMesh:
+	PolygonUtils._lollipop_mesh_cache = null
+	PolygonUtils._build_lollipop_mesh()
+	return PolygonUtils._lollipop_mesh_cache
+
+
+## The tree mesh has two surfaces: a solid-brown trunk and a vertex-coloured
+## crown whose material reads its albedo from the (per-instance) vertex colour.
+func test_tree_mesh_has_trunk_and_vertex_coloured_crown() -> void:
+	var mesh := _fresh_tree_mesh()
+	assert_object(mesh).is_not_null()
+	assert_int(mesh.get_surface_count()) \
+		.override_failure_message("tree has a trunk surface and a crown surface").is_equal(2)
+
+	# Exactly one surface is vertex-colour-driven (the crown); the other is the
+	# flat brown trunk.
+	var vertex_coloured := 0
+	for s: int in range(mesh.get_surface_count()):
+		var mat := mesh.surface_get_material(s) as StandardMaterial3D
+		assert_object(mat).is_not_null()
+		if mat.vertex_color_use_as_albedo:
+			vertex_coloured += 1
+	assert_int(vertex_coloured) \
+		.override_failure_message("only the crown uses vertex colour as albedo").is_equal(1)
+
+
+## The trunk's base sits at Y≈0 (so trees plant on the ground, not floating or
+## buried) and the crown rises well above it.
+func test_tree_mesh_base_at_ground_and_crown_above() -> void:
+	var mesh := _fresh_tree_mesh()
+	var aabb := mesh.get_aabb()
+	assert_float(aabb.position.y) \
+		.override_failure_message("tree base sits at ground level").is_equal_approx(0.0, 0.05)
+	assert_float(aabb.position.y + aabb.size.y) \
+		.override_failure_message("crown reaches well above the trunk").is_greater(6.0)
+
+
+## The crown is built from several overlapping lobes, so its horizontal footprint
+## is noticeably wider than a single 2 m-radius sphere would be.
+func test_tree_crown_is_multi_lobed() -> void:
+	var mesh := _fresh_tree_mesh()
+	var aabb := mesh.get_aabb()
+	# A lone central sphere of radius ~2 spans ~4 m. Multiple offset lobes push
+	# the canopy wider than that in both horizontal axes.
+	assert_float(aabb.size.x) \
+		.override_failure_message("multi-lobe crown is wider than a single sphere").is_greater(4.2)
+	assert_float(aabb.size.z) \
+		.override_failure_message("multi-lobe crown is deeper than a single sphere").is_greater(4.2)
+
+
+## The crown carries a vertical shading gradient baked into its vertex colours:
+## the sunlit top vertices are brighter than the shaded underside. Reads the
+## crown surface's vertex colours and compares the brightest top vs. darkest
+## bottom to confirm the ramp is present and correctly oriented.
+func test_tree_crown_has_top_lit_shading_gradient() -> void:
+	var mesh := _fresh_tree_mesh()
+	# Find the vertex-coloured crown surface.
+	var crown_surface := -1
+	for s: int in range(mesh.get_surface_count()):
+		var mat := mesh.surface_get_material(s) as StandardMaterial3D
+		if mat != null and mat.vertex_color_use_as_albedo:
+			crown_surface = s
+			break
+	assert_int(crown_surface).override_failure_message("found the crown surface").is_greater_equal(0)
+
+	var arrays := mesh.surface_get_arrays(crown_surface)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	assert_int(colors.size()) \
+		.override_failure_message("crown vertices carry colours").is_greater(0)
+
+	# Compare the mean brightness of the top third vs. the bottom third of the
+	# canopy. Top must be brighter (top-lit) — that's the whole point of the ramp.
+	# Derive the cuts from the CROWN's own vertex Y-range (not the whole mesh,
+	# which also spans the trunk down to Y=0).
+	var y_min := INF
+	var y_max := -INF
+	for v: Vector3 in verts:
+		y_min = minf(y_min, v.y)
+		y_max = maxf(y_max, v.y)
+	var lo_cut := y_min + (y_max - y_min) * 0.33
+	var hi_cut := y_min + (y_max - y_min) * 0.66
+	var top_sum := 0.0
+	var top_n := 0
+	var bot_sum := 0.0
+	var bot_n := 0
+	for i: int in range(verts.size()):
+		var b: float = colors[i].r  # greyscale ramp: r==g==b
+		if verts[i].y >= hi_cut:
+			top_sum += b
+			top_n += 1
+		elif verts[i].y <= lo_cut:
+			bot_sum += b
+			bot_n += 1
+	assert_int(top_n).override_failure_message("sampled some top vertices").is_greater(0)
+	assert_int(bot_n).override_failure_message("sampled some bottom vertices").is_greater(0)
+	var top_mean := top_sum / float(top_n)
+	var bot_mean := bot_sum / float(bot_n)
+	assert_float(top_mean) \
+		.override_failure_message("sunlit crown top is brighter than the shaded underside") \
+		.is_greater(bot_mean)

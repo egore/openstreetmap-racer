@@ -881,14 +881,20 @@ const FOREST_CROWN_MIN_R := 1.5
 const FOREST_CROWN_MAX_R := 3.0
 ## Dark forest-floor colour painted under the trees.
 const FOREST_GROUND_COLOR := Color(0.12, 0.35, 0.08)
-## Trunk colour (brown).
-const FOREST_TRUNK_COLOR := Color(0.35, 0.22, 0.1)
-## Palette of crown greens.
+## Trunk colour (bark brown).
+const FOREST_TRUNK_COLOR := Color(0.30, 0.20, 0.11)
+## Palette of crown greens. A wider, more natural spread — deep pine, mid
+## broadleaf, olive, and a couple of lighter/yellower canopies — so a forest
+## reads as many species/ages rather than one cloned green. Values run a touch
+## brighter than before because the baked crown shading gradient darkens the
+## undersides, so the average tone lands about where the old flat crowns did.
 const FOREST_CROWN_COLORS: Array[Color] = [
-	Color(0.15, 0.45, 0.10),
-	Color(0.20, 0.50, 0.12),
-	Color(0.18, 0.42, 0.08),
-	Color(0.25, 0.52, 0.15),
+	Color(0.16, 0.40, 0.11),   # deep conifer green
+	Color(0.22, 0.48, 0.14),   # mid broadleaf
+	Color(0.30, 0.52, 0.16),   # lighter broadleaf
+	Color(0.34, 0.50, 0.18),   # yellow-green (fresh growth)
+	Color(0.24, 0.44, 0.13),   # olive
+	Color(0.19, 0.46, 0.12),   # cool green
 ]
 
 ## Cached procedural lollipop-tree mesh (built once, reused everywhere).
@@ -958,22 +964,53 @@ static func build_forest_area(
 	return root
 
 
-## Build a simple lollipop tree mesh: brown cylinder trunk + green sphere crown.
-## The mesh is unit-scale (trunk ~4.5 m, crown centred on top) so that the
-## MultiMesh per-instance scale produces natural variation.
+## Offsets (x, y, z) and radius of each crown lobe, in unit-mesh metres. Several
+## overlapping spheres of differing size/position build an irregular, fuller
+## canopy that reads as real foliage instead of a single billiard-ball crown.
+## The main lobe sits on the trunk top (~y=5.5); satellites cluster around it.
+const _CROWN_LOBES: Array = [
+	[Vector3(0.0, 5.6, 0.0), 2.05],     # main central mass
+	[Vector3(1.25, 5.0, 0.9), 1.35],    # lower-right-front bulge
+	[Vector3(-1.1, 5.15, -0.95), 1.4],  # lower-left-back bulge
+	[Vector3(0.3, 6.75, -1.2), 1.25],   # upper-back crest (catches the most sun)
+	[Vector3(-0.55, 6.4, 1.15), 1.2],   # upper-front puff
+	[Vector3(0.85, 5.55, -1.0), 1.1],   # back filler
+]
+## Crown vertical extent the shading gradient spans (unit-mesh metres): the
+## bottom of the canopy vs. the sunlit top.
+const _CROWN_BOTTOM_Y := 3.6
+const _CROWN_TOP_Y := 8.0
+## Brightness of the shaded underside vs. the sunlit top (multiplies the
+## per-instance crown colour, so it stays a tint not a fixed colour).
+const _CROWN_SHADE_MIN := 0.55
+const _CROWN_SHADE_MAX := 1.12
+
+## Build a stylised-but-plausible tree mesh: a slightly tapered trunk plus a
+## multi-lobe crown with a baked top-lit shading gradient.
+##
+## The mesh is unit-scale (trunk ~4.5 m, crown clustered above it) so the
+## MultiMesh per-instance scale produces natural size variation and the
+## per-instance colour tints the whole canopy.
+##
+## Crown vertices carry a greyscale vertex colour (a vertical light gradient:
+## darker underside, brighter sunlit top). Because the MultiMesh sets a per-tree
+## albedo colour that MODULATES the vertex colour, the gradient survives as
+## light/shade while each tree still gets its own green — the underside reads as
+## self-shadowed foliage rather than a flat ball.
 static func _build_lollipop_mesh() -> void:
 	var merged := ArrayMesh.new()
 
-	# --- trunk (CylinderMesh) ---
+	# --- trunk (tapered CylinderMesh: thinner at the top like a real bole) ---
 	var trunk := CylinderMesh.new()
-	trunk.top_radius = FOREST_TRUNK_RADIUS
-	trunk.bottom_radius = FOREST_TRUNK_RADIUS
+	trunk.top_radius = FOREST_TRUNK_RADIUS * 0.6
+	trunk.bottom_radius = FOREST_TRUNK_RADIUS * 1.35
 	trunk.height = 4.5  # base trunk height before per-instance scale
-	trunk.radial_segments = 6
+	trunk.radial_segments = 7
 	trunk.rings = 1
 
 	var trunk_mat := StandardMaterial3D.new()
 	trunk_mat.albedo_color = FOREST_TRUNK_COLOR
+	trunk_mat.roughness = 0.95
 
 	var st_trunk := SurfaceTool.new()
 	st_trunk.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -982,24 +1019,51 @@ static func _build_lollipop_mesh() -> void:
 	st_trunk.set_material(trunk_mat)
 	st_trunk.commit(merged)
 
-	# --- crown (SphereMesh) with vertex_color_use_as_albedo ---
-	var crown := SphereMesh.new()
-	crown.radius = 2.0
-	crown.height = 4.0
-	crown.radial_segments = 8
-	crown.rings = 6
-
+	# --- crown: several overlapping spheres with a baked vertical light ramp ---
 	var crown_mat := StandardMaterial3D.new()
 	crown_mat.vertex_color_use_as_albedo = true
+	crown_mat.roughness = 0.9
 
 	var st_crown := SurfaceTool.new()
 	st_crown.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Place crown centre at top of trunk.
-	st_crown.append_from(crown, 0, Transform3D(Basis.IDENTITY, Vector3(0, 5.5, 0)))
+	for lobe: Array in _CROWN_LOBES:
+		var centre: Vector3 = lobe[0]
+		var radius: float = lobe[1]
+		_append_crown_lobe(st_crown, centre, radius)
 	st_crown.set_material(crown_mat)
 	st_crown.commit(merged)
 
 	_lollipop_mesh_cache = merged
+
+
+## Append one crown lobe (a sphere at `centre` of `radius`) to `st`, writing a
+## per-vertex greyscale colour that ramps from _CROWN_SHADE_MIN at the canopy
+## bottom to _CROWN_SHADE_MAX at the top so the finished crown is top-lit.
+static func _append_crown_lobe(st: SurfaceTool, centre: Vector3, radius: float) -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 7
+	sphere.rings = 5
+
+	# Pull the sphere's arrays so we can colour each vertex by world height.
+	var arrays := sphere.get_mesh_arrays()
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var span: float = maxf(_CROWN_TOP_Y - _CROWN_BOTTOM_Y, 0.001)
+
+	for idx: int in indices:
+		var v: Vector3 = verts[idx] + centre
+		var n: Vector3 = normals[idx]
+		# Height ramp 0..1 across the whole canopy.
+		var t: float = clampf((v.y - _CROWN_BOTTOM_Y) / span, 0.0, 1.0)
+		# Faces pointing up catch a little extra light; downward faces darken.
+		var up: float = clampf(n.y * 0.5 + 0.5, 0.0, 1.0)
+		var shade: float = lerpf(_CROWN_SHADE_MIN, _CROWN_SHADE_MAX, t * 0.7 + up * 0.3)
+		st.set_color(Color(shade, shade, shade))
+		st.set_normal(n)
+		st.add_vertex(v)
 
 
 # ─── Scrub ball scattering ───────────────────────────────────────────────────
