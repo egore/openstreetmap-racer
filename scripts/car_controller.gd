@@ -28,6 +28,24 @@ signal kudos_event(label: String, amount: int, is_penalty: bool)
 @export var max_steer_angle: float = 0.32
 @export var min_steer_angle: float = 0.05
 
+## Steering rack feel. Rate-limits the wheel angle, tapers it with speed, and adds
+## countersteer assist so slides are catchable. Without this the wheels snap to
+## full lock the frame a key goes down, which is the single biggest thing that
+## makes an arcade car feel like an RC toy. See steering_model.gd.
+@export var steering_rate: float = 2.2
+## How quickly the wheels unwind to centre (rad/s). Faster than steering_rate
+## because a real rack self-centres under caster.
+@export var steering_return_rate: float = 4.0
+## Maximum angle (rad) the countersteer assist may add on its own. 0 disables it.
+@export var countersteer_assist: float = 0.16
+
+## Driver aids (traction control / ABS / stability control), Forza-style. Each is
+## independently switchable at runtime through the assists helper; these exports
+## set the starting state. See driving_assists.gd.
+@export var traction_control_enabled: bool = true
+@export var abs_enabled: bool = true
+@export var stability_control_enabled: bool = true
+
 ## Locks the rear wheels when the handbrake (Space) is held. Much stronger than the
 ## regular brake so the rear axle stops rotating and breaks traction.
 @export var handbrake_force_value: float = 200.0
@@ -72,6 +90,15 @@ var _wheel_mesh_rotations: Dictionary[StringName, Basis] = {}
 var _rear_grip_normal: float = 2.0
 ## Tracks the current rear-grip state so we only write to the wheels on a change.
 var _rear_grip_lowered: bool = false
+
+## Steering rack. Converts the raw steering input into the actual wheel angle with
+## rate limiting, speed-sensitive lock and countersteer assist. Pure logic; see
+## steering_model.gd for the feel curves.
+var _steering := SteeringModel.new()
+
+## Driver aids. Filters the throttle/brake the driver asked for and produces the
+## stability-control yaw torque. Pure logic; see driving_assists.gd.
+var _assists := DrivingAssists.new()
 
 ## Gearbox helper. Maps the car's speed onto a gear for the HUD and drives the
 ## engine sound pitch. Purely cosmetic — the gear does not feed back into
@@ -224,6 +251,7 @@ func _ready() -> void:
 	_cache_wheel_mesh_rotations()
 	_apply_car_paint()
 	_setup_wheels()
+	_setup_steering_and_assists()
 	# Pre-compute the gear speed bands from this car's top speed so the very first
 	# gear lookup is cheap and the HUD can show a gear immediately.
 	_transmission.build_for_max_speed(max_speed * 3.6)
@@ -289,6 +317,25 @@ func _setup_wheels() -> void:
 
 	# Remember the rear grip so the handbrake can drop it for a drift and restore it.
 	_rear_grip_normal = rear_left_wheel.wheel_friction_slip
+
+
+## Push this car's exported tuning into the steering rack and the driver aids.
+## Both helpers keep their own defaults; the exports here are the car's opinion,
+## so a designer can retune feel from the inspector without editing either script.
+func _setup_steering_and_assists() -> void:
+	_steering.max_steer_angle = max_steer_angle
+	_steering.min_steer_angle = min_steer_angle
+	_steering.steer_rate = steering_rate
+	_steering.return_rate = steering_return_rate
+	_steering.countersteer_max = countersteer_assist
+	# The rack's speed taper should reach full lock-out near the car's top speed
+	# rather than at an arbitrary fixed figure, so faster cars keep usable steering
+	# through their whole range.
+	_steering.speed_sensitivity_full = max_speed * 0.85
+
+	_assists.traction_control_enabled = traction_control_enabled
+	_assists.abs_enabled = abs_enabled
+	_assists.stability_control_enabled = stability_control_enabled
 
 
 func _setup_wheel_particles() -> void:
@@ -456,9 +503,6 @@ func _physics_process(_delta: float) -> void:
 	var handbrake_input := Input.get_action_strength("handbrake")
 	var handbrake_active := handbrake_input > 0.0
 	var forward_speed := linear_velocity.dot(global_transform.basis.z)
-	var speed_ratio: float = clamp(abs(forward_speed) / max_speed, 0.0, 1.0)
-	var steer_limit: float = lerp(max_steer_angle, min_steer_angle, speed_ratio)
-	steer_limit *= clamp(1.0 - max(speed_ratio - 0.45, 0.0) * 1.3, 0.3, 1.0)
 
 	var drive_force := 0.0
 	var brake_force := idle_brake_force
@@ -490,14 +534,43 @@ func _physics_process(_delta: float) -> void:
 	# idle drag). The kudos tracker reads this so a hard stop isn't scored as a crash.
 	_braking_this_frame = handbrake_active or brake_force > idle_brake_force
 
-	front_left_wheel.steering = steer_input * steer_limit
-	front_right_wheel.steering = steer_input * steer_limit
+	# Steering goes through the rack rather than straight to the wheels: rate
+	# limited, speed-tapered, and nudged into any slide by the countersteer assist.
+	var speed_now := linear_velocity.length()
+	var slip := _compute_slip_angle()
+	var steer_angle := _steering.update(
+		steer_input, speed_now, slip, _slip_direction(), _delta
+	)
+	front_left_wheel.steering = steer_angle
+	front_right_wheel.steering = steer_angle
+
+	# Driver aids filter the pedals before they reach the tyres. Both take the
+	# driven/braked wheels' surface speed so they can measure real slip rather
+	# than guessing from inputs.
+	#
+	# Both filters are called EVERY frame, even when the pedal is at zero. Their
+	# intervention levels are smoothed over time, so skipping the call would freeze
+	# the last value instead of letting it decay — the telltales would stay lit and
+	# the next application of throttle would start from a stale cut.
+	var rear_wheel_speed := _driven_wheel_surface_speed()
+	drive_force = _assists.filter_engine_force(
+		drive_force, rear_wheel_speed, forward_speed, _delta
+	)
+	var filtered_brake := _assists.filter_brake_force(
+		rear_brake, rear_wheel_speed, forward_speed, _delta
+	)
+	# ABS only makes sense on the foot brake. The handbrake is an explicit request
+	# to LOCK the rear axle for a drift, so it keeps the unfiltered force (the
+	# filter still ran above, purely to keep its smoothing state moving).
+	var abs_rear_brake := rear_brake if handbrake_active else filtered_brake
+
 	rear_left_wheel.engine_force = drive_force
 	rear_right_wheel.engine_force = drive_force
-	rear_left_wheel.brake = rear_brake
-	rear_right_wheel.brake = rear_brake
+	rear_left_wheel.brake = abs_rear_brake
+	rear_right_wheel.brake = abs_rear_brake
 	front_left_wheel.brake = brake_force * 0.35
 	front_right_wheel.brake = brake_force * 0.35
+	_apply_stability_control(steer_angle, speed_now, forward_speed, handbrake_active)
 	_apply_anti_roll(_delta)
 	_sync_wheel_meshes()
 	_update_camera_pivot(_delta)
@@ -509,6 +582,91 @@ func _physics_process(_delta: float) -> void:
 	# After kudos (which may have added crash/landing trauma this frame) apply the
 	# shake and speed FOV-kick to the camera.
 	_update_camera_effects(_delta)
+
+
+## Which way the car is sliding, as +1 / -1 / 0, for the countersteer assist.
+##
+## The sign is the side of the car's nose that the velocity vector has swung to:
+## +1 when the car is travelling to the left of where it points, -1 to the right.
+## Steering the wheels toward this sign is "steering into the slide", because
+## positive steering is a left turn (see the steer_left/steer_right input mapping).
+##
+## Returns 0 at a crawl, where the travel direction is numerically meaningless,
+## and while REVERSING — backing up puts the velocity roughly opposite the nose,
+## which reads as a ~180 degree slip and would otherwise peg the assist at full
+## lock and fight the driver all the way out of a parking space.
+func _slip_direction() -> float:
+	var vel := linear_velocity
+	vel.y = 0.0
+	if vel.length() < 1.0:
+		return 0.0
+	var forward := global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.0001:
+		return 0.0
+	forward = forward.normalized()
+	# Travelling backwards relative to the nose is reversing, not sliding.
+	if vel.normalized().dot(forward) < 0.0:
+		return 0.0
+	# Cross the nose with the travel direction about the up axis: the sign tells us
+	# which side of "straight ahead" the car is actually heading toward.
+	var lateral := forward.cross(vel.normalized()).y
+	if is_zero_approx(lateral):
+		return 0.0
+	return signf(lateral)
+
+
+## Surface speed (m/s) of the driven/braked rear wheels: how fast the tyre contact
+## patch is travelling, i.e. the ground speed the wheels are currently "asking
+## for". Comparing this against the car's real speed is what reveals wheelspin
+## (wheels faster) or lock-up (wheels slower), which is what TCS and ABS act on.
+##
+## VehicleWheel3D exposes RPM, so this converts revolutions per minute into a
+## linear speed via the tyre circumference.
+func _driven_wheel_surface_speed() -> float:
+	var rpm := (rear_left_wheel.get_rpm() + rear_right_wheel.get_rpm()) * 0.5
+	# rev/min -> rad/s is (2*PI/60); multiplying by the radius gives m/s.
+	return rpm * (TAU / 60.0) * rear_left_wheel.wheel_radius
+
+
+## Apply the stability-control corrective yaw torque for this frame.
+##
+## Compares how fast the car is actually rotating against how fast the driver's
+## steering angle says it should be, and pushes back on the difference. This is
+## what catches the snap-oversteer after a kerb or a bad landing before it becomes
+## an unrecoverable spin.
+func _apply_stability_control(
+	steer_angle: float,
+	speed: float,
+	forward_speed: float,
+	handbrake_active: bool
+) -> void:
+	var yaw_rate := angular_velocity.dot(global_transform.basis.y)
+	var desired := _desired_yaw_rate(steer_angle, forward_speed)
+	var torque := _assists.stability_torque(yaw_rate, desired, speed, handbrake_active)
+	if is_zero_approx(torque):
+		return
+	# Torque about the car's up axis rotates it in yaw (the spin we are damping).
+	apply_torque(global_transform.basis.y * torque)
+
+
+## The yaw rate (rad/s) the driver's steering input is asking for, from the
+## bicycle model: yaw_rate = speed * tan(steer_angle) / wheelbase.
+##
+## This is the reference stability control measures the real car against — the
+## gap between "what the driver asked the car to do" and "what the car is doing"
+## is precisely the definition of over/understeer.
+func _desired_yaw_rate(steer_angle: float, forward_speed: float) -> float:
+	var wheelbase := _wheelbase()
+	if wheelbase <= 0.0:
+		return 0.0
+	return forward_speed * tan(steer_angle) / wheelbase
+
+
+## Distance (m) between the front and rear axles, measured from the actual wheel
+## node positions so it stays correct if the car model or wheel layout changes.
+func _wheelbase() -> float:
+	return absf(front_left_wheel.position.z - rear_left_wheel.position.z)
 
 
 func _apply_anti_roll(_delta: float) -> void:
