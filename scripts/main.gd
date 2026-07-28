@@ -11,6 +11,9 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 ## Instrument cluster: swept rev counter, gear in the hub, digital speed and the
 ## driver-aid telltales. Replaces the old plain speed/gear corner labels.
 @onready var dial_cluster: DialCluster = $HUD/DialCluster
+## Radial speed blur. Lives on its own CanvasLayer *below* the HUD so it smears
+## the world without touching the instruments.
+@onready var speed_blur: SpeedBlur = $SpeedBlurLayer/SpeedBlur
 @onready var info_label: Label = $HUD/InfoLabel
 @onready var kudos_label: Label = $HUD/KudosLabel
 @onready var combo_label: Label = $HUD/ComboLabel
@@ -26,6 +29,8 @@ const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 @onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
 @onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
 @onready var wet_weather_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/WetWeatherToggle
+@onready var speed_blur_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/SpeedBlurToggle
+@onready var driving_assists_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DrivingAssistsToggle
 @onready var frame_tracer_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/FrameTracerToggle
 @onready var dump_frame_times_button: Button = $PauseMenu/CenterContainer/Panel/DumpFrameTimesButton
 @onready var headlights: Headlights = $Car/Headlights
@@ -102,6 +107,17 @@ func _ready() -> void:
 	wet_weather_toggle.button_pressed = weather_controller.is_wet()
 	wet_weather_toggle.toggled.connect(_on_wet_weather_toggled)
 
+	# Speed-blur toggle: the effect is cosmetic and the most likely thing to turn
+	# off on a weak GPU, so it gets its own switch alongside the other effects.
+	speed_blur_toggle.button_pressed = speed_blur.enabled
+	speed_blur_toggle.toggled.connect(_on_speed_blur_toggled)
+
+	# Driving-assists toggle: the "assists off" preset. Reflect the car's starting
+	# state, then let the player switch TCS/ABS/stability (and the countersteer
+	# help) off for a rawer, less forgiving car.
+	driving_assists_toggle.button_pressed = car.are_driving_assists_enabled()
+	driving_assists_toggle.toggled.connect(_on_driving_assists_toggled)
+
 	# Frame-tracer toggle: reflect the tracer's current state (it can be enabled
 	# non-interactively via OSMRACER_TRACE=1), then let the user flip it. Shares the
 	# same setter as the F3 shortcut. The "Dump Frame Times" button mirrors F4.
@@ -119,10 +135,17 @@ func _ready() -> void:
 	headlights.set_on(not sky_controller.is_day())
 	street_lamp_lights.set_on(not sky_controller.is_day())
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	# Escape toggles the pause state.
 	if Input.is_action_just_pressed("ui_cancel"):
 		_set_paused(not get_tree().paused)
+
+	# Drive the speed blur from here rather than from the car's speed signal,
+	# because the ramp is smoothed and therefore needs a frame delta. Reading the
+	# car's velocity directly also means the blur keeps easing back to zero after
+	# the car stops emitting changes.
+	if not get_tree().paused:
+		speed_blur.update_speed(car.linear_velocity.length() * 3.6, delta)
 
 ## F3 toggles the frame tracer (also enable non-interactively with OSMRACER_TRACE=1);
 ## F4 dumps the per-label timing summary. Used to hunt streaming/loading stutters:
@@ -231,6 +254,18 @@ func _on_debug_labels_toggled(enabled: bool) -> void:
 ## and pressing F5 (which sets button_pressed) can't get out of phase.
 func _on_wet_weather_toggled(wet: bool) -> void:
 	weather_controller.set_wet(wet)
+
+## Menu toggle flipped: enable or disable the radial speed blur. Switching it off
+## drives the shader to zero, where it early-outs, so this is also the A/B for
+## measuring the effect's frame cost.
+func _on_speed_blur_toggled(enabled: bool) -> void:
+	speed_blur.enabled = enabled
+	if not enabled:
+		speed_blur.reset()
+
+## Menu toggle flipped: switch the driver aids on or off as a set.
+func _on_driving_assists_toggled(enabled: bool) -> void:
+	car.set_driving_assists_enabled(enabled)
 
 ## Menu toggle (or F3) flipped: enable/disable the frame tracer.
 func _on_frame_tracer_toggled(enabled: bool) -> void:

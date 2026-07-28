@@ -238,6 +238,21 @@ var _last_kudos_total: int = -1
 ## speed at query time so fast passes have a longer detection reach.
 const _NEAR_MISS_PROBE_BASE := 6.0
 
+## Switch every driver aid (TCS, ABS, stability control) on or off together —
+## the "assists off / pro" preset every racing game offers. The countersteer
+## assist in the steering rack goes with them, since it is the same class of help.
+## Called from the pause menu.
+func set_driving_assists_enabled(enabled: bool) -> void:
+	_assists.set_all_enabled(enabled)
+	_steering.countersteer_max = countersteer_assist if enabled else 0.0
+
+
+## True while the driver aids are active. Lets the pause menu show the current
+## state without keeping its own copy of it.
+func are_driving_assists_enabled() -> bool:
+	return _assists.traction_control_enabled
+
+
 ## Silence or restore all car audio (engine loop and dirt driving sound).
 ## Called by the main scene when the pause menu opens / closes.
 func set_engine_muted(muted: bool) -> void:
