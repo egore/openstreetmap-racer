@@ -13,6 +13,8 @@
 [ext_resource type="Script" uid="uid://bqgct3l1beqog" path="res://scripts/post_processing.gd" id="11_postfx"]
 [ext_resource type="Script" path="res://scripts/weather_controller.gd" id="12_weather"]
 [ext_resource type="Script" uid="uid://duydbpt17n7om" path="res://scripts/dial_cluster.gd" id="13_cluster"]
+[ext_resource type="Script" uid="uid://bja4t4xylv62m" path="res://scripts/speed_blur.gd" id="14_speedblur"]
+[ext_resource type="Shader" uid="uid://6px6s5m73t2k" path="res://scripts/shaders/speed_blur.gdshader" id="15_blurshader"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -32,6 +34,13 @@ shader_parameter/cloud_softness = 0.25
 shader_parameter/cloud_scale = 2.0
 shader_parameter/cloud_wind = Vector2(0.01, 0.006)
 shader_parameter/cloud_opacity = 1.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_speedblur"]
+shader = ExtResource("15_blurshader")
+shader_parameter/strength = 0.0
+shader_parameter/clear_radius = 0.18
+shader_parameter/max_blur = 0.035
+shader_parameter/focal_point = Vector2(0.5, 0.5)
 
 [sub_resource type="Sky" id="Sky_main"]
 sky_material = SubResource("ShaderMaterial_sky")
@@ -186,7 +195,21 @@ attributes = SubResource("CamAttrs_dof")
 fov = 70.0
 far = 2000.0
 
+[node name="SpeedBlurLayer" type="CanvasLayer" parent="." unique_id=153076500]
+layer = 0
+
+[node name="SpeedBlur" type="ColorRect" parent="SpeedBlurLayer" unique_id=153076501]
+material = SubResource("ShaderMaterial_speedblur")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("14_speedblur")
+
 [node name="HUD" type="CanvasLayer" parent="." unique_id=153076246]
+layer = 1
 
 [node name="DialCluster" type="Control" parent="HUD" unique_id=153076247]
 layout_mode = 3
@@ -326,6 +349,18 @@ custom_minimum_size = Vector2(0, 48)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "Wet Weather"
+
+[node name="SpeedBlurToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100014]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Speed Blur"
+
+[node name="DrivingAssistsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100015]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Driving Assists"
 
 [node name="FrameTracerToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100011]
 custom_minimum_size = Vector2(0, 48)

@@ -84,14 +84,35 @@ with Godot primitives, matching the project's texture-free approach.
 - ✅ **Camera feel** — trauma-based **camera shake** on impact/landing (`camera_shake.gd`) and **speed-scaled FOV** expansion (`car_controller.gd`) add the racing-game sensation.
 - ✅ **Impact feedback** — one-shot spark/debris **impact particles** (`impact_particles.gd`) plus **tire-screech** and **impact** audio (`car_audio_triggers.gd`).
 
+### 7. Speed blur — ✅ DONE
+`scripts/shaders/speed_blur.gdshader` + `scripts/speed_blur.gd`: a radial smear
+that leaves the centre of the frame sharp and blurs progressively toward the
+edges, ramping in above ~90 km/h. Godot 4 has no built-in motion blur, and a
+velocity-buffer implementation would be far more expensive — but when driving
+forward the world's screen-space motion genuinely *is* radial, so sampling along
+the vector from the vanishing point reproduces it convincingly and cheaply.
+Runs on its own CanvasLayer beneath the HUD, so the instruments stay crisp.
+Toggleable from the pause menu (as are the driver aids, Forza-style).
+
 ### Still open
-- ↔️ **Motion blur** at speed — not implemented.
 - ↔️ **Better trees / vegetation** — still placeholder boxes / simple models; instanced billboard/LOD trees would fill the world.
 - ↔️ **Reflection probes** in dense areas — SSR only reflects on-screen geometry; probes would give off-screen local reflections.
 - ↔️ **Real 3D crosswalk/lane geometry** — currently shader bands; modelled geometry remains an option if the shader bands ever look flat under grazing angles.
+- ↔️ **Race structure** — checkpoints, lap timing and persistent best times. The
+  kudos scorer already provides a PGR-style style metric, but there is nothing to
+  race *against* yet. This is the largest remaining gap between "driving sandbox"
+  and "racing game".
+
+### Known bug (pre-existing, not from the work above)
+- 🐞 **Spawn lands on a rooftop.** `main.gd::_on_world_ready` raycasts down to
+  find the ground, but the ray starts 50 m above the sampled terrain height and
+  hits whatever building happens to occupy the spawn column — so the car starts
+  on a roof (observed spawn Y ≈ 8 m). The raycast needs a building mask, or the
+  spawn point needs to be chosen on a road.
 
 ## Recommendation
 
-The core Forza-look stack (post-processing + PBR-ish surfaces + car paint + wet
-roads + contrast lighting) is in. The remaining items are incremental world-dressing
-(vegetation, reflection probes, motion blur) rather than the big perceptual jumps.
+The Forza-look stack (post-processing, PBR-ish surfaces, car paint, wet roads,
+contrast lighting) and the Forza-*feel* stack (analog input, steering rack,
+driver aids, instrument cluster, speed blur) are both in. The biggest remaining
+jump is no longer visual: it is giving the player something to race against.
