@@ -36,9 +36,18 @@ uniform float panel_height : hint_range(0.5, 8.0) = 3.5;
 
 // How deep the mortar / panel joints read in the faked normal.
 uniform float joint_depth : hint_range(0.0, 2.0) = 0.8;
-// Fine surface grain (albedo + micro-normal), like the asphalt speckle.
-uniform float grain_scale : hint_range(0.02, 2.0) = 0.18;
-uniform float albedo_variation : hint_range(0.0, 0.6) = 0.10;
+// Fine surface grain (albedo + micro-normal), like the asphalt speckle. This is
+// the noise-lattice spacing IN METRES: at 0.04 the finest speckle is ~4 cm and
+// the coarsest fbm blob a few cells across (~15 cm), which reads as real plaster
+// stipple / brick grit rather than the rolling half-metre lumps a large value
+// produces. Keep it small — a big grain_scale is what made the wall look like
+// it was covered in 50 cm cauliflower.
+uniform float grain_scale : hint_range(0.01, 0.4) = 0.04;
+uniform float albedo_variation : hint_range(0.0, 0.6) = 0.08;
+// How strongly the fine grain tilts the normal. The grain is a MICRO-texture:
+// it should catch light as a subtle tooth, not sculpt visible hills, so its
+// contribution to the bump is a small fraction of the joint relief.
+uniform float grain_bump : hint_range(0.0, 1.0) = 0.15;
 
 // Base roughness; masonry is rough, panels a little smoother.
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.85;
@@ -150,7 +159,15 @@ void fragment() {
 	float u = wrapped.x;
 	float v = wrapped.y;
 
-	float grain = fbm(wrapped / grain_scale);
+	// Fine grain gets its OWN tight wrap. Feeding the 64 m `wrapped` window into
+	// fbm(.../grain_scale) pushes the noise-lattice input up to 64/0.18 ≈ 355,
+	// where the hash's float bit-mixing loses precision and the grain collapses
+	// into coarse ~half-metre blobs (the "50 cm grain" artefact). Wrapping the
+	// grain coordinate to a small window FIRST keeps the lattice input in the
+	// low tens, so the speckle stays fine. The window is chosen as a whole
+	// multiple of grain_scale so the noise tiles seamlessly across the seam.
+	vec2 grain_uv = mod(vec2(wall_u(world_pos), world_pos.y), grain_scale * 64.0) / grain_scale;
+	float grain = fbm(grain_uv);
 
 	vec3 col = base_color.rgb;
 	float rough = roughness_base;
@@ -220,11 +237,13 @@ void fragment() {
 	// on the fly from screen-space derivatives of world position and tilt the
 	// interpolated NORMAL by a height field (grain + joint valleys). This is
 	// UV/tangent-free and works on any geometry.
-	float e = 0.5 * grain_scale;
-	float gx = fbm((wrapped + vec2(e, 0.0)) / grain_scale)
-		- fbm((wrapped - vec2(e, 0.0)) / grain_scale);
-	float gy = fbm((wrapped + vec2(0.0, e)) / grain_scale)
-		- fbm((wrapped - vec2(0.0, e)) / grain_scale);
+	// Derivative step in noise-lattice space (grain_uv is already divided by
+	// grain_scale, so a step of 0.5 here is 0.5 lattice cells). The grain is a
+	// micro-texture, so its normal contribution is scaled right down by
+	// grain_bump — otherwise the fine noise sculpts visible rolling lumps.
+	float e = 0.5;
+	float gx = (fbm(grain_uv + vec2(e, 0.0)) - fbm(grain_uv - vec2(e, 0.0))) * grain_bump;
+	float gy = (fbm(grain_uv + vec2(0.0, e)) - fbm(grain_uv - vec2(0.0, e))) * grain_bump;
 	// Joint gradients: sign follows which side of the joint we're on so the
 	// valley has two facing slopes rather than one flat step.
 	float jx = (fract(u / max(brick_length, 0.001)) - 0.5) * jh;

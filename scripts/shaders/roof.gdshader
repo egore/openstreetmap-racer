@@ -29,8 +29,12 @@ uniform float seam_spacing : hint_range(0.1, 2.0) = 0.55;
 uniform float tile_length : hint_range(0.1, 1.5) = 0.42;
 
 uniform float relief_depth : hint_range(0.0, 2.0) = 0.9;
-uniform float grain_scale : hint_range(0.02, 2.0) = 0.22;
-uniform float albedo_variation : hint_range(0.0, 0.6) = 0.10;
+// Fine grain noise-lattice spacing IN METRES. Keep small (~5 cm) so the grain
+// reads as tile grit, not rolling half-metre lumps (see building_wall.gdshader).
+uniform float grain_scale : hint_range(0.01, 0.4) = 0.05;
+uniform float albedo_variation : hint_range(0.0, 0.6) = 0.08;
+// Fraction of the grain fed into the normal — a micro-tooth, not visible hills.
+uniform float grain_bump : hint_range(0.0, 1.0) = 0.15;
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.8;
 
 // --- Weathering ------------------------------------------------------------
@@ -99,8 +103,13 @@ void fragment() {
 	// The rows/seams use the wide window; the fine grain uses a tight one so its
 	// noise input stays small and precise (see the wall/terrain shaders).
 	vec2 wrapped = mod(world_pos.xz, 512.0);
-	vec2 grain_wrapped = mod(world_pos.xz, 64.0);
-	float grain = fbm(grain_wrapped / grain_scale);
+	// Fine grain gets a tight wrap sized to a whole multiple of grain_scale, then
+	// divided. Wrapping to 64 m and THEN dividing by ~0.22 pushed the noise
+	// lattice input to ~291, where the hash loses precision and the grain
+	// collapses into coarse ~half-metre blobs. Wrapping to grain_scale*64 keeps
+	// the lattice input in the low tens and the speckle fine, and tiles cleanly.
+	vec2 grain_uv = mod(world_pos.xz, grain_scale * 64.0) / grain_scale;
+	float grain = fbm(grain_uv);
 
 	vec3 col = base_color.rgb;
 	float rough = roughness_base;
@@ -167,11 +176,12 @@ void fragment() {
 	METALLIC = metallic;
 	SPECULAR = spec;
 
-	float e = 0.5 * grain_scale;
-	float gx = fbm((grain_wrapped + vec2(e, 0.0)) / grain_scale)
-		- fbm((grain_wrapped - vec2(e, 0.0)) / grain_scale);
-	float gz = fbm((grain_wrapped + vec2(0.0, e)) / grain_scale)
-		- fbm((grain_wrapped - vec2(0.0, e)) / grain_scale);
+	// Derivative step in noise-lattice space (grain_uv is already divided by
+	// grain_scale, so 0.5 here is half a lattice cell). Grain is a micro-texture,
+	// so scale its normal contribution right down by grain_bump.
+	float e = 0.5;
+	float gx = (fbm(grain_uv + vec2(e, 0.0)) - fbm(grain_uv - vec2(e, 0.0))) * grain_bump;
+	float gz = (fbm(grain_uv + vec2(0.0, e)) - fbm(grain_uv - vec2(0.0, e))) * grain_bump;
 	// Metal ribs run along X (relief across X); tile courses run along Z.
 	float ru = gx + ((surface_kind >= 1.5) ? ridge * relief_depth : 0.0);
 	float rv = gz + ((surface_kind < 0.5) ? ridge * relief_depth : 0.0);
