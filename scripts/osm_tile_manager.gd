@@ -10,6 +10,11 @@ const OSMTileSourceScript := preload("res://scripts/osm_tile_source.gd")
 # Preloaded (not referenced by bare class_name) so it resolves during headless
 # test discovery regardless of class_name cache order.
 const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
+# The async streaming state machine (parse queue → instance queue → feature
+# queue). Owned by this manager but kept in its own file so the manager stays
+# focused on grid math, OSM semantics, and scene-tree building. Preloaded for the
+# same headless-discovery reason as the sources above.
+const TileStreamingPipelineScript := preload("res://scripts/tile_streaming_pipeline.gd")
 # Procedural grass/soil ground shader (world-space noise; no textures). One
 # shared material serves every ground tile — the pattern is driven by world XZ
 # so tiles need no per-instance state and it tiles seamlessly across borders.
@@ -59,41 +64,39 @@ var _terrain_material: ShaderMaterial = null
 var _loaded_tiles: Dictionary = {}    # Vector2i tile_key -> Node3D (tile root)
 var _current_tile: Vector2i = Vector2i(999999, 999999)
 
-# ─── Async streaming state ────────────────────────────────────────────────────
+# ─── Async tile streaming ─────────────────────────────────────────────────────
+# The parse/instance/feature queue state machine lives in TileStreamingPipeline;
+# the manager keeps only the scene-tree work it drives (see _ready for wiring).
 # A tile crossing can request several new tiles at once. Parsing each (disk read
-# + XML parse) on the main thread is what froze the frame; we now push parsing to
-# WorkerThreadPool tasks and instance the results on the main thread under a
-# per-frame time budget.
-#
-#   _pending_tiles   tiles a task has been dispatched for (dedupe: don't dispatch
-#                    or re-dispatch the same tile while its parse is in flight).
-#   _parse_tasks     tile_key -> WorkerThreadPool task id (to poll completion).
-#   _ready_buckets   tile_key -> parsed bucket, awaiting main-thread instancing.
-#   _instance_queue  FIFO of tile_keys with a ready bucket to drain per frame.
-# `_use_threads` lets headless tests force synchronous behaviour for determinism.
-var _pending_tiles: Dictionary = {}
-var _parse_tasks: Dictionary = {}
-var _ready_buckets: Dictionary = {}
-var _instance_queue: Array[Vector2i] = []
+# + XML parse) on the main thread is what froze the frame, so the pipeline pushes
+# parsing to WorkerThreadPool tasks and instances the results on the main thread
+# under a per-frame budget. Feature building (meshes + colliders, main-thread
+# only) is likewise spread across frames.
+# Typed via the preloaded const (not the bare class_name) so it resolves during
+# headless test discovery regardless of class_name cache order.
+var _pipeline: TileStreamingPipelineScript = null
+
+# Whether the streaming pipeline dispatches parses to worker threads. Headless
+# tests set this to false BEFORE add_child (i.e. before _ready builds the
+# pipeline) for deterministic single-stepped behaviour; _ready copies it in.
 var _use_threads: bool = true
 
-# ─── Incremental feature instancing ───────────────────────────────────────────
-# Even off-thread parsing left a hard freeze: building ALL of a tile's features
-# (roads, buildings, relations) in one _instance_tile call blocks the main thread
-# 100-900 ms because each feature builds a mesh + material + collider, and that
-# work can't move off-thread (Godot's scene tree isn't thread-safe). So a tile's
-# ground/collider is still built immediately (the car needs a surface), but its
-# FEATURES are enqueued as many small work items and drained across frames under
-# the same instance_budget_ms as tile instancing. A dense tile then costs a few
-# ms per frame over several frames instead of one long stall.
-#
-#   _feature_queue   FIFO of FeatureWork items awaiting a main-thread build.
-# A per-feature build over this threshold is logged as a pathological outlier
-# (e.g. a giant multipolygon) so it can be found and guarded.
-var _feature_queue: Array[FeatureWork] = []
 ## A single feature build takes longer than this (ms) → warn once. One monster
 ## feature can still overshoot a frame; this surfaces it rather than hiding it.
 const _FEATURE_SLOW_MS := 30.0
+
+# ── Test-facing views onto the pipeline's queues ──────────────────────────────
+# The streaming state now lives in _pipeline; these accessors preserve the
+# member names the tile-streaming tests read directly (mgr._pending_tiles, etc.)
+# so the split stays behaviour-preserving. They return the pipeline's live
+# containers by reference — reads see real state, and .has()/.size() work as
+# before. Guard against the pre-_ready window (pipeline not built yet).
+var _pending_tiles: Dictionary:
+	get: return _pipeline._pending_tiles if _pipeline != null else {}
+var _instance_queue: Array:
+	get: return _pipeline._instance_queue if _pipeline != null else []
+var _feature_queue: Array:
+	get: return _pipeline._feature_queue if _pipeline != null else []
 
 ## One deferred feature-build unit for a tile. `kind` selects the builder; the
 ## payload fields carry exactly what that builder needs. Kept as a tiny data
@@ -134,6 +137,19 @@ func _ready() -> void:
 	# controller, in which case lamps stay unlit poles.
 	_asset_placer.lamp_lights = get_node_or_null(street_lamp_lights_path) as StreetLampLights
 	_relation_builder = OSMRelationBuilder.new()
+
+	# Build the streaming pipeline and inject the main-thread work it drives.
+	# _use_threads is read here (not before) so tests can flip it pre-_ready.
+	_pipeline = TileStreamingPipelineScript.new()
+	_pipeline.use_threads = _use_threads
+	_pipeline.instance_budget_ms = instance_budget_ms
+	_pipeline.configure(
+		func(tkey: Vector2i) -> Variant: return _tile_source.parse_tile(tkey),
+		func(tkey: Vector2i, bucket: Variant) -> void: _instance_tile(tkey, bucket, true),
+		_build_feature,
+		func(tkey: Vector2i) -> bool: return _loaded_tiles.has(tkey),
+		_tile_in_range,
+		FrameTracerScript.record_usec)
 
 	_way_handlers = [
 		RoadHandler.new(),
@@ -201,9 +217,11 @@ func _process(_delta: float) -> void:
 
 	# Drain finished parse tasks and instance a budgeted slice of them every
 	# frame, regardless of whether the camera moved — tiles requested on an
-	# earlier frame keep flowing into the scene without a hitch.
-	_collect_finished_parses()
-	_drain_instance_queue()
+	# earlier frame keep flowing into the scene without a hitch. The exported
+	# budget can be tuned at runtime, so push it into the pipeline each frame.
+	_pipeline.instance_budget_ms = instance_budget_ms
+	_pipeline.collect_finished_parses()
+	_pipeline.drain()
 
 	var camera := get_viewport().get_camera_3d()
 	if camera == null:
@@ -236,90 +254,26 @@ func _update_tiles() -> void:
 	for tkey: Vector2i in to_unload:
 		_unload_tile(tkey)
 
-## Kick off (or skip) loading a single tile. A tile is skipped when it is already
-## loaded, already parsing in a task, or already parsed and waiting to instance.
-## Otherwise its parse is dispatched to a worker thread (or run inline when
-## threads are disabled), so this returns immediately without touching the scene.
+## Ask the streaming pipeline to (asynchronously) load a tile. Thin forwarder:
+## the manager decides WHICH tiles to request (see _update_tiles); the pipeline
+## owns HOW they are parsed and queued. Kept as a method (not an inlined
+## _pipeline.request_tile call) so the tile-streaming tests can drive one tile at
+## a time through the manager's surface.
 func _request_tile(tkey: Vector2i) -> void:
-	if _loaded_tiles.has(tkey) or _pending_tiles.has(tkey) or _ready_buckets.has(tkey):
-		return
-	_pending_tiles[tkey] = true
-	if _use_threads:
-		var task_id := WorkerThreadPool.add_task(_parse_tile_task.bind(tkey))
-		_parse_tasks[tkey] = task_id
-	else:
-		# Synchronous fallback (headless tests): parse now, instance next drain.
-		_ready_buckets[tkey] = _tile_source.parse_tile(tkey)
-		_instance_queue.append(tkey)
+	_pipeline.request_tile(tkey)
 
-## WorkerThreadPool task body: parse ONE tile off the main thread. Touches only
-## the thread-safe parse_tile() path (no scene tree, no shared mutable cache),
-## then stashes the result for the main thread to pick up in _collect_finished_parses.
-func _parse_tile_task(tkey: Vector2i) -> void:
-	# Time the off-thread parse and record it (record_usec is thread-safe). If
-	# parses are cheap here but frames still hitch, the cost is in instancing, not
-	# parsing — which tells us where to look next.
-	var t0 := Time.get_ticks_usec()
-	var bucket := _tile_source.parse_tile(tkey)
-	FrameTracerScript.record_usec("parse_tile_task", Time.get_ticks_usec() - t0)
-	# Dictionary assignment keyed by a unique tile is safe here: each task writes
-	# its own distinct key exactly once, and the main thread only reads a key
-	# after WorkerThreadPool.is_task_completed() confirms this task finished.
-	_ready_buckets[tkey] = bucket
-
-## Main-thread: harvest every parse task that has completed since last frame,
-## moving its tile onto the instance queue. Non-blocking — unfinished tasks are
-## left for a later frame.
-func _collect_finished_parses() -> void:
-	if _parse_tasks.is_empty():
-		return
-	var done: Array[Vector2i] = []
-	for tkey: Vector2i in _parse_tasks:
-		if WorkerThreadPool.is_task_completed(_parse_tasks[tkey]):
-			done.append(tkey)
-	for tkey: Vector2i in done:
-		# Reclaim the task slot (also the documented way to observe completion).
-		WorkerThreadPool.wait_for_task_completion(_parse_tasks[tkey])
-		_parse_tasks.erase(tkey)
-		_instance_queue.append(tkey)
-
-## Main-thread: instance queued tiles into the scene tree until the per-frame
-## time budget is spent. Always instances at least one tile so a single heavy
-## tile can never wedge the queue. Tiles that drifted out of range while queued
-## are dropped without instancing.
+## Main-thread: instance the pipeline's ready tiles + queued features under the
+## per-frame budget. Thin forwarder preserved for the tile-streaming tests, which
+## single-step the pipeline through the manager.
 func _drain_instance_queue() -> void:
-	if _instance_queue.is_empty() and _feature_queue.is_empty():
-		return
-	var deadline := Time.get_ticks_usec() + int(instance_budget_ms * 1000.0)
+	_pipeline.instance_budget_ms = instance_budget_ms
+	_pipeline.drain()
 
-	# Drain ready tiles first: each pass builds a tile's ground + collider (so a
-	# freshly streamed tile is drivable immediately) and enqueues its features.
-	# Always take at least one tile so the queue can't wedge, but stop consuming
-	# more once the budget is spent.
-	var first := true
-	while not _instance_queue.is_empty() and (first or Time.get_ticks_usec() < deadline):
-		first = false
-		var tkey: Vector2i = _instance_queue.pop_front()
-		var bucket: Dictionary = _ready_buckets.get(tkey, {})
-		_ready_buckets.erase(tkey)
-		_pending_tiles.erase(tkey)
-		# Skip tiles that were unloaded / drifted out of range while queued, or
-		# that got instanced by a synchronous ensure_tiles_around in the meantime.
-		if _loaded_tiles.has(tkey):
-			continue
-		var dist: int = max(abs(tkey.x - _current_tile.x), abs(tkey.y - _current_tile.y))
-		if dist > unload_radius:
-			continue
-		_instance_tile(tkey, bucket, true)  # defer features to the queue below
-
-	# Then spend whatever budget remains building queued FEATURES. Always build at
-	# least one so progress is guaranteed even when tiles ate the whole budget;
-	# one pathological feature can overshoot a frame but is logged (see
-	# _build_feature) so it can be guarded rather than silently freezing.
-	first = true
-	while not _feature_queue.is_empty() and (first or Time.get_ticks_usec() < deadline):
-		first = false
-		_build_feature(_feature_queue.pop_front())
+## True when a tile is still within the keep radius of the current camera tile.
+## Used by the pipeline to drop tiles that drifted out of range while queued.
+func _tile_in_range(tkey: Vector2i) -> bool:
+	var dist: int = max(abs(tkey.x - _current_tile.x), abs(tkey.y - _current_tile.y))
+	return dist <= unload_radius
 
 ## Synchronously parse AND instance one tile on the calling (main) thread. Used
 ## by ensure_tiles_around at spawn, where a collider must exist THIS frame before
@@ -328,9 +282,7 @@ func _load_tile(tkey: Vector2i) -> void:
 	if _loaded_tiles.has(tkey):
 		return
 	# Cancel any async request for this tile so it isn't instanced twice.
-	_pending_tiles.erase(tkey)
-	_ready_buckets.erase(tkey)
-	_instance_queue.erase(tkey)
+	_pipeline.cancel_pending(tkey)
 	_instance_tile(tkey, _tile_source.load_tile(tkey))
 
 ## Instance a parsed tile bucket into the scene tree. MAIN THREAD ONLY (creates
@@ -385,7 +337,7 @@ func _instance_tile(tkey: Vector2i, bucket: Dictionary, defer: bool = false) -> 
 	var items := _plan_tile_features(
 		tkey, tile_root, osm_data, bucket, ctx, building_part_ways, relation_way_ids)
 	if defer:
-		_feature_queue.append_array(items)
+		_pipeline.enqueue_features(items)
 	else:
 		for item: FeatureWork in items:
 			_build_feature(item)
@@ -613,18 +565,13 @@ func _make_tile_context(
 	return ctx
 
 ## Block until every in-flight parse task has finished before this node is torn
-## down. A WorkerThreadPool task holds a bound reference to _parse_tile_task; if
-## the node freed while a task was still running, that task would call into a
-## freed instance. Waiting here is bounded (a task only parses one tile) and only
-## happens on scene exit.
+## down, then clear the streaming queues. A WorkerThreadPool task holds a bound
+## reference into the pipeline; if the node freed while a task was still running,
+## that task would call into a freed instance. The wait is bounded (a task only
+## parses one tile) and only happens on scene exit.
 func _exit_tree() -> void:
-	for tkey: Vector2i in _parse_tasks:
-		WorkerThreadPool.wait_for_task_completion(_parse_tasks[tkey])
-	_parse_tasks.clear()
-	_pending_tiles.clear()
-	_ready_buckets.clear()
-	_instance_queue.clear()
-	_feature_queue.clear()
+	if _pipeline != null:
+		_pipeline.shutdown()
 
 func _unload_tile(tkey: Vector2i) -> void:
 	var tile_node: Node3D = _loaded_tiles[tkey]
@@ -643,12 +590,7 @@ func _unload_tile(tkey: Vector2i) -> void:
 	# Drop any still-queued feature items for this tile so we don't build onto a
 	# freed root (the drain also guards defensively, but pruning keeps the queue
 	# from filling with dead work as the camera sweeps across tiles).
-	if not _feature_queue.is_empty():
-		var kept: Array[FeatureWork] = []
-		for item: FeatureWork in _feature_queue:
-			if item.tile_key != tkey:
-				kept.append(item)
-		_feature_queue = kept
+	_pipeline.purge_features(func(item: FeatureWork) -> bool: return item.tile_key != tkey)
 	tile_unloaded.emit(tkey)
 
 
