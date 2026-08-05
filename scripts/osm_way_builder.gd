@@ -56,6 +56,15 @@ const SIDEWALK_BASE_Y := 0.0
 ## above the road surface.
 const MAX_TRIM_FRACTION := 0.6
 
+## Shortest span (metres) worth emitting between two junctions.
+##
+## Junctions in OSM often sit a metre or two apart (a slip road joining beside a
+## crossing, a service entrance next to a side street). The stub of carriageway
+## between them is invisible once the two intersection caps are drawn, but it
+## still emits a complete kerb run with start and end caps — which appears as a
+## detached slab of pavement floating beside the road.
+const MIN_SPAN_LENGTH := 2.0
+
 func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInstance3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
@@ -301,7 +310,12 @@ func _append_span(
 
 	var a := from + trim_from
 	var b := to - trim_to
-	if b - a <= 0.01:
+	if b - a <= MIN_SPAN_LENGTH:
+		# Too short to be worth drawing. A sub-metre stub between two adjacent
+		# junctions contributes no visible carriageway, but it DOES emit a full
+		# kerb run complete with both end caps — which reads as a detached slab
+		# of pavement floating beside the road. The junction caps either side
+		# already cover this ground, so dropping it is both cheaper and correct.
 		return
 	spans.append(_slice_polyline(points, a, b))
 
@@ -500,15 +514,24 @@ func _emit_road_ribbon(
 			st.set_uv(uv_l1); st.set_normal(Vector3.UP); st.add_vertex(l1)
 			st.set_uv(uv_r1); st.set_normal(Vector3.UP); st.add_vertex(r1)
 
+		# End caps close off the kerb where a pavement run stops, so it reads as
+		# a solid block rather than a hollow shell. They belong on the FIRST and
+		# LAST segment of each emitted part.
+		var is_first := i == 0
+		var is_last := i == n_pts - 2
 		if has_left_sidewalk:
 			var center := Vector3(part_pts[i].x, left_edge[i].y, part_pts[i].z)
 			var outward: Vector3 = (center - left_edge[i]).normalized()
-			_add_sidewalk_segment(sidewalk_st, left_edge[i], left_edge[i + 1], -outward, i == 0, i == n_pts - 2)
+			_add_sidewalk_segment(
+				sidewalk_st, left_edge[i], left_edge[i + 1], -outward,
+				is_first, is_last)
 
 		if has_right_sidewalk:
 			var center := Vector3(part_pts[i].x, right_edge[i].y, part_pts[i].z)
 			var outward: Vector3 = (right_edge[i] - center).normalized()
-			_add_sidewalk_segment(sidewalk_st, right_edge[i], right_edge[i + 1], outward, i == 0, i == n_pts - 2)
+			_add_sidewalk_segment(
+				sidewalk_st, right_edge[i], right_edge[i + 1], outward,
+				is_first, is_last)
 
 
 ## Along-distance (metres from way start) of the original point nearest `p`. Used

@@ -486,14 +486,15 @@ func test_short_connector_road_survives_trimming() -> void:
 		.is_greater(1.0)
 
 
-func test_trimming_never_consumes_a_whole_road() -> void:
+func test_a_road_of_useful_length_survives_trimming() -> void:
 	# The general invariant behind the fix above: whatever the junctions ask
-	# for, a road must keep a usable fraction of its own length.
+	# for, a road long enough to be worth seeing must keep a usable fraction of
+	# its own length rather than being trimmed out of existence.
 	var data := OSMParser.OSMData.new()
 	data.nodes = {
-		1: _node(1, 0.0, 0.0), 2: _node(2, 3.0, 0.0),
+		1: _node(1, 0.0, 0.0), 2: _node(2, 14.0, 0.0),
 		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
-		5: _node(5, 3.0, -40.0), 6: _node(6, 3.0, 40.0),
+		5: _node(5, 14.0, -40.0), 6: _node(6, 14.0, 40.0),
 	}
 	data.ways = {
 		1: _way(1, [1, 2], {"highway": "primary", "lanes": "4"}),
@@ -506,10 +507,42 @@ func test_trimming_never_consumes_a_whole_road() -> void:
 	var mi := builder.build_road(data.ways[1], data)
 	assert_object(mi) \
 		.override_failure_message(
-			"even a 3 m stub between two wide junctions must survive") \
+			"a 14 m road between two wide junctions must survive") \
 		.is_not_null()
 	if mi != null:
 		mi.free()
+
+
+func test_sub_metre_stub_between_junctions_is_dropped() -> void:
+	# The opposite end of the same trade-off. Junctions often sit a metre or two
+	# apart in OSM; the stub between them contributes no visible carriageway
+	# once both caps are drawn, but it DOES emit a full kerb run with end caps,
+	# which appears as a detached slab of pavement floating beside the road.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 1.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 1.0, -40.0), 6: _node(6, 1.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "residential", "sidewalk": "both"}),
+		2: _way(2, [3, 1, 4], {"highway": "residential"}),
+		3: _way(3, [5, 2, 6], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var mi := builder.build_road(data.ways[1], data)
+	# Decide BEFORE freeing. A freed Object still compares equal to null in
+	# GDScript, so asserting on the variable afterwards passes whether or not a
+	# mesh was ever built — the assertion would be vacuous.
+	var was_built := mi != null
+	if mi != null:
+		mi.free()
+	assert_bool(was_built) \
+		.override_failure_message(
+			"a 1 m stub must not emit a floating kerb slab") \
+		.is_false()
 
 
 func test_cap_faces_point_upward() -> void:
