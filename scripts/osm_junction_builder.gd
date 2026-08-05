@@ -286,15 +286,15 @@ func _emit_kerb_corners(
 		# pairing the cap's fillet uses (see RoadJunctionSolver._build_cap), so
 		# the kerb wraps the corner the cap actually has.
 		#
-		# EITHER side having pavement is enough. Requiring both left a visible
-		# notch at every corner where only one of the two streets is tagged with
-		# a sidewalk (very common in OSM): that street's kerb ran up to the
-		# junction and then simply stopped in mid-air. Carrying the pavement
-		# round the corner to meet the other road is both what a real kerb does
-		# and the only way to terminate the run cleanly.
-		var a_kerbed := _arm_side_has_kerb(a, sidewalk_lookup, true)
-		var b_kerbed := _arm_side_has_kerb(b, sidewalk_lookup, false)
-		if not a_kerbed and not b_kerbed:
+		# BOTH sides must carry pavement. Relaxing this to "either side" was
+		# tried and is wrong: it draws a corner running from a kerbed street
+		# round to one with no pavement at all, so the far half of the corner
+		# has nothing to connect to and reads as a detached wedge of pavement
+		# floating beside the road. A corner is a join between two pavements; if
+		# there is only one, there is nothing to join.
+		if not _arm_side_has_kerb(a, sidewalk_lookup, true):
+			continue
+		if not _arm_side_has_kerb(b, sidewalk_lookup, false):
 			continue
 		if _emit_one_corner(st, junction, a, b):
 			emitted = true
