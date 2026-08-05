@@ -434,10 +434,18 @@ static func _ray_intersect_xz(
 
 ## Build the closed cap polygon from solved arms.
 ##
-## Walking the arms counter-clockwise, each contributes its trimmed mouth as two
-## points — right edge then left edge — and between one arm's LEFT edge and the
-## next arm's RIGHT edge we sweep a rounded fillet so the corner reads as a real
-## kerb radius rather than a sharp spike.
+## Arms are ordered by increasing bearing = atan2(dir.z, dir.x), which sweeps
+## from +X toward +Z. In Godot's Y-up frame that is the direction of POSITIVE
+## polygon area in the XZ plane — the same winding the road ribbons use for their
+## up-facing quads (see OSMWayBuilder._emit_road_ribbon).
+##
+## Walking in that order, each arm contributes its trimmed mouth as two points —
+## LEFT edge first, then RIGHT — and the corner between one arm's RIGHT edge and
+## the NEXT arm's LEFT edge is swept as a rounded fillet.
+##
+## Getting this pairing the wrong way round does not merely mirror the shape: it
+## connects each arm to the far side of the junction, producing a self-
+## intersecting star that will not triangulate at all.
 static func _build_cap(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	var count := arms.size()
@@ -448,19 +456,18 @@ static func _build_cap(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
 		var arm: Arm = arms[i]
 		var mouth := arm.point_at(center, arm.trim)
 		var lat := arm.lateral() * arm.half_width
-		# Right edge then left edge, so the walk stays counter-clockwise.
-		var right := Vector3(mouth.x + lat.x, center.y, mouth.z + lat.z)
 		var left := Vector3(mouth.x - lat.x, center.y, mouth.z - lat.z)
-		out.append(right)
+		var right := Vector3(mouth.x + lat.x, center.y, mouth.z + lat.z)
 		out.append(left)
+		out.append(right)
 
-		# Fillet from this arm's LEFT edge to the next arm's RIGHT edge.
+		# Fillet from this arm's RIGHT edge round to the next arm's LEFT edge.
 		var nxt: Arm = arms[(i + 1) % count]
 		var nxt_mouth := nxt.point_at(center, nxt.trim)
 		var nxt_lat := nxt.lateral() * nxt.half_width
-		var nxt_right := Vector3(
-			nxt_mouth.x + nxt_lat.x, center.y, nxt_mouth.z + nxt_lat.z)
-		for p: Vector3 in _fillet_points(left, nxt_right, center):
+		var nxt_left := Vector3(
+			nxt_mouth.x - nxt_lat.x, center.y, nxt_mouth.z - nxt_lat.z)
+		for p: Vector3 in _fillet_points(right, nxt_left, center):
 			out.append(p)
 	return out
 
