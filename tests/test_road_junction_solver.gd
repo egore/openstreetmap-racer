@@ -450,3 +450,68 @@ func _polygon_area(poly: PackedVector3Array) -> float:
 		var b: Vector3 = poly[(i + 1) % n]
 		acc += a.x * b.z - b.x * a.z
 	return absf(acc) * 0.5
+
+
+# ─── Regressions found against real OSM data ────────────────────────────────
+
+func test_asymmetric_junction_triangulates() -> void:
+	# REGRESSION: _corner_distance originally paired the OPPOSITE edges to the
+	# ones _build_cap joins with its fillet. A symmetric + crossing hides that
+	# (all four corners are congruent), but on a real asymmetric junction the
+	# mouths landed in the wrong places and the cap self-intersected — it would
+	# not triangulate, so the intersection rendered as a hole in the road.
+	#
+	# These bearings are taken from a real failing junction in the Netherlands
+	# extract (node 924168444): arms at -149, -25, 31 and 120 degrees.
+	var nodes := {0: _node(0, 0, 0)}
+	var ways: Array = []
+	var next_node := 1
+	for deg: float in [-149.3, -25.3, 30.7, 120.3]:
+		var rad := deg_to_rad(deg)
+		nodes[next_node] = _node(next_node, cos(rad) * 80.0, sin(rad) * 80.0)
+		ways.append(_way(next_node, [0, next_node]))
+		next_node += 1
+
+	var solved := RoadJunctionSolver.solve_all(ways, nodes, _is_road(), _width(7.0))
+	assert_bool(solved.has(0)).is_true()
+	var j: RoadJunctionSolver.Junction = solved[0]
+	# Assert on the RAW walk, not the repaired cap: the convex-hull fallback
+	# would rescue a broken corner calculation and hide the regression.
+	assert_int(Geometry2D.triangulate_polygon(_flatten(j.raw_cap)).size()) \
+		.override_failure_message(
+			"an asymmetric junction must be built simple, not rescued by repair") \
+		.is_greater_equal(3)
+
+
+func test_acute_fork_still_produces_a_usable_cap() -> void:
+	# REGRESSION: when two arms meet at a very sharp angle they must be trimmed
+	# further back than MAX_TRIM allows. The clamp then leaves their mouths
+	# overlapping and the cap walk crosses itself. Rather than render nothing
+	# (a hole in the road), the solver falls back to the convex hull.
+	var nodes := {0: _node(0, 0, 0)}
+	var ways: Array = []
+	var next_node := 1
+	# Two arms only ~18 degrees apart, plus one opposing arm.
+	for deg: float in [-176.4, -10.2, 158.3]:
+		var rad := deg_to_rad(deg)
+		nodes[next_node] = _node(next_node, cos(rad) * 80.0, sin(rad) * 80.0)
+		ways.append(_way(next_node, [0, next_node]))
+		next_node += 1
+
+	var solved := RoadJunctionSolver.solve_all(ways, nodes, _is_road(), _width(7.0))
+	assert_bool(solved.has(0)).is_true()
+	var j: RoadJunctionSolver.Junction = solved[0]
+	assert_int(Geometry2D.triangulate_polygon(_flatten(j.cap)).size()) \
+		.override_failure_message("an acute fork must still yield a usable cap") \
+		.is_greater_equal(3)
+	assert_bool(_point_in_polygon(j.center, j.cap)) \
+		.override_failure_message("the fallback cap must still cover the node") \
+		.is_true()
+
+
+## Cap points as a flat XZ polygon, for triangulation checks.
+func _flatten(cap: PackedVector3Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for p: Vector3 in cap:
+		out.append(Vector2(p.x, p.z))
+	return out
