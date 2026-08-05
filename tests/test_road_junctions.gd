@@ -314,12 +314,21 @@ func test_kerb_corners_are_built_when_arms_have_sidewalks() -> void:
 	assert_object(with_kerbs).is_not_null()
 	assert_object(without).is_not_null()
 	if with_kerbs == null or without == null:
+		# Free whichever one WAS built before bailing, or it leaks as an orphan.
+		if with_kerbs != null:
+			with_kerbs.free()
+		if without != null:
+			without.free()
 		return
-	assert_int(with_kerbs.mesh.get_surface_count()) \
-		.override_failure_message("kerbed junction must add corner geometry") \
-		.is_greater(without.mesh.get_surface_count())
+	# Read the counts out before freeing, so the assertion can never run against
+	# a freed node (and can never skip the frees below on failure).
+	var kerbed_surfaces := with_kerbs.mesh.get_surface_count()
+	var bare_surfaces := without.mesh.get_surface_count()
 	with_kerbs.free()
 	without.free()
+	assert_int(kerbed_surfaces) \
+		.override_failure_message("kerbed junction must add corner geometry") \
+		.is_greater(bare_surfaces)
 
 
 func test_no_kerb_corners_when_roads_have_no_sidewalks() -> void:
@@ -336,12 +345,18 @@ func test_no_kerb_corners_when_roads_have_no_sidewalks() -> void:
 	assert_object(mi).is_not_null()
 	assert_object(bare).is_not_null()
 	if mi == null or bare == null:
+		if mi != null:
+			mi.free()
+		if bare != null:
+			bare.free()
 		return
-	assert_int(mi.mesh.get_surface_count()) \
-		.override_failure_message("no sidewalk tags must mean no kerb geometry") \
-		.is_equal(bare.mesh.get_surface_count())
+	var kerbless_surfaces := mi.mesh.get_surface_count()
+	var bare_surfaces := bare.mesh.get_surface_count()
 	mi.free()
 	bare.free()
+	assert_int(kerbless_surfaces) \
+		.override_failure_message("no sidewalk tags must mean no kerb geometry") \
+		.is_equal(bare_surfaces)
 
 
 # ─── Degenerate input ────────────────────────────────────────────────────────

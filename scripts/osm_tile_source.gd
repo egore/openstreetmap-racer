@@ -225,6 +225,53 @@ func collect_osm_near(center: Vector3, radius: float, yield_every: int = 0) -> O
 	return data
 
 
+## Collect the road ways of a tile AND its eight neighbours, plus every node
+## they reference, as { "ways": Array, "nodes": Dictionary }.
+##
+## This is the junction "halo". A junction sitting near a tile border has arms
+## belonging to ways that neighbouring tiles own; solving it from one tile's ways
+## alone would see too few arms and compute a different trim distance than the
+## neighbour does, cutting the same street at two different points and leaving a
+## visible step on the seam. Feeding every tile the same halo makes their
+## independent solutions agree (RoadJunctionSolver is deterministic for exactly
+## this reason).
+##
+## Only ROAD ways are collected — junction solving ignores everything else, and
+## carrying buildings/landuse through here would waste a lot of memory per tile.
+##
+## THREAD-SAFE: goes through the mutex-guarded parse_tile cache, so this runs on
+## the streaming worker thread alongside the tile's own parse. Neighbours are
+## usually already cached (the camera reaches a tile's neighbours before the tile
+## itself), so in the common case this costs lookups rather than file parses.
+func collect_road_halo(tile_key: Vector2i) -> Dictionary:
+	var ways: Array = []
+	var nodes: Dictionary = {}
+	if not is_ready():
+		return {"ways": ways, "nodes": nodes}
+
+	var seen_ways: Dictionary = {}
+	for dx: int in range(-1, 2):
+		for dz: int in range(-1, 2):
+			var tkey := Vector2i(tile_key.x + dx, tile_key.y + dz)
+			if not has_tile(tkey):
+				continue
+			var bucket := parse_tile(tkey)
+			if bucket.is_empty():
+				continue
+			var src: OSMParser.OSMData = bucket["osm_data"]
+			for way: OSMParser.OSMWay in bucket["ways"]:
+				if seen_ways.has(way.id):
+					continue
+				if not way.tags.has("highway"):
+					continue
+				seen_ways[way.id] = true
+				ways.append(way)
+				for nid: int in way.node_ids:
+					if not nodes.has(nid) and src.nodes.has(nid):
+						nodes[nid] = src.nodes[nid]
+	return {"ways": ways, "nodes": nodes}
+
+
 ## Resolve a way's node ids to their local positions using the given (possibly
 ## per-tile, self-contained) dataset. Missing nodes are skipped.
 static func _way_points(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> PackedVector3Array:

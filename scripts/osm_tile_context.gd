@@ -1,6 +1,8 @@
 class_name OSMTileContext
 extends RefCounted
 
+const RoadNetworkContextScript := preload("res://scripts/road_network_context.gd")
+
 ## Shared, per-tile state handed to every OSMWayHandler.build() call.
 ##
 ## The way-rendering dispatch used to be a central if-elif chain inside
@@ -36,6 +38,12 @@ var tile_clip: Variant = null
 ## Building way IDs whose 3D outline must be skipped because a building:part
 ## footprint already covers them (computed in OSMTileManager's pre-pass).
 var suppressed_building_ids: Dictionary = {}
+
+## The solved road intersection layout for this tile (see RoadNetworkContext).
+## Tells the way builder how far to pull each road back from the junctions it
+## meets, so the intersection caps have room to fill the crossing. null when the
+## tile has no roads, in which case ribbons are built full-length.
+var road_network: RoadNetworkContextScript = null
 
 # ─── Shared builders ─────────────────────────────────────────────────────────
 # These are constructed once by OSMTileManager and shared across tiles. Handlers

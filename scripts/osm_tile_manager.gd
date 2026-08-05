@@ -1,6 +1,11 @@
 class_name OSMTileManager
 extends Node3D
 
+const RoadNetworkContextScript := preload("res://scripts/road_network_context.gd")
+const RoadJunctionSolverScript := preload("res://scripts/road_junction_solver.gd")
+const OSMJunctionBuilderScript := preload("res://scripts/osm_junction_builder.gd")
+const RoadProfileScript := preload("res://scripts/road_profile.gd")
+
 ## Manages a grid of tiles around the camera. Loads/unloads tiles dynamically.
 
 # Preloaded so the InMemory/Disk implementations resolve even before Godot's
@@ -102,7 +107,7 @@ var _feature_queue: Array:
 ## payload fields carry exactly what that builder needs. Kept as a tiny data
 ## holder so the drain loop stays a simple dispatch.
 class FeatureWork extends RefCounted:
-	enum Kind { WAY, BUILDING_PART, ASSETS, RELATION }
+	enum Kind { WAY, BUILDING_PART, ASSETS, RELATION, JUNCTION }
 	var kind: int
 	var tile_key: Vector2i
 	var tile_root: Node3D                 # parent to add the built node under
@@ -111,8 +116,13 @@ class FeatureWork extends RefCounted:
 	var relation: OSMParser.OSMRelation = null  # RELATION
 	var nodes: Array = []                 # ASSETS
 	var ctx: OSMTileContext = null        # WAY (handler dispatch context)
+	## JUNCTION: the solved intersection to build a cap for.
+	var junction: RoadJunctionSolverScript.Junction = null
+	## JUNCTION: way_id -> {left,right} kerb flags for the arms meeting here.
+	var sidewalks: Dictionary = {}
 
 var _way_builder: OSMWayBuilder = null
+var _junction_builder: OSMJunctionBuilderScript = null
 var _infrastructure_builder: OSMInfrastructureBuilder = null
 var _building_builder: OSMBuildingBuilder = null
 var _asset_placer: OSMAssetPlacer = null
@@ -128,6 +138,7 @@ var _way_handlers: Array[OSMWayHandler] = []
 
 func _ready() -> void:
 	_way_builder = OSMWayBuilder.new()
+	_junction_builder = OSMJunctionBuilderScript.new()
 	_infrastructure_builder = OSMInfrastructureBuilder.new()
 	_building_builder = OSMBuildingBuilder.new()
 	_asset_placer = OSMAssetPlacer.new()
@@ -144,7 +155,7 @@ func _ready() -> void:
 	_pipeline.use_threads = _use_threads
 	_pipeline.instance_budget_ms = instance_budget_ms
 	_pipeline.configure(
-		func(tkey: Vector2i) -> Variant: return _tile_source.parse_tile(tkey),
+		_parse_tile_with_junctions,
 		func(tkey: Vector2i, bucket: Variant) -> void: _instance_tile(tkey, bucket, true),
 		_build_feature,
 		func(tkey: Vector2i) -> bool: return _loaded_tiles.has(tkey),
@@ -166,6 +177,48 @@ func _ready() -> void:
 	]
 
 	_load_osm_data()
+
+## Parse a tile AND solve its road junctions, off the main thread.
+##
+## Junction solving is pure computation over OSM data (no scene tree), so it
+## belongs here in the worker-thread parse phase rather than in the main-thread
+## instancing phase where it would eat the frame budget. The solved network is
+## attached to the bucket for _instance_tile to hand to the way builder.
+##
+## The halo (this tile plus its eight neighbours) is what makes tiles agree on
+## where to cut a street that crosses their shared border — see
+## OSMTileSource.collect_road_halo and RoadNetworkContextScript.
+func _parse_tile_with_junctions(tkey: Vector2i) -> Variant:
+	var bucket: Dictionary = _tile_source.parse_tile(tkey)
+	if bucket.is_empty():
+		return bucket
+	bucket["road_network"] = _solve_tile_junctions(tkey, bucket)
+	return bucket
+
+
+## Solve the road junctions relevant to one tile. Returns null when the tile has
+## no roads, in which case the builder falls back to untrimmed ribbons.
+func _solve_tile_junctions(
+		tkey: Vector2i, bucket: Dictionary) -> RoadNetworkContextScript:
+	var own_ways: Array = []
+	for way: OSMParser.OSMWay in bucket["ways"]:
+		if way.tags.has("highway"):
+			own_ways.append(way)
+	if own_ways.is_empty():
+		return null
+
+	var halo := _tile_source.collect_road_halo(tkey)
+	var halo_ways: Array = halo["ways"]
+	var nodes: Dictionary = halo["nodes"]
+	# Fall back to the tile's own data if the halo came back empty (single-tile
+	# worlds, or a source that doesn't index neighbours).
+	if halo_ways.is_empty():
+		halo_ways = own_ways
+		nodes = (bucket["osm_data"] as OSMParser.OSMData).nodes
+
+	return RoadNetworkContextScript.build(
+		own_ways, halo_ways, nodes, _tile_clip_rect(tkey))
+
 
 ## Pick a tile source and get it ready. A baked streaming cache
 ## (tile_cache_dir/manifest.json) wins; otherwise fall back to loading
@@ -192,6 +245,8 @@ func _load_osm_data() -> void:
 		_relation_builder.terrain_grid_step = grid_step
 		_way_builder.height_provider = _height_provider
 		_way_builder.terrain_grid_step = grid_step
+		_junction_builder.height_provider = _height_provider
+		_junction_builder.terrain_grid_step = grid_step
 	print("OSMTileManager: Tile source ready, ready for tile loading")
 	data_loaded.emit(get_osm_data())
 
@@ -331,7 +386,9 @@ func _instance_tile(tkey: Vector2i, bucket: Dictionary, defer: bool = false) -> 
 	var suppressed_building_ids := _collect_suppressed_buildings(
 		building_part_ways, bucket, osm_data)
 	var relation_way_ids := _collect_relation_way_ids(bucket["relations"], osm_data)
-	var ctx := _make_tile_context(tkey, suppressed_building_ids, osm_data)
+	var ctx := _make_tile_context(
+		tkey, suppressed_building_ids, osm_data,
+		bucket.get("road_network", null))
 
 	# ── Feature building: inline (spawn) or queued (streaming) ──
 	var items := _plan_tile_features(
@@ -397,6 +454,22 @@ func _plan_tile_features(
 	a.nodes = bucket["nodes"]
 	items.append(a)
 
+	# Intersection caps for the junctions THIS tile owns. Queued after the ways
+	# so a cap is built once its arms exist, and skipped entirely when the tile
+	# owns none (the common case away from street grids).
+	var network: RoadNetworkContextScript = bucket.get("road_network", null)
+	if network != null:
+		var sidewalks := _collect_arm_sidewalks(bucket)
+		for junction: RoadJunctionSolverScript.Junction in network.owned_junctions():
+			var jw := FeatureWork.new()
+			jw.kind = FeatureWork.Kind.JUNCTION
+			jw.tile_key = tkey
+			jw.tile_root = tile_root
+			jw.osm_data = osm_data
+			jw.junction = junction
+			jw.sidewalks = sidewalks
+			items.append(jw)
+
 	var processed_rel_ids := {}
 	for rel: OSMParser.OSMRelation in bucket["relations"]:
 		if processed_rel_ids.has(rel.id):
@@ -431,6 +504,7 @@ func _build_feature(item: FeatureWork) -> void:
 			# whole length in every tile. The builder reads tile_clip_rect; set it
 			# per feature and clear it after so nothing else inherits it.
 			_way_builder.tile_clip_rect = item.ctx.tile_clip
+			_way_builder.network = item.ctx.road_network
 			var handled := false
 			for handler: OSMWayHandler in _way_handlers:
 				if handler.matches(item.way, item.ctx):
@@ -440,6 +514,7 @@ func _build_feature(item: FeatureWork) -> void:
 					handled = true
 					break
 			_way_builder.tile_clip_rect = null
+			_way_builder.network = null
 			if not handled and not _is_ignorable_way(item.way):
 				print_debug("Skipping way with tags", item.way.tags)
 		FeatureWork.Kind.BUILDING_PART:
@@ -450,6 +525,14 @@ func _build_feature(item: FeatureWork) -> void:
 			var assets_root := _asset_placer.place_assets_batched(item.nodes)
 			if assets_root != null:
 				item.tile_root.add_child(assets_root)
+		FeatureWork.Kind.JUNCTION:
+			var jnode := _junction_builder.build_junction(
+				item.junction, item.sidewalks)
+			if jnode != null:
+				# Junction surfaces are drivable road, so the surface detector
+				# must find them alongside the ribbons.
+				jnode.add_to_group(&"road_surface")
+				item.tile_root.add_child(jnode)
 		FeatureWork.Kind.RELATION:
 			_relation_builder.tile_clip_rect = _tile_clip_rect(item.tile_key) as Variant
 			var rel_node := _relation_builder.build_relation(item.relation, item.osm_data)
@@ -479,6 +562,20 @@ func _feature_desc(item: FeatureWork) -> String:
 		FeatureWork.Kind.RELATION:
 			return "relation %d %s" % [item.relation.id, item.relation.tags]
 	return "unknown"
+
+## Kerb flags for every road way in a tile, as way_id -> {"left","right"}.
+##
+## The junction builder needs these to decide whether a corner between two arms
+## should carry pavement: a kerb wrapping a corner whose roads have no sidewalks
+## would appear out of nowhere. Collected once per tile rather than per junction
+## because a way typically meets several of them.
+func _collect_arm_sidewalks(bucket: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for way: OSMParser.OSMWay in bucket["ways"]:
+		if way.tags.has("highway"):
+			out[way.id] = RoadProfileScript.sidewalk_sides(way.tags)
+	return out
+
 
 ## True when the tile is entirely under an area polygon (way or multipolygon
 ## relation), so the visible terrain mesh can be skipped (collider still built).
@@ -549,7 +646,8 @@ func _collect_suppressed_buildings(
 ## builders and tile parameters so handler build() signatures stay uniform.
 func _make_tile_context(
 		tkey: Vector2i, suppressed_building_ids: Dictionary,
-		osm_data: OSMParser.OSMData) -> OSMTileContext:
+		osm_data: OSMParser.OSMData,
+		road_network: RoadNetworkContextScript = null) -> OSMTileContext:
 	var ctx := OSMTileContext.new()
 	ctx.osm_data = osm_data
 	ctx.tile_key = tkey
@@ -558,6 +656,7 @@ func _make_tile_context(
 	ctx.grid_step = tile_size / float(max(1, terrain_subdivisions)) if ctx.has_terrain else 0.0
 	ctx.tile_clip = (_tile_clip_rect(tkey) as Variant) if ctx.has_terrain else null
 	ctx.suppressed_building_ids = suppressed_building_ids
+	ctx.road_network = road_network
 	ctx.way_builder = _way_builder
 	ctx.infrastructure_builder = _infrastructure_builder
 	ctx.building_builder = _building_builder
