@@ -333,12 +333,20 @@ func _tile_in_range(tkey: Vector2i) -> bool:
 ## Synchronously parse AND instance one tile on the calling (main) thread. Used
 ## by ensure_tiles_around at spawn, where a collider must exist THIS frame before
 ## the car is dropped — there's no time to wait for a worker task to finish.
+##
+## Junctions are solved here too (not just on the streaming path), or the tiles
+## the player spawns onto would be the only ones in the world rendering
+## untrimmed, cap-less roads. It costs a few ms on top of the parse, which is
+## acceptable for the handful of spawn tiles and only happens once.
 func _load_tile(tkey: Vector2i) -> void:
 	if _loaded_tiles.has(tkey):
 		return
 	# Cancel any async request for this tile so it isn't instanced twice.
 	_pipeline.cancel_pending(tkey)
-	_instance_tile(tkey, _tile_source.load_tile(tkey))
+	var bucket := _tile_source.load_tile(tkey)
+	if not bucket.is_empty():
+		bucket["road_network"] = _solve_tile_junctions(tkey, bucket)
+	_instance_tile(tkey, bucket)
 
 ## Instance a parsed tile bucket into the scene tree. MAIN THREAD ONLY (creates
 ## nodes, adds physics bodies, emits signals). Split out of the old _load_tile so
