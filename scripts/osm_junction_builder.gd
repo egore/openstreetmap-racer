@@ -162,27 +162,35 @@ func _emit_stop_bars(
 
 	var emitted := false
 	for arm: RoadJunctionSolverScript.Arm in junction.arms:
-		# Bar sits just inside the mouth, spanning the half of the carriageway
-		# traffic APPROACHES on. On a two-way street that is the near half; a
-		# bar across the full width would sit in oncoming traffic's lane too.
+		# The bar sits just inside the arm's mouth, running ACROSS the direction
+		# of travel: its long axis is the arm's lateral, its short axis (the
+		# paint depth) is the arm's direction.
 		var d := arm.trim - STOP_BAR_INSET
 		if d <= 0.1:
 			continue
 		var centre := arm.point_at(junction.center, d)
-		var lat := arm.lateral()
 		var fwd := arm.dir
 
-		# Approach side: traffic drives on the right, so the lane approaching
-		# this junction on this arm is the one on the arm's LEFT looking
-		# outward (its right looking inward).
-		var near := Vector3.ZERO
-		var far := lat * arm.half_width
+		# Span the half of the carriageway that traffic APPROACHES on, so the bar
+		# does not run across the oncoming lane too. Traffic drives on the right,
+		# so looking OUTWARD from the junction along this arm, the approaching
+		# lane is the one on the arm's right — i.e. +lateral.
+		#
+		# The span must run from the road's CENTRELINE to that edge. Previously
+		# one end was left at the arm's centre point and the other pushed out by
+		# half_width, which is the same thing only for a road of zero width: on a
+		# real street the bar sat half off-centre and read as a perpendicular
+		# stub rather than a stop line.
+		var lat := arm.lateral()
+		var inner := centre                              # centreline
+		var outer := centre + lat * arm.half_width       # approach-side kerb
 		var half_depth := STOP_BAR_DEPTH * 0.5
+		var back := fwd * half_depth
 
-		var p0 := centre + near - fwd * half_depth
-		var p1 := centre + far - fwd * half_depth
-		var p2 := centre + far + fwd * half_depth
-		var p3 := centre + near + fwd * half_depth
+		var p0 := inner - back
+		var p1 := outer - back
+		var p2 := outer + back
+		var p3 := inner + back
 		_add_flat_quad(st, p0, p1, p2, p3, CAP_Y + PAINT_Y)
 		emitted = true
 	return emitted

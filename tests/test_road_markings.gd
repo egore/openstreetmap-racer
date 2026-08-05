@@ -83,3 +83,47 @@ func test_road_mesh_has_across_uvs_spanning_zero_to_one() -> void:
 	assert_float(max_v).override_failure_message("right edge UV.y ~ 1").is_greater_equal(0.99)
 	# UV.x is metres along a 100 m road → the far end should be ~100.
 	assert_float(max_u).override_failure_message("UV.x reaches road length").is_greater_equal(99.0)
+
+
+# ─── Junction trimming rebases markings ─────────────────────────────────────
+
+func test_markings_rebase_when_the_road_is_trimmed() -> void:
+	# REGRESSION: marking distances are measured from the way's ORIGINAL start,
+	# but junction trimming moves the ribbon's UV origin down the road. Without
+	# rebasing, every marking on a road meeting an intersection was painted
+	# `trim` metres too far along — crossings drifted, some landing out in the
+	# intersection itself.
+	var spec := RoadMarkingSpec.new()
+	spec.markings.append(RoadMarkingSpec.Marking.new(20.0, RoadMarkingSpec.Kind.ZEBRA))
+	spec.markings.append(RoadMarkingSpec.Marking.new(50.0, RoadMarkingSpec.Kind.STOP))
+
+	var rebased := spec.rebased(4.7)
+	assert_int(rebased.markings.size()).is_equal(2)
+	assert_float(rebased.markings[0].along) \
+		.override_failure_message("marking must shift back by the trim distance") \
+		.is_equal_approx(15.3, 0.001)
+	assert_float(rebased.markings[1].along).is_equal_approx(45.3, 0.001)
+	# Kinds must survive the rebase.
+	assert_int(rebased.markings[1].kind).is_equal(RoadMarkingSpec.Kind.STOP)
+
+
+func test_rebase_drops_markings_swallowed_by_the_junction() -> void:
+	# A marking that now sits before the ribbon start lay inside the
+	# intersection; the cap covers that ground and paints its own markings.
+	var spec := RoadMarkingSpec.new()
+	spec.markings.append(RoadMarkingSpec.Marking.new(2.0, RoadMarkingSpec.Kind.ZEBRA))
+	spec.markings.append(RoadMarkingSpec.Marking.new(30.0, RoadMarkingSpec.Kind.ZEBRA))
+
+	var rebased := spec.rebased(10.0)
+	assert_int(rebased.markings.size()) \
+		.override_failure_message("a marking inside the junction must be dropped") \
+		.is_equal(1)
+	assert_float(rebased.markings[0].along).is_equal_approx(20.0, 0.001)
+
+
+func test_rebase_by_zero_is_a_no_op() -> void:
+	var spec := RoadMarkingSpec.new()
+	spec.markings.append(RoadMarkingSpec.Marking.new(12.0, RoadMarkingSpec.Kind.ZEBRA))
+	var rebased := spec.rebased(0.0)
+	assert_int(rebased.markings.size()).is_equal(1)
+	assert_float(rebased.markings[0].along).is_equal_approx(12.0, 0.001)
