@@ -41,6 +41,22 @@ const MARKING_COLOR := Color(0.85, 0.82, 0.62)
 ## Depth (metres, along the approach) of the stop bar painted on each arm.
 const STOP_BAR_DEPTH := 0.4
 
+## Highway classes that carry a painted stop line where they meet a junction.
+##
+## Deliberately limited to through-roads. Service roads, driveways, alleys and
+## living streets do not get a painted bar in reality, and drawing one on every
+## arm of every junction turned each intersection into a ring of white blocks —
+## far more visually prominent than the asphalt itself.
+const STOP_BAR_TYPES := {
+	"motorway": true,
+	"trunk": true,
+	"primary": true,
+	"secondary": true,
+	"tertiary": true,
+	"residential": true,
+	"unclassified": true,
+}
+
 ## How far inside the cap mouth the stop bar sits, so it reads as being at the
 ## junction rather than floating in the middle of it.
 const STOP_BAR_INSET := 0.5
@@ -199,6 +215,12 @@ func _emit_stop_bars(
 
 	var emitted := false
 	for arm: RoadJunctionSolverScript.Arm in junction.arms:
+		# Only real streets get a painted stop line. A driveway or alley meeting
+		# a road has no bar in reality, and painting one on every arm of every
+		# junction made the intersections read as a grid of white blocks rather
+		# than as road surface.
+		if not STOP_BAR_TYPES.has(arm.highway_type):
+			continue
 		# The bar sits just inside the arm's mouth, running ACROSS the direction
 		# of travel: its long axis is the arm's lateral, its short axis (the
 		# paint depth) is the arm's direction.
@@ -262,12 +284,17 @@ func _emit_kerb_corners(
 		var b: RoadJunctionSolverScript.Arm = arms[(i + 1) % count]
 		# Corner between arm a's RIGHT side and arm b's LEFT side — the same
 		# pairing the cap's fillet uses (see RoadJunctionSolver._build_cap), so
-		# the kerb wraps the corner the cap actually has. Only drawn when both
-		# of those sides carry pavement, or a kerb would appear against a road
-		# that has none.
-		if not _arm_side_has_kerb(a, sidewalk_lookup, true):
-			continue
-		if not _arm_side_has_kerb(b, sidewalk_lookup, false):
+		# the kerb wraps the corner the cap actually has.
+		#
+		# EITHER side having pavement is enough. Requiring both left a visible
+		# notch at every corner where only one of the two streets is tagged with
+		# a sidewalk (very common in OSM): that street's kerb ran up to the
+		# junction and then simply stopped in mid-air. Carrying the pavement
+		# round the corner to meet the other road is both what a real kerb does
+		# and the only way to terminate the run cleanly.
+		var a_kerbed := _arm_side_has_kerb(a, sidewalk_lookup, true)
+		var b_kerbed := _arm_side_has_kerb(b, sidewalk_lookup, false)
+		if not a_kerbed and not b_kerbed:
 			continue
 		if _emit_one_corner(st, junction, a, b):
 			emitted = true
