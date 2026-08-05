@@ -369,3 +369,120 @@ func test_empty_network_context_is_harmless() -> void:
 	var net := RoadNetworkContext.build([], [], {}, [])
 	assert_int(net.owned_junctions().size()).is_equal(0)
 	assert_float(net.trim_at(1, 1, true)).is_equal_approx(0.0, 0.001)
+
+
+# ─── Visual regressions reported in-game ────────────────────────────────────
+
+func test_stop_bar_runs_across_the_road_not_along_it() -> void:
+	# REGRESSION ("markings at 90 degrees"): the bar was built from the road's
+	# CENTRE POINT to one edge, instead of from the centreline across to the
+	# kerb. For any real (non-zero-width) road that put it half off-centre, so
+	# it read as a perpendicular stub rather than a stop line.
+	#
+	# A stop bar must be much wider ACROSS the carriageway than it is deep ALONG
+	# the direction of travel.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+
+	# Surface 1 is the painted-marking surface; each bar is one quad (6 verts),
+	# emitted in arm order.
+	var mdt := MeshDataTool.new()
+	var ok := mdt.create_from_surface(mi.mesh, 1) == OK
+	var arms := junction.arms
+	var results: Array = []
+	if ok:
+		for qi: int in range(mdt.get_vertex_count() / 6):
+			if qi >= arms.size():
+				break
+			var arm: RoadJunctionSolver.Arm = arms[qi]
+			var c := arm.point_at(junction.center, arm.trim - 0.5)
+			var a_min := INF
+			var a_max := -INF
+			var l_min := INF
+			var l_max := -INF
+			for vi: int in range(qi * 6, (qi + 1) * 6):
+				var v := mdt.get_vertex(vi)
+				var rel := Vector3(v.x - c.x, 0.0, v.z - c.z)
+				var a := rel.dot(arm.dir)
+				var l := rel.dot(arm.lateral())
+				a_min = minf(a_min, a)
+				a_max = maxf(a_max, a)
+				l_min = minf(l_min, l)
+				l_max = maxf(l_max, l)
+			results.append({"depth": a_max - a_min, "span": l_max - l_min})
+	mi.free()
+
+	assert_bool(ok).override_failure_message("expected a marking surface").is_true()
+	assert_int(results.size()).is_greater(0)
+	for r: Dictionary in results:
+		assert_float(r["span"]) \
+			.override_failure_message(
+				"stop bar must span across the road (span %.2f vs depth %.2f)"
+				% [r["span"], r["depth"]]) \
+			.is_greater(float(r["depth"]) * 2.0)
+
+
+func test_short_connector_road_survives_trimming() -> void:
+	# REGRESSION ("streets no longer connect"): a short way between two close
+	# junctions was asked to give up more length than it had, so it vanished
+	# entirely and left a visible hole in the network.
+	var data := OSMParser.OSMData.new()
+	# Junctions at (0,0) and (6,0) — a 6 m connector between two crossings.
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 6.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 6.0, -40.0), 6: _node(6, 6.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "residential"}),   # the short connector
+		2: _way(2, [3, 1, 4], {"highway": "residential"}),
+		3: _way(3, [5, 2, 6], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+
+	var mi := builder.build_road(data.ways[1], data)
+	assert_object(mi) \
+		.override_failure_message("a short connector must not vanish entirely") \
+		.is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	var remaining: float = b["max_x"] - b["min_x"]
+	assert_float(remaining) \
+		.override_failure_message(
+			"connector kept only %.2f m of its 6 m" % remaining) \
+		.is_greater(1.0)
+
+
+func test_trimming_never_consumes_a_whole_road() -> void:
+	# The general invariant behind the fix above: whatever the junctions ask
+	# for, a road must keep a usable fraction of its own length.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 3.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 3.0, -40.0), 6: _node(6, 3.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "primary", "lanes": "4"}),
+		2: _way(2, [3, 1, 4], {"highway": "primary", "lanes": "4"}),
+		3: _way(3, [5, 2, 6], {"highway": "primary", "lanes": "4"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var mi := builder.build_road(data.ways[1], data)
+	assert_object(mi) \
+		.override_failure_message(
+			"even a 3 m stub between two wide junctions must survive") \
+		.is_not_null()
+	if mi != null:
+		mi.free()

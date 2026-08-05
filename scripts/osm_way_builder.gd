@@ -47,6 +47,15 @@ const SIDEWALK_HEIGHT := RoadProfileScript.SIDEWALK_HEIGHT
 const SIDEWALK_COLOR := RoadProfileScript.SIDEWALK_COLOR
 const SIDEWALK_BASE_Y := 0.0
 
+## The most of a road's own length that junction trimming may consume, as a
+## fraction. A short connector between two close junctions can be asked to give
+## up more than it has; honouring that literally deletes the road (or leaves an
+## unusable sliver), which reads as the street failing to connect. Capping the
+## total trim keeps a visible ribbon on every way — the intersection caps simply
+## overlap it a little, which is invisible because they are opaque and painted
+## above the road surface.
+const MAX_TRIM_FRACTION := 0.6
+
 func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInstance3D:
 	var points := PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 
@@ -71,6 +80,7 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# out, and the hole this leaves is filled by a dedicated cap mesh (see
 	# build_junction_cap). Ways with no junction at an end still run to their
 	# terminal node, so a street that simply continues is unbroken.
+	var trim_start := _trim_at_way_start(way)
 	points = _trim_points_at_junctions(points, way)
 	if points.size() < 2:
 		# The whole way was consumed by its own junction trims — it is shorter
@@ -83,10 +93,16 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 			points, height_provider, terrain_grid_step)
 
 	# Transverse markings from OSM nodes ON this way (zebra crossings, stop and
-	# give-way lines). Built from the RAW node polyline so each marking's
-	# metres-along matches the ribbon UV.x (terrain subdivision below only adds
-	# collinear points and preserves path length).
+	# give-way lines). Built from the RAW node polyline, so each marking's
+	# metres-along is measured from the way's ORIGINAL start.
+	#
+	# The ribbon no longer starts there: junction trimming cuts trim_start metres
+	# off the front, and the ribbon UVs restart from that new origin. Without
+	# rebasing, every marking on a road that meets an intersection is painted
+	# trim_start metres too far along — which is what put zebra crossings and
+	# stop lines in visibly wrong places, sometimes out in the intersection.
 	var marking_spec := RoadMarkingSpec.from_way(way.node_ids, osm_data.nodes)
+	marking_spec = marking_spec.rebased(trim_start)
 	# Cumulative along-road distance at each point, plus total length, so the
 	# ribbon UVs (metres travelled) and the shader's end-fade line up.
 	var along_at := _cumulative_along(points)
@@ -162,6 +178,15 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	return mesh_instance
 
 
+## How far this way's ribbon is cut back at its FIRST node. Exposed separately
+## from the trimming itself because the marking spec must be rebased by exactly
+## this distance (the ribbon's UV origin moves with it).
+func _trim_at_way_start(way: OSMParser.OSMWay) -> float:
+	if network == null or way.node_ids.is_empty():
+		return 0.0
+	return network.trim_at(way.id, way.node_ids[0], true)
+
+
 ## Trim a road's centreline back from any junction at either end.
 ##
 ## The way's FIRST node is trimmed when a junction sits there (the ribbon then
@@ -186,6 +211,25 @@ func _trim_points_at_junctions(
 	var trim_end := network.trim_at(way.id, last_node, false)
 	if trim_start <= 0.0 and trim_end <= 0.0:
 		return points
+
+	# Short connector ways (slip roads, the stub between two close junctions) can
+	# be shorter than the trims their two ends ask for. Taking those literally
+	# deletes the road entirely or leaves a half-metre sliver, which reads as a
+	# hole in the network — the street visibly stops connecting.
+	#
+	# So the trims are scaled down to fit whatever the way can afford. The cap
+	# geometry then overlaps the ribbon slightly instead of meeting it exactly,
+	# which is invisible (the cap is opaque asphalt painted above the road) and
+	# far better than a missing street.
+	var total := 0.0
+	for i: int in range(points.size() - 1):
+		total += _xz_distance(points[i], points[i + 1])
+	var budget := total * MAX_TRIM_FRACTION
+	var requested := trim_start + trim_end
+	if requested > budget and requested > 0.0:
+		var scale := budget / requested
+		trim_start *= scale
+		trim_end *= scale
 
 	return _trim_polyline(points, trim_start, trim_end)
 

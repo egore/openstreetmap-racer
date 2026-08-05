@@ -49,6 +49,26 @@ func is_empty() -> bool:
 	return markings.is_empty()
 
 
+## A copy of this spec with every marking's along-distance shifted back by
+## `offset` metres, dropping any marking that falls before the new origin.
+##
+## Junction trimming cuts the front off a road's ribbon, so the ribbon's UV
+## origin moves `offset` metres down the way while these markings are still
+## measured from the way's original start. Rebasing realigns them; a marking
+## that now sits at a negative distance lay inside the intersection itself and
+## is dropped, because the cap covers that ground and paints its own markings.
+func rebased(offset: float) -> RoadMarkingSpec:
+	if offset <= 0.0:
+		return self
+	var out := RoadMarkingSpec.new()
+	for m: Marking in markings:
+		var shifted := m.along - offset
+		if shifted < 0.0:
+			continue
+		out.markings.append(Marking.new(shifted, m.kind))
+	return out
+
+
 ## Along-road distances (metres) as a flat float array, capped to MAX_MARKINGS.
 ## Ordering matches kinds().
 func along_positions() -> PackedFloat32Array:
