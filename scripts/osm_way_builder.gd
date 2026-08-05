@@ -81,13 +81,25 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# build_junction_cap). Ways with no junction at an end still run to their
 	# terminal node, so a street that simply continues is unbroken.
 	var trim_start := _trim_at_way_start(way)
-	points = _trim_points_at_junctions(points, way)
-	if points.size() < 2:
-		# The whole way was consumed by its own junction trims — it is shorter
-		# than the intersection it connects to. The caps cover that ground.
+	# One polyline per junction-to-junction span. A way running THROUGH an
+	# intersection is cut there too, not just at its own two ends.
+	var spans := _split_at_junctions(points, way, osm_data)
+	if spans.is_empty():
+		# Every span was consumed by its own junction trims — the way is shorter
+		# than the intersections it connects. The caps cover that ground.
 		return null
 
-	# Subdivide long segments so the ribbon follows the terrain.
+	# Subdivide long segments so each span follows the terrain.
+	if terrain_grid_step > 0.0:
+		var draped: Array = []
+		for span: PackedVector3Array in spans:
+			draped.append(PolygonUtils.subdivide_polyline_to_terrain(
+				span, height_provider, terrain_grid_step))
+		spans = draped
+
+	# The full (untrimmed) centreline is still what marking distances and the
+	# shader's end-fade are measured against, so keep it for the UV maths below.
+	points = PolygonUtils.way_to_points(way.node_ids, osm_data.nodes)
 	if terrain_grid_step > 0.0:
 		points = PolygonUtils.subdivide_polyline_to_terrain(
 			points, height_provider, terrain_grid_step)
@@ -140,17 +152,24 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	var conform := height_provider != null and height_provider.is_ready() \
 		and terrain_grid_step > 0.0
 
-	# Clip the centreline to the current tile (plus a small margin) so a way that
+	# Clip each span to the current tile (plus a small margin) so a way that
 	# spans many tiles only builds its in-tile portion here instead of its whole
 	# length in every tile it touches. Marking UVs are metres-from-way-start, so
 	# each clipped part carries the along-distance of its FIRST point (found in
 	# along_at by nearest original point) to keep markings aligned. When no clip
-	# rect is set (flat/whole-map path) the single full polyline is used as-is.
-	var parts: Array = [points]
-	if tile_clip_rect != null:
-		parts = PolygonUtils.clip_polyline_to_rect(points, tile_clip_rect, CLIP_MARGIN)
-		if parts.is_empty():
-			return null  # way doesn't actually enter this tile
+	# rect is set (flat/whole-map path) each span is used as-is.
+	var parts: Array = []
+	for span: PackedVector3Array in spans:
+		if span.size() < 2:
+			continue
+		if tile_clip_rect == null:
+			parts.append(span)
+			continue
+		for piece: PackedVector3Array in PolygonUtils.clip_polyline_to_rect(
+				span, tile_clip_rect, CLIP_MARGIN):
+			parts.append(piece)
+	if parts.is_empty():
+		return null  # way doesn't actually enter this tile
 
 	for part: PackedVector3Array in parts:
 		var part_pts: PackedVector3Array = part
@@ -187,14 +206,128 @@ func _trim_at_way_start(way: OSMParser.OSMWay) -> float:
 	return network.trim_at(way.id, way.node_ids[0], true)
 
 
+## Split a way into the spans between the junctions along it, each already
+## trimmed back at both ends.
+##
+## A way does not merely START and END at intersections — it commonly runs
+## THROUGH several. Those interior junction nodes must cut the ribbon too, or the
+## road is drawn as one continuous strip straight across every crossing it
+## passes. The junction cap cannot hide that: the cap is a rounded polygon while
+## the ribbon is a rectangle, so the ribbon's square corners stick out past the
+## cap's fillets — which is exactly the "street ends in a 90° edge" and the
+## "hole in the continuing street" seen in-game.
+##
+## Returns one polyline per drawable span. A way with no junctions on it yields a
+## single span (its whole length); a way crossing two junctions yields three.
+## Spans consumed entirely by their own trims are dropped.
+func _split_at_junctions(
+		points: PackedVector3Array, way: OSMParser.OSMWay,
+		osm_data: OSMParser.OSMData) -> Array:
+	if network == null or points.size() < 2 or way.node_ids.is_empty():
+		return [points] as Array
+
+	# Distance along the way of every junction node on it, paired with how far
+	# the ribbon must be cut back on each side of that junction.
+	var cuts: Array = []   # [{ along, trim_before, trim_after }]
+	var along := 0.0
+	var prev_pos := Vector3.ZERO
+	var have_prev := false
+	for i: int in range(way.node_ids.size()):
+		var nid: int = way.node_ids[i]
+		if not osm_data.nodes.has(nid):
+			continue
+		var pos: Vector3 = osm_data.nodes[nid].local_pos
+		if have_prev:
+			along += _xz_distance(prev_pos, pos)
+		prev_pos = pos
+		have_prev = true
+
+		if not network.has_junction(nid):
+			continue
+		# The arm LEAVING this node along the way (at_way_start=true) governs the
+		# cut on the far side; the arm ARRIVING here (false) governs the near
+		# side. At the way's own endpoints only one of the two exists.
+		var trim_after := network.trim_at(way.id, nid, true)
+		var trim_before := network.trim_at(way.id, nid, false)
+		if trim_after <= 0.0 and trim_before <= 0.0:
+			continue
+		cuts.append({
+			"along": along,
+			"trim_before": trim_before,
+			"trim_after": trim_after,
+		})
+
+	if cuts.is_empty():
+		return [points] as Array
+
+	var total := 0.0
+	for i: int in range(points.size() - 1):
+		total += _xz_distance(points[i], points[i + 1])
+
+	# Walk the way, emitting the span between each consecutive pair of cuts.
+	var spans: Array = []
+	var span_start := 0.0
+	var span_start_trim := 0.0
+	for cut: Dictionary in cuts:
+		var cut_at: float = cut["along"]
+		var end_trim: float = cut["trim_before"]
+		_append_span(spans, points, span_start, span_start_trim, cut_at, end_trim, total)
+		span_start = cut_at
+		span_start_trim = cut["trim_after"]
+	# Final span: last junction to the end of the way.
+	_append_span(spans, points, span_start, span_start_trim, total, 0.0, total)
+	return spans
+
+
+## Cut one span out of a polyline and append it, unless the trims consume it.
+##
+## `from`/`to` are distances along the polyline bounding the span; `trim_from`
+## and `trim_to` are pulled off each end. As in _trim_points_at_junctions, the
+## trims are scaled down rather than honoured literally when the span is too
+## short to afford them, so a stub between two close junctions still draws.
+func _append_span(
+		spans: Array, points: PackedVector3Array,
+		from: float, trim_from: float, to: float, trim_to: float,
+		_total: float) -> void:
+	var span_len := to - from
+	if span_len <= 0.01:
+		return
+	var requested := trim_from + trim_to
+	var budget := span_len * MAX_TRIM_FRACTION
+	if requested > budget and requested > 0.0:
+		var scale := budget / requested
+		trim_from *= scale
+		trim_to *= scale
+
+	var a := from + trim_from
+	var b := to - trim_to
+	if b - a <= 0.01:
+		return
+	spans.append(_slice_polyline(points, a, b))
+
+
+## The portion of a polyline between two distances along it, with exact
+## interpolated endpoints so a span's mouth lands precisely where the junction
+## cap expects it.
+static func _slice_polyline(
+		points: PackedVector3Array, from: float, to: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	out.append(_point_along(points, from))
+	var travelled := 0.0
+	for i: int in range(points.size()):
+		if i > 0:
+			travelled += _xz_distance(points[i - 1], points[i])
+		if travelled > from + 0.01 and travelled < to - 0.01:
+			out.append(points[i])
+	out.append(_point_along(points, to))
+	return out
+
+
 ## Trim a road's centreline back from any junction at either end.
 ##
-## The way's FIRST node is trimmed when a junction sits there (the ribbon then
-## starts further along), and likewise its LAST node. Interior junction nodes are
-## not cut here: the way passes through them, and the cap drawn there simply
-## overlays the ribbon. Cutting a way into pieces at every interior junction
-## would multiply the mesh count for no visual gain, because the cap is opaque
-## and painted above the road (see build_junction_cap).
+## Retained for the endpoint-only case and for tests that exercise a single way
+## in isolation. The streaming path goes through _split_at_junctions, which also
+## cuts the way at the intersections it passes THROUGH.
 ##
 ## Returns the (possibly shortened) polyline. When trimming would consume the
 ## whole way, an empty array is returned and the caller skips the ribbon.

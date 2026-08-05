@@ -278,15 +278,39 @@ func test_junction_material_outranks_the_roads_it_joins() -> void:
 		.is_greater(RoadMaterialFactory.render_priority_for("residential"))
 
 
-func test_junction_cap_disables_shader_lane_markings() -> void:
-	# The cap has no along/across parameterisation, so UV-driven lane lines
-	# would smear across it. Markings there are explicit geometry instead.
+func test_junction_cap_uses_a_depth_writing_shader() -> void:
+	# REGRESSION: render_priority only orders TRANSPARENT materials. Sharing the
+	# roads' depth_draw_never asphalt left the cap unable to claim its pixels
+	# against opaque geometry, so the terrain or a landuse polygon drawn later
+	# painted over the intersection — a grass hole where the junction should be,
+	# even though the cap was built, in the scene and above the ground.
 	var mat := RoadMaterialFactory.create_junction_material("residential")
 	assert_object(mat).is_instanceof(ShaderMaterial)
 	var sm := mat as ShaderMaterial
-	assert_float(sm.get_shader_parameter("markings_enabled")) \
-		.override_failure_message("cap must not paint shader lane markings") \
-		.is_equal_approx(0.0, 0.001)
+	# Check the render_mode LINE, not the whole source: the shader's own comment
+	# explains why depth_draw_never is wrong here, so a naive substring search
+	# matches the explanation rather than the declaration.
+	var mode_line := ""
+	for line: String in sm.shader.code.split("\n"):
+		if line.strip_edges().begins_with("render_mode"):
+			mode_line = line
+			break
+	assert_str(mode_line) \
+		.override_failure_message("cap shader must declare a render_mode") \
+		.is_not_empty()
+	assert_str(mode_line) \
+		.override_failure_message("junction caps must WRITE depth, got: %s" % mode_line) \
+		.not_contains("depth_draw_never")
+
+
+func test_junction_cap_has_no_uv_lane_markings() -> void:
+	# The cap has no along/across parameterisation, so UV-driven lane lines
+	# would smear across it. Markings there are explicit geometry instead.
+	var mat := RoadMaterialFactory.create_junction_material("residential")
+	var sm := mat as ShaderMaterial
+	assert_bool(sm.shader.code.contains("markings_enabled")) \
+		.override_failure_message("cap shader must not carry lane-marking code") \
+		.is_false()
 
 
 func test_bigger_road_still_outranks_smaller() -> void:
@@ -486,3 +510,96 @@ func test_trimming_never_consumes_a_whole_road() -> void:
 		.is_not_null()
 	if mi != null:
 		mi.free()
+
+
+func test_cap_faces_point_upward() -> void:
+	# REGRESSION: the cap was emitted with its winding inverted, so every face
+	# pointed DOWN and was backface-culled — the intersection was invisible from
+	# above (a grass-coloured hole) even though the mesh was built, present in
+	# the scene, marked visible and correctly positioned. Nothing but looking at
+	# the face normals catches this.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+
+	var mdt := MeshDataTool.new()
+	var ok := mdt.create_from_surface(mi.mesh, 0) == OK
+	var up := 0
+	var down := 0
+	if ok:
+		for f: int in range(mdt.get_face_count()):
+			var a := mdt.get_vertex(mdt.get_face_vertex(f, 0))
+			var b := mdt.get_vertex(mdt.get_face_vertex(f, 1))
+			var c := mdt.get_vertex(mdt.get_face_vertex(f, 2))
+			# Godot's front face is the winding normal Plane(a, b, c).normal.
+			if Plane(a, b, c).normal.y > 0.0:
+				up += 1
+			else:
+				down += 1
+	mi.free()
+
+	assert_bool(ok).is_true()
+	assert_int(up).override_failure_message("cap must have faces").is_greater(0)
+	assert_int(down) \
+		.override_failure_message(
+			"%d cap faces point DOWN and will be backface-culled" % down) \
+		.is_equal(0)
+
+
+func test_flat_and_draped_paths_use_opposite_windings() -> void:
+	# The two cap code paths need OPPOSITE input windings to face the same way:
+	# PolygonUtils.emit_terrain_conforming_quad fan-triangulates each clipped
+	# piece as (o, v2, v1), reversing whatever it is handed, while the flat path
+	# emits the order given. Fixing one and assuming the other followed is
+	# exactly how the cap ended up invisible in the DEM-backed world while the
+	# flat unit test passed.
+	var builder := OSMJunctionBuilder.new()
+	var a := Vector3(0.0, 0.0, 0.0)
+	var b := Vector3(10.0, 0.0, 0.0)
+	var c := Vector3(0.0, 0.0, 10.0)
+
+	var up := builder._wound_upward(a, b, c)
+	var down := builder._wound_downward(a, b, c)
+	assert_int(up.size()).is_equal(3)
+	assert_int(down.size()).is_equal(3)
+
+	# The upward winding must yield a +Y front face directly.
+	var up3: Array[Vector3] = []
+	for p: Vector2 in up:
+		up3.append(Vector3(p.x, 0.0, p.y))
+	assert_float(Plane(up3[0], up3[1], up3[2]).normal.y) \
+		.override_failure_message("_wound_upward must give a +Y front face") \
+		.is_greater(0.0)
+
+	# The downward winding must be its exact reverse, so that a consumer which
+	# flips the order (the terrain clipper) ends up facing up.
+	var down3: Array[Vector3] = []
+	for p: Vector2 in down:
+		down3.append(Vector3(p.x, 0.0, p.y))
+	assert_float(Plane(down3[0], down3[1], down3[2]).normal.y) \
+		.override_failure_message(
+			"_wound_downward must be the reverse of _wound_upward") \
+		.is_less(0.0)
+
+
+func test_winding_helper_is_independent_of_input_order() -> void:
+	# The triangulator hands over corners in whatever order it likes, so the
+	# helper must normalise both possible inputs to the same result.
+	var builder := OSMJunctionBuilder.new()
+	var a := Vector3(0.0, 0.0, 0.0)
+	var b := Vector3(10.0, 0.0, 0.0)
+	var c := Vector3(0.0, 0.0, 10.0)
+
+	for tri: Array in [[a, b, c], [a, c, b]]:
+		var w := builder._wound_upward(tri[0], tri[1], tri[2])
+		var v: Array[Vector3] = []
+		for p: Vector2 in w:
+			v.append(Vector3(p.x, 0.0, p.y))
+		assert_float(Plane(v[0], v[1], v[2]).normal.y) \
+			.override_failure_message(
+				"winding must face up regardless of input order") \
+			.is_greater(0.0)

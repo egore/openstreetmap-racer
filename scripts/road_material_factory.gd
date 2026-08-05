@@ -13,6 +13,9 @@ extends RefCounted
 ## state small while letting all roads share one compiled shader.
 
 const ASPHALT_SHADER: Shader = preload("res://scripts/shaders/asphalt.gdshader")
+## Depth-writing asphalt variant used by intersection caps (see the shader for
+## why the split is necessary).
+const ASPHALT_JUNCTION_SHADER: Shader = preload("res://scripts/shaders/asphalt_junction.gdshader")
 const RoadProfileScript := preload("res://scripts/road_profile.gd")
 
 ## Highway types rendered as plain matte surfaces rather than asphalt.
@@ -112,24 +115,33 @@ static func create_road_material(
 ## along/across parameterisation to paint lines into, and any markings there
 ## (stop bars, crossings) are emitted as explicit geometry by OSMJunctionBuilder.
 ##
-## Junctions render just ABOVE the roads that meet them (render_priority + 1) so
-## that where the cap and a ribbon mouth touch, the junction wins and the seam
-## never shimmers.
+## Draw rank for intersection caps. Above every road class so that where a cap
+## and a ribbon mouth touch, the junction wins the coplanar contest.
+##
+## This alone was not enough, which is worth recording: render_priority only
+## orders TRANSPARENT materials. Opaque surfaces are drawn by distance, so a cap
+## that (like the roads) never wrote depth had no way to claim its pixels, and
+## the terrain or a landuse polygon drawn afterwards painted straight over the
+## intersection — a grass-coloured hole where the junction should be, despite the
+## cap mesh being built, in the scene, visible and 24 mm above the ground. Caps
+## therefore use their own shader that WRITES depth (asphalt_junction.gdshader).
+const JUNCTION_PRIORITY := 30
+
 static func create_junction_material(highway_type: String) -> Material:
 	var color: Color = RoadProfileScript.color_for(highway_type)
 	if not RoadProfileScript.is_paved(highway_type):
 		var plain := StandardMaterial3D.new()
 		plain.albedo_color = color
 		plain.roughness = 1.0
-		plain.render_priority = render_priority_for(highway_type) + 1
+		# Depth-writing for the same reason as the paved path below: the cap must
+		# be able to claim its pixels against the ground it sits on.
+		plain.render_priority = JUNCTION_PRIORITY
 		return plain
 
 	var mat := ShaderMaterial.new()
-	mat.shader = ASPHALT_SHADER
+	mat.shader = ASPHALT_JUNCTION_SHADER
 	mat.set_shader_parameter("base_color", color)
-	mat.set_shader_parameter("markings_enabled", 0.0)
-	mat.set_shader_parameter("transverse_count", 0)
-	mat.render_priority = render_priority_for(highway_type) + 1
+	mat.render_priority = JUNCTION_PRIORITY
 	return mat
 
 
