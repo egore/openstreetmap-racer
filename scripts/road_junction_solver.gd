@@ -83,8 +83,15 @@ class Junction extends RefCounted:
 	## Arms in bearing order (counter-clockwise in XZ).
 	var arms: Array[Arm] = []
 	## Closed polygon (XZ, y = center.y) filling the hole left by the trimmed
-	## arms, corners rounded. Empty when the junction is degenerate.
+	## arms, corners rounded. Empty when the junction is degenerate. This is the
+	## polygon the renderer uses, after any repair (see raw_cap).
 	var cap: PackedVector3Array = PackedVector3Array()
+	## The cap exactly as walked from the arms, BEFORE the convex-hull repair
+	## that rescues self-intersecting acute forks. Exposed so tests can verify
+	## the corner geometry is correct by construction: asserting only on `cap`
+	## would pass even with the corner maths wrong, because the repair would
+	## quietly paper over it.
+	var raw_cap: PackedVector3Array = PackedVector3Array()
 	## Highway class of the widest arm — the cap renders as this class so a
 	## junction between a primary and a residential looks like primary asphalt.
 	var dominant_type: String = ""
@@ -331,7 +338,8 @@ static func _solve_one(node_id: int, arms_in: Array, center: Vector3) -> Junctio
 	junction.node_id = node_id
 	junction.center = center
 	junction.arms = arms
-	junction.cap = _build_cap(arms, center)
+	junction.raw_cap = _build_cap_walk(arms, center)
+	junction.cap = _ensure_simple(junction.raw_cap, center)
 	for arm: Arm in arms:
 		if arm.half_width > junction.max_half_width:
 			junction.max_half_width = arm.half_width
@@ -371,27 +379,32 @@ static func _angle_between(a: float, b: float) -> float:
 ## Distance from the junction node at which the facing edges of two adjacent
 ## arms cross.
 ##
-## Arm `a`'s LEFT edge and arm `b`'s RIGHT edge are the two that face each other
-## in a counter-clockwise ordering. Each edge is a line offset laterally from its
-## arm's axis; we intersect them and project the hit back onto each arm to get a
-## distance along it. The larger of the two projections is what both arms must
-## clear.
+## lateral() is (-dir.z, 0, dir.x), which in this bearing convention
+## (atan2(dir.z, dir.x)) points toward INCREASING bearing — that is, toward the
+## next arm counter-clockwise. So for an adjacent pair (a, b) taken in sorted
+## order, the two edges facing each other across the corner are:
 ##
-## The exact solution for two rays from a common origin, offset by their half
-## widths, reduces to a simple trig expression: for arms separated by angle θ,
-## the crossing sits at distance (w_a·cos(θ/2) + w_b) / sin(θ) style terms. We
-## solve it by direct line intersection instead, which stays numerically stable
-## for the wide range of θ real streets produce, and clamps for near-parallel.
+##     a's +lateral edge   and   b's -lateral edge
+##
+## This MUST match the pairing _build_cap uses to place its fillet, or the trim
+## would be computed for one corner and the geometry drawn at another. A
+## symmetric crossing hides the mistake (all four corners are congruent), but on
+## a real asymmetric junction the mouths end up in the wrong place and the cap
+## self-intersects instead of triangulating.
+##
+## Each edge is a line offset laterally from its arm's axis; we intersect them
+## and project the hit back onto each arm. The larger projection is the distance
+## both arms must clear. Direct line intersection is used rather than the closed
+## trig form because it stays stable across the wide range of angles real streets
+## produce, with an explicit guard for the near-parallel case.
 static func _corner_distance(a: Arm, b: Arm) -> float:
 	var theta := _angle_between(a.bearing, b.bearing)
 	# Near-parallel arms: edges barely converge, corner runs away to infinity.
 	if theta < MIN_ARM_SEPARATION or theta > PI - 0.001:
 		return maxf(a.half_width, b.half_width)
 
-	# a's left edge: origin offset by -lateral(a) * half_width, running along a.
-	# b's right edge: origin offset by +lateral(b) * half_width, running along b.
-	var a_off := -a.lateral() * a.half_width
-	var b_off := b.lateral() * b.half_width
+	var a_off := a.lateral() * a.half_width
+	var b_off := -b.lateral() * b.half_width
 
 	var hit := _ray_intersect_xz(a_off, a.dir, b_off, b.dir)
 	if not hit.hit:
@@ -446,7 +459,7 @@ static func _ray_intersect_xz(
 ## Getting this pairing the wrong way round does not merely mirror the shape: it
 ## connects each arm to the far side of the junction, producing a self-
 ## intersecting star that will not triangulate at all.
-static func _build_cap(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
+static func _build_cap_walk(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	var count := arms.size()
 	if count < MIN_ARMS:
@@ -469,6 +482,44 @@ static func _build_cap(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
 			nxt_mouth.x - nxt_lat.x, center.y, nxt_mouth.z - nxt_lat.z)
 		for p: Vector3 in _fillet_points(right, nxt_left, center):
 			out.append(p)
+	return out
+
+
+## Guarantee the cap is a simple (non-self-intersecting) polygon.
+##
+## Two arms meeting at a very acute angle need to be trimmed a long way back
+## before their mouths stop overlapping — sometimes further than MAX_TRIM allows.
+## When the clamp bites, the two mouths still overlap and the walk above crosses
+## itself, which will not triangulate: the junction would render as nothing at
+## all, leaving a hole in the road.
+##
+## Rather than let that happen (or raise MAX_TRIM and eat whole streets), we fall
+## back to the convex hull of the cap points. The hull is slightly larger than
+## the ideal cap at such a junction, which is the right way to be wrong here: a
+## fraction of a metre of extra asphalt at a sharp fork is invisible, whereas a
+## missing intersection is not. Affects roughly 1% of real junctions.
+static func _ensure_simple(
+		cap: PackedVector3Array, center: Vector3) -> PackedVector3Array:
+	if cap.size() < 3:
+		return cap
+	# Godot's triangulator rejects self-intersecting rings, which is exactly the
+	# condition we need to detect.
+	var flat := PackedVector2Array()
+	for p: Vector3 in cap:
+		flat.append(Vector2(p.x, p.z))
+	if Geometry2D.triangulate_polygon(flat).size() >= 3:
+		return cap
+
+	var hull := Geometry2D.convex_hull(flat)
+	if hull.size() < 3:
+		return cap  # nothing better to offer; caller skips a degenerate cap
+	var out := PackedVector3Array()
+	for p: Vector2 in hull:
+		out.append(Vector3(p.x, center.y, p.y))
+	# convex_hull repeats the first point to close the ring; drop it so the cap
+	# keeps the same open-ring convention as the normal path.
+	if out.size() > 1 and out[0].distance_to(out[out.size() - 1]) < 0.001:
+		out.remove_at(out.size() - 1)
 	return out
 
 
