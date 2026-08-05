@@ -119,19 +119,56 @@ func _emit_cap(st: SurfaceTool, junction: RoadJunctionSolverScript.Junction) -> 
 		if conform:
 			# Clip each triangle against the terrain grid so the intersection
 			# follows the ground exactly, the same treatment the ribbons get.
-			# Reusing the quad path with a degenerate 4th corner keeps one
-			# well-tested clipper rather than a second triangle-specific one.
-			var tri := PackedVector2Array([
-				Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z),
-			])
+			# Reusing the quad path keeps one well-tested clipper rather than a
+			# second triangle-specific one.
+			#
+			# The clipper fan-triangulates each clipped piece as (o, v2, v1) —
+			# i.e. it REVERSES the order it is handed. So it must be given the
+			# opposite winding to the flat path below to end up facing the same
+			# way. Getting this wrong emitted a cap whose every face pointed
+			# DOWN: backface-culled, so the intersection was invisible from above
+			# even though the mesh was built, in the scene, marked visible and
+			# correctly positioned.
+			var tri := _wound_downward(a, b, c)
 			PolygonUtils.emit_terrain_conforming_quad(
 				st, tri, height_provider, terrain_grid_step, CAP_Y)
 		else:
-			# Winding: the solver walks the cap counter-clockwise in XZ, which
-			# after Godot's Y-up convention presents as a downward face. Emit
-			# reversed so the surface faces up.
-			_add_flat_tri(st, a, c, b, CAP_Y)
+			# Same requirement on the flat path: Godot's front face is
+			# Plane(a, b, c).normal, so the triangle must be ordered such that
+			# this points +Y.
+			var up_tri := _wound_upward(a, b, c)
+			_add_flat_tri(
+				st,
+				Vector3(up_tri[0].x, 0.0, up_tri[0].y),
+				Vector3(up_tri[1].x, 0.0, up_tri[1].y),
+				Vector3(up_tri[2].x, 0.0, up_tri[2].y),
+				CAP_Y)
 	return true
+
+
+## The three XZ corners of a triangle, ordered so its front face points UP.
+##
+## Godot culls by the winding-front normal Plane(a, b, c).normal. For the signed
+## area (b-a)x(c-a) evaluated in XZ, a POSITIVE area already yields a +Y front
+## face; a negative one must be reversed. (Verified directly: the triangle
+## (0,0) (1,0) (0,1) has area +1 and Plane normal +Y.)
+func _wound_upward(a: Vector3, b: Vector3, c: Vector3) -> PackedVector2Array:
+	var area := (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z)
+	if area < 0.0:
+		return PackedVector2Array([
+			Vector2(a.x, a.z), Vector2(c.x, c.z), Vector2(b.x, b.z),
+		])
+	return PackedVector2Array([
+		Vector2(a.x, a.z), Vector2(b.x, b.z), Vector2(c.x, c.z),
+	])
+
+
+## The same three corners wound the OTHER way, for consumers that reverse the
+## order themselves (PolygonUtils.emit_terrain_conforming_quad fan-triangulates
+## as (o, v2, v1), so feeding it an upward winding yields downward faces).
+func _wound_downward(a: Vector3, b: Vector3, c: Vector3) -> PackedVector2Array:
+	var up := _wound_upward(a, b, c)
+	return PackedVector2Array([up[0], up[2], up[1]])
 
 
 ## Emit one upward-facing triangle at `y_offset` above the terrain.
@@ -268,26 +305,28 @@ func _emit_one_corner(
 	var a_inner := a_mouth + a.lateral() * a.half_width       # a's right edge
 	var b_inner := b_mouth - b.lateral() * b.half_width       # b's left edge
 
-	# Sweep the corner as an arc so the pavement turns smoothly rather than
-	# forming a spike. Matching the cap's own fillet keeps the two concentric.
-	var segments := RoadJunctionSolverScript.FILLET_SEGMENTS
-	var inner_pts := _arc_between(a_inner, b_inner, centre, segments)
+	# Turn the corner along the KERB LINES of the two arms rather than along a
+	# circle about the junction centre.
+	#
+	# A centre-arc looks wrong for the same reason it is easy to reach for: the
+	# two kerb ends are roughly equidistant from the node, so an arc joins them
+	# — but it bulges out into the middle of the intersection instead of hugging
+	# the corner, which reads as a curved sliver of pavement floating in the
+	# junction. A real kerb runs straight along each road and turns only at the
+	# corner itself, so the curve must be tangent to both kerb lines: a quadratic
+	# Bezier whose control point is where those two lines actually meet.
+	var corner := _kerb_lines_meet(a_inner, a.dir, b_inner, b.dir)
+	var segments: int = maxi(RoadJunctionSolverScript.FILLET_SEGMENTS, 2)
+	var inner_pts := _bezier_arc(a_inner, corner, b_inner, segments)
 	if inner_pts.size() < 2:
 		return false
 
-	# The outer edge is the inner arc pushed RADIALLY outward from the junction
-	# centre. Offsetting along each arm's lateral instead would move the two ends
-	# toward each other around the corner, inverting the sweep direction and
-	# producing a pavement that wraps the wrong way around the intersection.
+	# The outer edge is the inner curve pushed away from the carriageway. The
+	# offset direction is the curve's own outward normal, so the pavement keeps a
+	# constant depth all the way round instead of pinching where the curve turns
+	# fastest (which a radial push from the junction centre does).
 	var depth := RoadProfileScript.SIDEWALK_WIDTH
-	var outer_pts := PackedVector3Array()
-	for p: Vector3 in inner_pts:
-		var radial := Vector3(p.x - centre.x, 0.0, p.z - centre.z)
-		if radial.length_squared() < 0.000001:
-			radial = Vector3(1.0, 0.0, 0.0)
-		radial = radial.normalized()
-		outer_pts.append(Vector3(
-			p.x + radial.x * depth, p.y, p.z + radial.z * depth))
+	var outer_pts := _offset_curve_outward(inner_pts, centre, depth)
 
 	var kerb_h := RoadProfileScript.SIDEWALK_HEIGHT
 	# Ramp profile: full kerb height through the middle of the corner, dropping
@@ -323,6 +362,82 @@ func _ramp_height(i: int, n: int, full_height: float) -> float:
 	if edge_dist >= ramp:
 		return full_height
 	return full_height * (float(edge_dist) / float(ramp))
+
+
+## Where the two arms' kerb lines would meet if extended past the junction.
+##
+## Each kerb line runs along its arm's direction through that arm's mouth edge.
+## Their intersection is the sharp corner the pavement turns at, and so the
+## control point for the rounded fillet. Near-parallel arms have no usable
+## intersection; the midpoint is then a safe stand-in (the fillet degenerates to
+## a gentle curve, which is correct for two roads meeting head-on).
+func _kerb_lines_meet(
+		a_point: Vector3, a_dir: Vector3,
+		b_point: Vector3, b_dir: Vector3) -> Vector3:
+	var denom := a_dir.x * b_dir.z - a_dir.z * b_dir.x
+	if absf(denom) < 0.0001:
+		return a_point.lerp(b_point, 0.5)
+	var dx := b_point.x - a_point.x
+	var dz := b_point.z - a_point.z
+	var t := (dx * b_dir.z - dz * b_dir.x) / denom
+	# Clamp how far the corner may sit from the kerb ends. A very acute pair
+	# throws the intersection a long way out, which would balloon the fillet
+	# across the whole junction.
+	var span := Vector2(a_point.x - b_point.x, a_point.z - b_point.z).length()
+	t = clampf(t, -span * 2.0, span * 2.0)
+	return Vector3(a_point.x + a_dir.x * t, a_point.y, a_point.z + a_dir.z * t)
+
+
+## Quadratic Bezier from `from` to `to` bending toward `control`, inclusive of
+## both endpoints. Tangent to both kerb lines at the ends, which is what makes
+## the corner flow out of the straight pavement rather than kinking.
+func _bezier_arc(
+		from: Vector3, control: Vector3, to: Vector3,
+		segments: int) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var steps: int = maxi(segments, 1)
+	for s: int in range(steps + 1):
+		var t := float(s) / float(steps)
+		var inv := 1.0 - t
+		# B(t) = (1-t)^2 P0 + 2(1-t)t P1 + t^2 P2
+		var w0 := inv * inv
+		var w1 := 2.0 * inv * t
+		var w2 := t * t
+		out.append(Vector3(
+			from.x * w0 + control.x * w1 + to.x * w2,
+			from.y,
+			from.z * w0 + control.z * w1 + to.z * w2))
+	return out
+
+
+## Offset a curve away from the carriageway by `depth`, using each point's own
+## outward normal so the pavement keeps a constant width around the bend.
+##
+## "Outward" is disambiguated by the junction centre: the normal is flipped when
+## it points back toward the intersection, so the pavement always lands on the
+## far side of the kerb from the road.
+func _offset_curve_outward(
+		curve: PackedVector3Array, centre: Vector3,
+		depth: float) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var n := curve.size()
+	for i: int in range(n):
+		# Local tangent from the neighbouring samples (one-sided at the ends).
+		var prev: Vector3 = curve[maxi(i - 1, 0)]
+		var next: Vector3 = curve[mini(i + 1, n - 1)]
+		var tangent := Vector3(next.x - prev.x, 0.0, next.z - prev.z)
+		if tangent.length_squared() < 0.000001:
+			tangent = Vector3(1.0, 0.0, 0.0)
+		tangent = tangent.normalized()
+		var normal := Vector3(-tangent.z, 0.0, tangent.x)
+		# Point it away from the junction centre.
+		var p: Vector3 = curve[i]
+		var to_centre := Vector3(centre.x - p.x, 0.0, centre.z - p.z)
+		if normal.dot(to_centre) > 0.0:
+			normal = -normal
+		out.append(Vector3(
+			p.x + normal.x * depth, p.y, p.z + normal.z * depth))
+	return out
 
 
 ## Points along an arc from `from` to `to` about `centre`, inclusive of both
