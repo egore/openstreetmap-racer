@@ -5,6 +5,7 @@ extends Node3D
 ## via signals instead of having those nodes reach across the tree themselves.
 
 const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
+const ScreenshotScript := preload("res://scripts/screenshot.gd")
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
@@ -147,10 +148,13 @@ func _process(delta: float) -> void:
 	if not get_tree().paused:
 		speed_blur.update_speed(car.linear_velocity.length() * 3.6, delta)
 
-## F3 toggles the frame tracer (also enable non-interactively with OSMRACER_TRACE=1);
-## F4 dumps the per-label timing summary. Used to hunt streaming/loading stutters:
-## with tracing on, any main-thread span over the threshold prints "[trace] <label>
-## took N ms", naming the culprit. See scripts/frame_tracer.gd.
+## Debug keys:
+##   F3  toggle the frame tracer (also settable via OSMRACER_TRACE=1)
+##   F4  dump the per-label timing summary — used to hunt streaming stutters:
+##       any main-thread span over the threshold prints "[trace] <label> took
+##       N ms", naming the culprit. See scripts/frame_tracer.gd.
+##   F5  toggle wet-road weather
+##   P   save a screenshot (see scripts/screenshot.gd)
 func _unhandled_key_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null or not key.pressed or key.echo:
@@ -164,6 +168,22 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif key.keycode == KEY_F5:
 		# Flip wet-road weather via the checkbox (keeps key and menu in sync).
 		wet_weather_toggle.button_pressed = not weather_controller.is_wet()
+	elif key.keycode == KEY_P:
+		_take_screenshot()
+
+
+## Save a PNG of the current frame and report where it went.
+##
+## The viewport texture is only valid once the frame has actually been drawn, so
+## this waits for frame_post_draw before grabbing it — reading it straight from
+## the input callback yields the PREVIOUS frame (or a blank image on the first
+## one), which is exactly the sort of off-by-one that makes a capture look like
+## it disproves a fix it never showed.
+func _take_screenshot() -> void:
+	await RenderingServer.frame_post_draw
+	var path: String = ScreenshotScript.capture(get_viewport())
+	if path != "":
+		print("[screenshot] saved %s" % path)
 
 ## Pauses or resumes the game. Godot's scene-tree pause cleanly halts car
 ## physics, tile streaming and HUD updates without the hacky "near-zero
