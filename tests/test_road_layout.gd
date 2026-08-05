@@ -8,14 +8,19 @@ extends GdUnitTestSuite
 ##       count (lane_count × LANE_WIDTH) instead of the flat per-type default,
 ##       never shrinking below that default. An explicit `width` tag still wins.
 ##
-##   (b) Lane attachment. A single-lane street that TERMINATES at the terminal
-##       end of a two-lane street is nudged sideways so its centreline meets one
-##       of that street's two lane centres, not its middle. Two single-lane
-##       branches sharing that end take the two DIFFERENT lanes.
+##   (b) Junction trimming. A road that ends at a real intersection is pulled
+##       back so the intersection cap can fill the crossing. A road that merely
+##       continues into another way is NOT trimmed, so straight streets stay
+##       unbroken.
+##
+## The old "lane attachment" behaviour (nudging a narrow road sideways onto a
+## wider road's lane centre) was a workaround for having no intersections at
+## all. Real junction geometry replaces it, so those tests are gone.
 
 const OSMParser := preload("res://scripts/osm_parser.gd")
 const OSMWayBuilder := preload("res://scripts/osm_way_builder.gd")
 const RoadLaneSpec := preload("res://scripts/road_lane_spec.gd")
+const RoadNetworkContext := preload("res://scripts/road_network_context.gd")
 
 
 func _node(id: int, x: float, z: float) -> OSMParser.OSMNode:
@@ -129,117 +134,169 @@ func test_unmarked_footway_keeps_literal_type_default() -> void:
 	assert_float(w).is_equal_approx(1.5, 0.05)
 
 
-# ─── (b) lane attachment ─────────────────────────────────────────────────────
+# ─── (b) junction trimming ───────────────────────────────────────────────────
 
-## Two-lane trunk running S→N and ENDING at node N=(0,0). Two single-lane
-## residential branches continue north from N. Each branch's near end should be
-## nudged onto one of the trunk's two lane centres (±width/4 in X), and the two
-## branches must land on DIFFERENT lanes.
-func _forked_end() -> OSMParser.OSMData:
-	# Branches run STRAIGHT north (X≈0) through the whole 8 m taper zone before
-	# angling away, so the tapered tip's lateral shift lands purely in X and the
-	# near-end centreline is cleanly measurable as the midpoint of its X extent.
+## A + crossing of two roads at the origin, plus the solved network context that
+## OSMWayBuilder consults to know where to cut each ribbon.
+func _crossing() -> Dictionary:
 	var data := OSMParser.OSMData.new()
 	data.nodes = {
-		1: _node(1, 0.0, -60.0),   # trunk south end
-		2: _node(2, 0.0, 0.0),     # shared junction N
-		5: _node(5, 0.0, 12.0),    # branch A straight run out of taper zone
-		3: _node(3, -20.0, 60.0),  # branch A far end (leans left / -X)
-		6: _node(6, 0.0, 12.0),    # branch B straight run out of taper zone
-		4: _node(4, 20.0, 60.0),   # branch B far end (leans right / +X)
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 60.0, 0.0),
+		4: _node(4, 0.0, -60.0), 5: _node(5, 0.0, 60.0),
 	}
 	data.ways = {
-		# Two-lane anchor terminating at node 2.
-		1: _way(1, [1, 2], {"highway": "trunk", "lanes": "2"}),
-		# Single-lane branches, each terminating at node 2, running straight first.
-		2: _way(2, [2, 5, 3], {"highway": "residential", "lanes": "1", "oneway": "yes"}),
-		3: _way(3, [2, 6, 4], {"highway": "residential", "lanes": "1", "oneway": "yes"}),
+		1: _way(1, [1, 2, 3], {"highway": "residential"}),
+		2: _way(2, [4, 2, 5], {"highway": "residential"}),
 	}
-	return data
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var net := RoadNetworkContext.build(ways, ways, data.nodes, [])
+	return {"data": data, "net": net}
 
 
-func test_branch_end_attaches_to_a_lane_not_center() -> void:
-	# The anchor is a two-lane trunk. Its width is max(2×3.5, trunk default 10)=10,
-	# so each lane is 5 m wide and its two lane centres sit at ±2.5 m from the
-	# centreline. The two single-lane branches must be nudged onto those centres.
-	var data := _forked_end()
-	var anchor_spec := RoadLaneSpec.from_tags("trunk", {"lanes": "2"})
+func test_road_ending_at_a_junction_is_trimmed_back() -> void:
+	# A road that terminates at an intersection must stop short of it so the
+	# junction cap can fill the crossing; running to the node would overlap.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 60.0, 0.0),
+		3: _node(3, -60.0, 0.0), 4: _node(4, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [3, 1, 2], {"highway": "residential"}),  # through road
+		2: _way(2, [1, 4], {"highway": "residential"}),     # spur from the node
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
 	var builder := OSMWayBuilder.new()
-	var anchor_width := builder._road_width("trunk", {"lanes": "2"}, anchor_spec)
-	var lane_offset := anchor_width / 4.0  # 2-lane road: lane centre = width/4
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
 
-	var off_a := builder._lane_attach_offset(2, data.ways[2], data)
-	var off_b := builder._lane_attach_offset(2, data.ways[3], data)
-
-	# Offset is lateral (perpendicular to the N–S trunk → along X), magnitude =
-	# lane_offset, and NOT along the trunk (no Z component).
-	assert_float(off_a.z).is_equal_approx(0.0, 0.001)
-	assert_float(off_b.z).is_equal_approx(0.0, 0.001)
-	assert_float(absf(off_a.x)).override_failure_message(
-		"branch A must land on a lane centre (|x|≈%.2f), got %.3f"
-		% [lane_offset, off_a.x]).is_equal_approx(lane_offset, 0.01)
-	assert_float(absf(off_b.x)).override_failure_message(
-		"branch B must land on a lane centre (|x|≈%.2f), got %.3f"
-		% [lane_offset, off_b.x]).is_equal_approx(lane_offset, 0.01)
-	# The two branches take OPPOSITE lanes (one -X, one +X).
-	assert_bool(signf(off_a.x) != signf(off_b.x)).override_failure_message(
-		"two branches must attach to different lanes, got a=%.3f b=%.3f"
-		% [off_a.x, off_b.x]).is_true()
-
-
-func test_branch_end_shift_shows_in_mesh() -> void:
-	# End-to-end: the built branch mesh's near-junction (Z≈0) extent is shifted
-	# sideways vs the same branch built with NO anchor (baseline centred at X=0).
-	var data := _forked_end()
-	var builder := OSMWayBuilder.new()
 	var mi := builder.build_road(data.ways[2], data)
 	assert_object(mi).is_not_null()
 	if mi == null:
 		return
-	var shifted := _near_end_x_extent(mi.mesh)
+	var b := _bounds_of_mesh(mi.mesh)
 	mi.free()
-
-	# Baseline: drop the wide anchor so no attachment happens.
-	var base_data := _forked_end()
-	base_data.ways.erase(1)
-	var mi_base := builder.build_road(base_data.ways[2], base_data)
-	var base := _near_end_x_extent(mi_base.mesh)
-	mi_base.free()
-
-	# Both extent bounds move the same way (a rigid lateral shift), by ~2.5 m.
-	var shift: float = shifted["min_x"] - base["min_x"]
-	assert_float(shift).override_failure_message(
-		"branch near-end should shift laterally onto its lane, got %.3f" % shift) \
-		.is_equal_approx(-2.5, 0.4)
+	assert_float(b["min_z"]) \
+		.override_failure_message(
+			"spur must stop short of the junction, got min_z=%.2f" % b["min_z"]) \
+		.is_greater(0.5)
 
 
-## [min_x, max_x] of the vertices nearest the junction end (Z≈min_z), as a dict.
-func _near_end_x_extent(mesh: Mesh) -> Dictionary:
-	var mdt := MeshDataTool.new()
-	mdt.create_from_surface(mesh, 0)
-	var min_z := INF
-	for vi: int in range(mdt.get_vertex_count()):
-		min_z = minf(min_z, mdt.get_vertex(vi).z)
-	var out := {"min_x": INF, "max_x": -INF}
-	for vi: int in range(mdt.get_vertex_count()):
-		var v := mdt.get_vertex(vi)
-		if absf(v.z - min_z) < 2.0:
-			out["min_x"] = minf(out["min_x"], v.x)
-			out["max_x"] = maxf(out["max_x"], v.x)
-	return out
-
-
-func test_no_attachment_without_wide_anchor() -> void:
-	# Single-lane road meeting a single-lane road: no 2+ lane anchor, so no
-	# lateral shift is computed.
+func test_road_not_at_a_junction_runs_to_its_node() -> void:
+	# Two ways simply meeting end to end is a continuation, not an intersection.
+	# Trimming there would tear a hole in a straight street.
 	var data := OSMParser.OSMData.new()
 	data.nodes = {
-		1: _node(1, 0.0, -60.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 0.0, 60.0),
+		1: _node(1, 0.0, 0.0), 2: _node(2, 0.0, 60.0), 3: _node(3, 0.0, -60.0),
 	}
 	data.ways = {
-		1: _way(1, [1, 2], {"highway": "residential", "lanes": "1", "oneway": "yes"}),
-		2: _way(2, [2, 3], {"highway": "residential", "lanes": "1", "oneway": "yes"}),
+		1: _way(1, [3, 1], {"highway": "residential"}),
+		2: _way(2, [1, 2], {"highway": "residential"}),
 	}
-	var off := OSMWayBuilder.new()._lane_attach_offset(2, data.ways[2], data)
-	assert_vector(off).override_failure_message(
-		"no wide anchor → no lateral shift, got %s" % off).is_equal(Vector3.ZERO)
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+
+	var mi := builder.build_road(data.ways[2], data)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	assert_float(b["min_z"]) \
+		.override_failure_message(
+			"a continuing road must not be trimmed, got min_z=%.2f" % b["min_z"]) \
+		.is_less_equal(0.01)
+
+
+func test_trimming_preserves_the_far_end() -> void:
+	# Only the junction end moves; the far end must still reach its own node.
+	var fx := _crossing()
+	var builder := OSMWayBuilder.new()
+	builder.network = fx["net"]
+	var mi := builder.build_road(fx["data"].ways[1], fx["data"])
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	assert_float(b["min_x"]).is_less_equal(-59.9)
+	assert_float(b["max_x"]).is_greater_equal(59.9)
+
+
+func test_trimmed_road_keeps_its_full_width() -> void:
+	# Trimming shortens a road; it must not narrow it.
+	var fx := _crossing()
+	var builder := OSMWayBuilder.new()
+	builder.network = fx["net"]
+	var mi := builder.build_road(fx["data"].ways[1], fx["data"])
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	var width: float = b["max_z"] - b["min_z"]
+	assert_float(width) \
+		.override_failure_message("trimmed road must keep its width") \
+		.is_equal_approx(7.0, 0.1)
+
+
+func test_no_network_means_no_trimming() -> void:
+	# With no solved network (flat/legacy path, or a way built in isolation) the
+	# builder must fall back to full-length ribbons rather than crashing.
+	var fx := _crossing()
+	var builder := OSMWayBuilder.new()
+	builder.network = null
+	var mi := builder.build_road(fx["data"].ways[2], fx["data"])
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	assert_float(b["min_z"]).is_less_equal(-59.9)
+
+
+func test_footway_crossing_a_road_does_not_trim_it() -> void:
+	# A footpath crossing a street is a painted crossing, not an intersection.
+	# Carving a junction cap there would gouge the carriageway.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 60.0, 0.0),
+		4: _node(4, 0.0, -60.0), 5: _node(5, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "residential"}),
+		2: _way(2, [4, 2, 5], {"highway": "footway"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var mi := builder.build_road(data.ways[1], data)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	assert_float(b["min_x"]) \
+		.override_failure_message("a footway must not trim a road") \
+		.is_less_equal(-59.9)
+
+
+func test_tunnel_road_is_not_drawn_on_the_surface() -> void:
+	var fx := _single_road({"highway": "primary", "tunnel": "yes"})
+	var mi := OSMWayBuilder.new().build_road(fx["way"], fx["data"])
+	assert_object(mi) \
+		.override_failure_message("a tunnel must not render on the surface") \
+		.is_null()
+
+
+func test_bridge_road_is_lifted_above_ground() -> void:
+	var fx := _single_road({"highway": "primary", "bridge": "yes"})
+	var mi := OSMWayBuilder.new().build_road(fx["way"], fx["data"])
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var y := mi.position.y
+	mi.free()
+	assert_float(y) \
+		.override_failure_message("a bridge must ride above ground level") \
+		.is_greater(2.0)

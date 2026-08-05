@@ -13,6 +13,7 @@ extends RefCounted
 ## state small while letting all roads share one compiled shader.
 
 const ASPHALT_SHADER: Shader = preload("res://scripts/shaders/asphalt.gdshader")
+const RoadProfileScript := preload("res://scripts/road_profile.gd")
 
 ## Highway types rendered as plain matte surfaces rather than asphalt.
 const UNPAVED_TYPES := {
@@ -101,6 +102,56 @@ static func create_road_material(
 	mat.render_priority = priority
 	_apply_lane_markings(mat, lane_spec, road_width, road_length)
 	_apply_transverse_markings(mat, marking_spec, road_width)
+	return mat
+
+
+## Material for a junction cap (the intersection surface itself).
+##
+## Same procedural asphalt as the ribbons — the crossing must look like the
+## roads that feed it — but with lane markings disabled: the cap has no
+## along/across parameterisation to paint lines into, and any markings there
+## (stop bars, crossings) are emitted as explicit geometry by OSMJunctionBuilder.
+##
+## Junctions render just ABOVE the roads that meet them (render_priority + 1) so
+## that where the cap and a ribbon mouth touch, the junction wins and the seam
+## never shimmers.
+static func create_junction_material(highway_type: String) -> Material:
+	var color: Color = RoadProfileScript.color_for(highway_type)
+	if not RoadProfileScript.is_paved(highway_type):
+		var plain := StandardMaterial3D.new()
+		plain.albedo_color = color
+		plain.roughness = 1.0
+		plain.render_priority = render_priority_for(highway_type) + 1
+		return plain
+
+	var mat := ShaderMaterial.new()
+	mat.shader = ASPHALT_SHADER
+	mat.set_shader_parameter("base_color", color)
+	mat.set_shader_parameter("markings_enabled", 0.0)
+	mat.set_shader_parameter("transverse_count", 0)
+	mat.render_priority = render_priority_for(highway_type) + 1
+	return mat
+
+
+## Material for painted road markings emitted as explicit geometry (stop bars
+## and crossings on junction caps, where the shader's UV-driven markings can't
+## reach). Slightly glossier than asphalt, like fresh paint.
+static func create_marking_material() -> Material:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.85, 0.82, 0.62)
+	mat.roughness = 0.55
+	# Paint sits on top of every road surface, so it must outrank them all.
+	mat.render_priority = 40
+	return mat
+
+
+## Material for kerbs / sidewalks. Shared by the ribbon builder and the junction
+## corner builder so a corner is indistinguishable from the pavement leading
+## into it.
+static func create_sidewalk_material() -> Material:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = RoadProfileScript.SIDEWALK_COLOR
+	mat.roughness = 0.95
 	return mat
 
 
