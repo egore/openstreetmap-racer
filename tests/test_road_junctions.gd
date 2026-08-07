@@ -545,6 +545,94 @@ func test_sub_metre_stub_between_junctions_is_dropped() -> void:
 		.is_false()
 
 
+func test_ribbon_mouth_meets_the_cap_on_a_road_that_bends() -> void:
+	# REGRESSION (screenshot: "the street ends at a different angle than the
+	# intersection polygon"). The solver placed the cap mouth by walking a
+	# STRAIGHT RAY from the junction node; OSMWayBuilder cuts the ribbon by ARC
+	# LENGTH along the way's real polyline. On a road that bends within its own
+	# trim distance those are different points on different segments, so the cap
+	# was cut at one angle and the ribbon at another — leaving a wedge of bare
+	# ground on one side and a jutting corner on the other.
+	#
+	# This is an END-TO-END test on purpose: it compares the cap polygon against
+	# the vertices of the ribbon mesh that is actually built. The solver-level
+	# test of the same bug can only check the solver against itself.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0),
+		2: _node(2, 0.0, 0.0),        # the junction
+		3: _node(3, 60.0, 0.0),
+		# Stem leaving south, bending south-east after only 3 m — inside the trim.
+		10: _node(10, 0.0, 3.0),
+		11: _node(11, 8.0, 20.0),
+		12: _node(12, 20.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "primary"}),
+		2: _way(2, [2, 10, 11, 12], {"highway": "primary"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var net := RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var junction: RoadJunctionSolver.Junction = net.junction_at(2)
+	assert_object(junction).is_not_null()
+	if junction == null:
+		return
+
+	var stem: RoadJunctionSolver.Arm = null
+	for arm: RoadJunctionSolver.Arm in junction.arms:
+		if arm.way_id == 2:
+			stem = arm
+	assert_object(stem).is_not_null()
+	if stem == null:
+		return
+
+	# Guard: the fixture must actually bend inside the trim, or this test would
+	# pass trivially against the very bug it exists to catch.
+	assert_float(stem.dir_at(stem.trim).dot(stem.dir)) \
+		.override_failure_message("fixture does not bend inside its trim") \
+		.is_less(0.99)
+
+	var builder := OSMWayBuilder.new()
+	builder.network = net
+	var road := builder.build_road(data.ways[2], data)
+	assert_object(road).is_not_null()
+	if road == null:
+		return
+
+	# The ribbon's two starting edge vertices are the mouth it presents to the
+	# junction. Find the mesh vertices closest to where the cap says they are.
+	var cap_mouth := stem.point_at(junction.center, stem.trim)
+	var cap_lat := stem.lateral_at(stem.trim) * stem.half_width
+	var cap_left := Vector2(cap_mouth.x - cap_lat.x, cap_mouth.z - cap_lat.z)
+	var cap_right := Vector2(cap_mouth.x + cap_lat.x, cap_mouth.z + cap_lat.z)
+
+	var best_left := INF
+	var best_right := INF
+	var mdt := MeshDataTool.new()
+	var ok := mdt.create_from_surface(road.mesh, 0) == OK
+	if ok:
+		for vi: int in range(mdt.get_vertex_count()):
+			var v := mdt.get_vertex(vi)
+			var p := Vector2(v.x, v.z)
+			best_left = minf(best_left, p.distance_to(cap_left))
+			best_right = minf(best_right, p.distance_to(cap_right))
+	road.free()
+
+	assert_bool(ok).override_failure_message("expected a road surface").is_true()
+	# Both corners of the cap's mouth must coincide with real ribbon vertices.
+	# Before the fix the mouth was ~1.6 m adrift and 25 degrees out of square.
+	assert_float(best_left) \
+		.override_failure_message(
+			"cap's left mouth corner is %.3f m from the nearest ribbon vertex"
+			% best_left) \
+		.is_less(0.05)
+	assert_float(best_right) \
+		.override_failure_message(
+			"cap's right mouth corner is %.3f m from the nearest ribbon vertex"
+			% best_right) \
+		.is_less(0.05)
+
+
 func test_cap_faces_point_upward() -> void:
 	# REGRESSION: the cap was emitted with its winding inverted, so every face
 	# pointed DOWN and was backface-culled — the intersection was invisible from
