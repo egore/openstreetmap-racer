@@ -65,6 +65,50 @@ func _cross_data() -> Dictionary:
 	return {"nodes": nodes, "ways": ways}
 
 
+## A T-junction at node 0: a through-road running west-east, with a single stem
+## leaving SOUTH (+Z). Nothing at all to the north.
+##
+## The asymmetry is the point. A symmetric + crossing is congruent under the
+## rotation that maps each arm onto the next, so a cap that is far too big is
+## still a plausible-looking shape and every corner is wrong in the same way. A T
+## has an OPEN side with no road on it, which is precisely where an over-sized
+## cap spills onto the verge and becomes visible.
+func _t_junction_data() -> Dictionary:
+	var nodes := {
+		0: _node(0, 0, 0),
+		1: _node(1, 50, 0),
+		2: _node(2, -50, 0),
+		3: _node(3, 0, 50),
+	}
+	var ways: Array = [
+		_way(1, [2, 0, 1]),   # west -> east, through the centre
+		_way(2, [0, 3]),      # stem leaving south
+	]
+	return {"nodes": nodes, "ways": ways}
+
+
+## A three-arm junction with no right angles anywhere: arms leave at roughly
+## 0, 130 and 235 degrees.
+##
+## Needed because right-angle corners are a degenerate case for the cap — the two
+## facing mouth corners coincide and collapse to a single vertex. Both the +
+## crossing and a square T hit that case on every corner, so neither can show
+## whether each arm really contributes two points.
+func _skew_fork_data() -> Dictionary:
+	var nodes := {
+		0: _node(0, 0, 0),
+		1: _node(1, 50, 0),
+		2: _node(2, -32, 38),
+		3: _node(3, -29, -41),
+	}
+	var ways: Array = [
+		_way(1, [0, 1]),
+		_way(2, [0, 2]),
+		_way(3, [0, 3]),
+	]
+	return {"nodes": nodes, "ways": ways}
+
+
 # ─── Junction detection ──────────────────────────────────────────────────────
 
 func test_detects_four_way_crossing() -> void:
@@ -303,6 +347,78 @@ func test_cap_is_convex_for_a_symmetric_crossing() -> void:
 	assert_bool(_is_convex(j.cap)) \
 		.override_failure_message("symmetric crossing cap must be convex") \
 		.is_true()
+
+
+func test_cap_has_exactly_two_points_per_arm() -> void:
+	# REGRESSION: the cap used to insert a multi-point "fillet arc" between every
+	# pair of arms, which turned a 4-arm crossing into a 20-gon. Each arm should
+	# contribute only the two vertices it actually justifies — its left and right
+	# mouth corners — with consecutive arms joined by a straight chamfer.
+	#
+	# A SKEWED junction is used deliberately. Wherever two arms meet at a right
+	# angle their facing mouth corners coincide and are deduplicated, so both the
+	# + crossing and a square T collapse and the "two per arm" rule is invisible.
+	# Only an oblique fork keeps every chamfer at non-zero length.
+	var d := _skew_fork_data()
+	var solved := RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())
+	var j: RoadJunctionSolver.Junction = solved[0]
+	assert_int(j.raw_cap.size()) \
+		.override_failure_message(
+			"a %d-arm junction must yield a %d-gon, got %d points" % [
+				j.arms.size(), j.arms.size() * 2, j.raw_cap.size()]) \
+		.is_equal(j.arms.size() * 2)
+
+
+func test_right_angle_crossing_collapses_to_a_square() -> void:
+	# The flip side of the rule above. At a clean + crossing adjacent arms are
+	# trimmed to the same distance and their facing mouth corners land on exactly
+	# the same point, so the chamfer between them has zero length. The cap really
+	# is a square there, and must be emitted as four points rather than four
+	# doubled ones — a repeated vertex makes a zero-area triangle that shades with
+	# a garbage normal.
+	#
+	# Note this pins the DEDUPLICATION, not the fillet removal: a right-angle
+	# crossing is the one case where the old arc collapsed too, so this test
+	# passes either way. The two tests either side of it are what catch the disc.
+	var d := _cross_data()
+	var solved := RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())
+	var j: RoadJunctionSolver.Junction = solved[0]
+	assert_int(j.raw_cap.size()) \
+		.override_failure_message(
+			"a right-angle crossing must cap as a square, got %d points" % \
+				j.raw_cap.size()) \
+		.is_equal(4)
+
+
+func test_t_junction_cap_does_not_cross_the_open_side() -> void:
+	# REGRESSION: the black puddle. The cap's "fillet" swept an arc about the
+	# junction CENTRE at the mouth radius, making every cap a disc. At a T there
+	# is no road on the fourth side, so that disc bulged onto the verge — asphalt
+	# spilling onto the grass beside the junction.
+	#
+	# This is a CONTAINMENT test rather than an area one on purpose. Measured
+	# areas were tried first and rejected: on these fixtures the disc is only
+	# ~1.1x the straight polygon, well inside any threshold loose enough to allow
+	# legitimately skewed junctions, so an area assertion passed with the bug
+	# present and would have been pure decoration.
+	var d := _t_junction_data()
+	var solved := RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())
+	var j: RoadJunctionSolver.Junction = solved[0]
+	# _t_junction_data's stem runs south (+Z), so the open side is due north (-Z).
+	# _width() gives 8 m roads, so the through-road's kerb is 4 m out; anything
+	# past that on the open side is verge.
+	var half_w := 4.0
+	for extra: float in [0.5, 1.0, 2.0]:
+		var probe := Vector3(
+			j.center.x, j.center.y, j.center.z - (half_w + extra))
+		assert_bool(_point_in_polygon(probe, j.cap)) \
+			.override_failure_message(
+				"cap spills %.1f m onto the verge on the open side of a T" % \
+					extra) \
+			.is_false()
 
 
 func test_cap_has_no_duplicate_consecutive_points() -> void:
