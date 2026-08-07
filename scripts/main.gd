@@ -46,10 +46,22 @@ const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 ## Wet-road weather. Self-wires via the global `wetness` shader uniform; kept
 ## here so the debug key (F5) can toggle rain from the composition root.
 @onready var weather_controller: WeatherController = $WeatherController
-## Isometric top-down camera, toggled with T. Lives on the scene root rather than
-## on the car so it stays world-aligned instead of yawing with the car's heading
-## (see top_down_camera.gd for why that matters).
+## The overhead cameras, cycled with T alongside the car's chase camera. Both
+## live on the scene root rather than on the car: the isometric one must NOT
+## inherit the car's yaw, and the top-down one takes the heading as a number
+## instead (see top_down_camera.gd for why).
+@onready var isometric_camera: Camera3D = $IsometricCamera
 @onready var top_down_camera: Camera3D = $TopDownCamera
+
+## The camera cycle, in the order T steps through them. Built in _ready because
+## the chase camera is reached through the car. Kept as a list rather than an
+## enum + match so adding a fourth mode is one scene node and one line here,
+## with no branching to keep in sync.
+var _cameras: Array[Camera3D] = []
+## Index into _cameras of the mode currently live. Tracked rather than derived
+## from each camera's `current` flag so the cycle order survives anything else
+## in the scene activating a camera behind our back.
+var _camera_index: int = 0
 
 ## Active tween for the centre kudos popup's pop-and-fade, kept so a new event can
 ## kill the in-flight animation before starting its own (avoids stacked tweens).
@@ -147,6 +159,10 @@ func _ready() -> void:
 	headlights.set_on(not sky_controller.is_day())
 	street_lamp_lights.set_on(not sky_controller.is_day())
 
+	# Build the T-key camera cycle. Chase first because it is the one the scene
+	# starts on, so the index and the live camera agree from frame zero.
+	_cameras = [car.camera, isometric_camera, top_down_camera]
+
 func _process(delta: float) -> void:
 	# Escape toggles the pause state.
 	if Input.is_action_just_pressed("ui_cancel"):
@@ -166,7 +182,7 @@ func _process(delta: float) -> void:
 ##       N ms", naming the culprit. See scripts/frame_tracer.gd.
 ##   F5  toggle wet-road weather
 ##   P   save a screenshot (see scripts/screenshot.gd)
-##   T   toggle the isometric top-down camera (see scripts/top_down_camera.gd)
+##   T   cycle chase -> isometric -> top-down camera (see top_down_camera.gd)
 func _unhandled_key_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null or not key.pressed or key.echo:
@@ -183,24 +199,36 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	elif key.keycode == KEY_P:
 		_take_screenshot()
 	elif key.keycode == KEY_T:
-		_toggle_top_down_camera()
+		cycle_camera()
 
 
-## Swap between the car's chase camera and the isometric top-down one.
+## Step to the next camera mode: chase -> isometric -> top-down -> chase.
 ##
-## Setting `current` on a Camera3D is how Godot picks the active camera; it
-## clears the flag on whichever camera held it, so the two can never both be
-## live. The top-down camera is snapped onto the car as it takes over, otherwise
-## it would ease in from wherever it was last left — a visible swoop on every
-## toggle instead of a clean cut.
-func _toggle_top_down_camera() -> void:
-	if top_down_camera == null or car.camera == null:
-		return
-	if top_down_camera.current:
-		car.camera.current = true
-	else:
-		top_down_camera.snap_to_target()
-		top_down_camera.current = true
+## Setting `current` on a Camera3D is how Godot picks the active camera, and it
+## clears the flag on whichever camera held it, so no two can ever be live at
+## once — which is why this only has to activate the incoming one and never
+## deactivate the outgoing one.
+##
+## The incoming camera is snapped onto the car as it takes over. Without that it
+## would ease in from wherever it was last left, turning every mode change into a
+## visible swoop across the map instead of a clean cut.
+##
+## Public (and returning the new index) so tests can drive the cycle directly
+## rather than synthesising key events, which needs a real input stack.
+func cycle_camera() -> int:
+	if _cameras.is_empty():
+		return _camera_index
+	_camera_index = (_camera_index + 1) % _cameras.size()
+	var cam := _cameras[_camera_index]
+	# A missing camera must not park the cycle on a dead entry: leaving `current`
+	# on the outgoing camera at least keeps a picture on screen, and the next
+	# press moves on.
+	if cam == null:
+		return _camera_index
+	if cam.has_method("snap_to_target"):
+		cam.call("snap_to_target")
+	cam.current = true
+	return _camera_index
 
 
 ## Save a PNG of the current frame and report where it went.

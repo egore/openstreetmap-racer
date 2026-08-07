@@ -196,11 +196,27 @@ attributes = SubResource("CamAttrs_dof")
 fov = 70.0
 far = 2000.0
 
-[node name="TopDownCamera" type="Camera3D" parent="." unique_id=674512224]
+[node name="IsometricCamera" type="Camera3D" parent="." unique_id=674512224]
 script = ExtResource("16_topdown")
 target_path = NodePath("../Car")
+yaw_degrees = 45.0
+pitch_degrees = 35.264
+follow_heading = false
+ortho_size = 40.0
 projection = 1
 size = 40.0
+far = 2000.0
+current = false
+
+[node name="TopDownCamera" type="Camera3D" parent="." unique_id=674512225]
+script = ExtResource("16_topdown")
+target_path = NodePath("../Car")
+yaw_degrees = 0.0
+pitch_degrees = 90.0
+follow_heading = true
+ortho_size = 60.0
+projection = 1
+size = 60.0
 far = 2000.0
 current = false
 
