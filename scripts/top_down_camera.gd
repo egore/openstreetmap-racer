@@ -78,7 +78,7 @@ func _process(delta: float) -> void:
 		_target.global_position, yaw_degrees, pitch_degrees, view_distance)
 	var t := 1.0 if follow_lerp <= 0.0 else clampf(delta * follow_lerp, 0.0, 1.0)
 	global_position = global_position.lerp(desired, t)
-	look_at(_target.global_position, Vector3.UP)
+	_apply_orientation()
 
 
 ## Frame the target immediately, with no easing. Used on activation so switching
@@ -93,7 +93,48 @@ func snap_to_target() -> void:
 func _snap_to_target() -> void:
 	global_position = desired_position(
 		_target.global_position, yaw_degrees, pitch_degrees, view_distance)
-	look_at(_target.global_position, Vector3.UP)
+	_apply_orientation()
+
+
+## Point the camera from the angles rather than with look_at().
+##
+## look_at() is subtly wrong here: because the position is smoothed, the target
+## sits slightly off-centre while the camera catches up, and look_at() rolls the
+## camera to re-centre it — turning a small positional lag into a rotation of the
+## entire world. Deriving the basis from the same angles that produced the
+## position keeps the framing rock steady and lets the car drift off-centre,
+## which is what the smoothing was for.
+##
+## It also has no answer at all at 90 degrees of pitch, where the view direction
+## is parallel to the up vector it needs to build a basis from.
+func _apply_orientation() -> void:
+	global_basis = desired_basis(yaw_degrees, pitch_degrees)
+
+
+## The camera orientation matching the angles used by desired_position.
+##
+## Pure function, like desired_position, so the orientation can be checked by
+## arithmetic rather than inferred from a rendered picture.
+##
+## Columns are built so that:
+##   +X (screen right)  is horizontal at every pitch, so the horizon never tilts.
+##   +Z (behind the eye) is the same unit offset desired_position uses, so the
+##                       camera looks exactly where it was placed to look.
+##   +Y (screen up)     follows from the other two.
+static func desired_basis(yaw_deg: float, pitch_deg: float) -> Basis:
+	var yaw := deg_to_rad(yaw_deg)
+	var pitch := deg_to_rad(pitch_deg)
+	var sy := sin(yaw)
+	var cy := cos(yaw)
+	var sp := sin(pitch)
+	var cp := cos(pitch)
+	var z_axis := Vector3(sy * cp, sp, cy * cp)
+	var x_axis := Vector3(cy, 0.0, -sy)
+	# y = z cross x completes a right-handed frame. Its Y component works out to
+	# cos(pitch), which is non-negative for any pitch up to straight down, so the
+	# camera can never end up filming upside down.
+	var y_axis := z_axis.cross(x_axis)
+	return Basis(x_axis, y_axis, z_axis)
 
 
 ## Where the camera should sit to view `target` from the given angles.
