@@ -6,6 +6,13 @@ extends Node3D
 
 const FrameTracerScript := preload("res://scripts/frame_tracer.gd")
 const ScreenshotScript := preload("res://scripts/screenshot.gd")
+## Preloaded rather than referenced by its class_name: a bare TopDownCamera here
+## resolves through the global class cache, which is not guaranteed to be
+## populated when main.gd is first parsed. That makes the script fail to load
+## with "Could not find type" depending on parse order — and because the scene
+## still instantiates, the failure shows up as the T key silently doing nothing
+## rather than as an obvious error.
+const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
@@ -39,6 +46,10 @@ const ScreenshotScript := preload("res://scripts/screenshot.gd")
 ## Wet-road weather. Self-wires via the global `wetness` shader uniform; kept
 ## here so the debug key (F5) can toggle rain from the composition root.
 @onready var weather_controller: WeatherController = $WeatherController
+## Isometric top-down camera, toggled with T. Lives on the scene root rather than
+## on the car so it stays world-aligned instead of yawing with the car's heading
+## (see top_down_camera.gd for why that matters).
+@onready var top_down_camera: Camera3D = $TopDownCamera
 
 ## Active tween for the centre kudos popup's pop-and-fade, kept so a new event can
 ## kill the in-flight animation before starting its own (avoids stacked tweens).
@@ -155,6 +166,7 @@ func _process(delta: float) -> void:
 ##       N ms", naming the culprit. See scripts/frame_tracer.gd.
 ##   F5  toggle wet-road weather
 ##   P   save a screenshot (see scripts/screenshot.gd)
+##   T   toggle the isometric top-down camera (see scripts/top_down_camera.gd)
 func _unhandled_key_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null or not key.pressed or key.echo:
@@ -170,6 +182,25 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		wet_weather_toggle.button_pressed = not weather_controller.is_wet()
 	elif key.keycode == KEY_P:
 		_take_screenshot()
+	elif key.keycode == KEY_T:
+		_toggle_top_down_camera()
+
+
+## Swap between the car's chase camera and the isometric top-down one.
+##
+## Setting `current` on a Camera3D is how Godot picks the active camera; it
+## clears the flag on whichever camera held it, so the two can never both be
+## live. The top-down camera is snapped onto the car as it takes over, otherwise
+## it would ease in from wherever it was last left — a visible swoop on every
+## toggle instead of a clean cut.
+func _toggle_top_down_camera() -> void:
+	if top_down_camera == null or car.camera == null:
+		return
+	if top_down_camera.current:
+		car.camera.current = true
+	else:
+		top_down_camera.snap_to_target()
+		top_down_camera.current = true
 
 
 ## Save a PNG of the current frame and report where it went.
