@@ -193,10 +193,31 @@ count for slope smoothness.
 
 - **W / S** — Accelerate / Brake
 - **A / D** — Steer left / right
+- **T** — Cycle the camera: chase → isometric → top-down → chase
+- **P** — Save a screenshot
 - **Escape** — Pause / resume (frees the mouse for the menu)
 - **F3** — Toggle the frame tracer (prints slow main-thread spans)
 - **F4** — Dump the frame-tracer timing summary
 - **F5** — Toggle wet-road weather (rain rolls in/out over a few seconds)
+
+**T** cycles three camera modes, which differ in more than framing:
+
+| Mode | Projection | Framing |
+| --- | --- | --- |
+| **Chase** | Perspective, 70° FOV | Mounted on a pivot that yaws to follow the car's heading, so the world turns around a static car. Gets the speed FOV-kick and the crash shake. |
+| **Isometric** | Orthogonal, 80 m slice | True-isometric 35.264° three-quarter view, **world-aligned** — north stays up and the car turns beneath a map that never moves. |
+| **Top-down** | Orthogonal, 120 m slice | Straight down at 90°, **locked to the car's heading** so the nose always points up the screen and the world sweeps around it. Wider than the isometric view because a straight-down camera loses the horizon and needs the extra frame to see the road ahead. |
+
+Both overhead modes are the same script (`scripts/top_down_camera.gd`) with
+different exported angles; the only behavioural switch between them is
+`follow_heading`. That flag is a real trade rather than a preference: following
+the heading keeps the road ahead pointing up so steering maps directly to
+left/right, at the cost of counter-rotating the whole world. Leaving it off keeps
+streets and buildings still, at the cost of re-orienting mentally at every corner.
+Straight down is the one angle Godot's `look_at()` cannot express — the view
+direction is parallel to the up vector it needs — so the orientation is built
+from the angles directly, which also stops the follow smoothing from rolling the
+view as the camera catches up to the car.
 
 The pause menu has a **Day / Night** toggle that crossfades the sky, sun, clouds,
 fog and shadows between the two presets. The car's **headlights and the street
