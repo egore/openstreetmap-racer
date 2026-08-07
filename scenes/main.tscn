@@ -15,6 +15,7 @@
 [ext_resource type="Script" uid="uid://duydbpt17n7om" path="res://scripts/dial_cluster.gd" id="13_cluster"]
 [ext_resource type="Script" uid="uid://bja4t4xylv62m" path="res://scripts/speed_blur.gd" id="14_speedblur"]
 [ext_resource type="Shader" uid="uid://6px6s5m73t2k" path="res://scripts/shaders/speed_blur.gdshader" id="15_blurshader"]
+[ext_resource type="Script" path="res://scripts/top_down_camera.gd" id="16_topdown"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -194,6 +195,14 @@ transform = Transform3D(1, 0, 0, 0, 0.966, 0.259, 0, -0.259, 0.966, 0, 3, 8)
 attributes = SubResource("CamAttrs_dof")
 fov = 70.0
 far = 2000.0
+
+[node name="TopDownCamera" type="Camera3D" parent="." unique_id=674512224]
+script = ExtResource("16_topdown")
+target_path = NodePath("../Car")
+projection = 1
+size = 40.0
+far = 2000.0
+current = false
 
 [node name="SpeedBlurLayer" type="CanvasLayer" parent="." unique_id=153076500]
 layer = 0
