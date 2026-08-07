@@ -237,7 +237,10 @@ func _emit_stop_bars(
 		if d <= 0.1:
 			continue
 		var centre := arm.point_at(junction.center, d)
-		var fwd := arm.dir
+		# Square to the arm where the BAR is, not where the junction node is: on
+		# a road that bends just past the crossing the two differ, and a bar
+		# drawn at the node's angle sits visibly skewed across the carriageway.
+		var fwd := arm.dir_at(d)
 
 		# Span the half of the carriageway that traffic APPROACHES on, so the bar
 		# does not run across the oncoming lane too. Traffic drives on the right,
@@ -249,7 +252,7 @@ func _emit_stop_bars(
 		# half_width, which is the same thing only for a road of zero width: on a
 		# real street the bar sat half off-centre and read as a perpendicular
 		# stub rather than a stop line.
-		var lat := arm.lateral()
+		var lat := arm.lateral_at(d)
 		var inner := centre                              # centreline
 		var outer := centre + lat * arm.half_width       # approach-side kerb
 		var half_depth := STOP_BAR_DEPTH * 0.5
@@ -336,10 +339,16 @@ func _emit_one_corner(
 
 	# Inner edge of the corner = the cap boundary between the two arm mouths,
 	# i.e. arm a's RIGHT edge round to arm b's LEFT edge.
+	# Mouth position AND direction both come from the arm's real centreline, so
+	# the kerb corner starts exactly where the ribbon's kerb run stopped. Using
+	# the junction-node direction instead leaves the corner offset sideways from
+	# the pavement it is supposed to continue.
 	var a_mouth := a.point_at(centre, a.trim)
 	var b_mouth := b.point_at(centre, b.trim)
-	var a_inner := a_mouth + a.lateral() * a.half_width       # a's right edge
-	var b_inner := b_mouth - b.lateral() * b.half_width       # b's left edge
+	var a_dir := a.dir_at(a.trim)
+	var b_dir := b.dir_at(b.trim)
+	var a_inner := a_mouth + a.lateral_at(a.trim) * a.half_width   # a's right edge
+	var b_inner := b_mouth - b.lateral_at(b.trim) * b.half_width   # b's left edge
 
 	# Turn the corner along the KERB LINES of the two arms rather than along a
 	# circle about the junction centre.
@@ -351,7 +360,7 @@ func _emit_one_corner(
 	# junction. A real kerb runs straight along each road and turns only at the
 	# corner itself, so the curve must be tangent to both kerb lines: a quadratic
 	# Bezier whose control point is where those two lines actually meet.
-	var corner := _kerb_lines_meet(a_inner, a.dir, b_inner, b.dir)
+	var corner := _kerb_lines_meet(a_inner, a_dir, b_inner, b_dir)
 	var inner_pts := _bezier_arc(a_inner, corner, b_inner, KERB_CORNER_SEGMENTS)
 	if inner_pts.size() < 2:
 		return false
