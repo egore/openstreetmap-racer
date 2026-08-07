@@ -31,8 +31,9 @@ extends RefCounted
 ##      section clears every corner it participates in. That is the max over its
 ##      two neighbouring corners, plus a small setback so the cap has some depth.
 ##   4. The cap polygon walks the arms in bearing order emitting, per arm, its
-##      two trimmed edge points (right then left), with a rounded fillet arc
-##      inserted between consecutive arms.
+##      two trimmed edge points (left then right), joined to the next arm by a
+##      straight chamfer. The cap is a simple 2n-gon threaded through the arm
+##      mouths — every vertex is one an actual road put there.
 ##
 ## Everything here is PURE: it takes plain node/way data and returns plain
 ## structs. No SurfaceTool, no scene tree, no HeightProvider — so the geometry
@@ -119,18 +120,35 @@ const MIN_ARMS := 3
 ## a geometrically exact corner for a sane one.
 const MAX_TRIM := 14.0
 
-## Extra setback added to every arm's trim beyond the bare corner distance, so
-## the cap always has some depth to it rather than degenerating to a point at a
-## clean 4-way crossing. Metres.
-const TRIM_SETBACK := 1.2
+## Extra setback added to every arm's trim beyond the bare corner distance.
+##
+## Was 1.2 m, to give the cap "some depth" when the corner maths put every mouth
+## almost on top of the node. The cap gets its depth from the arm mouths
+## themselves, so this only pushed all four mouths outward and inflated the
+## intersection: removing it took a real residential T-junction from 90 m^2 to
+## 61 m^2 against an ideal carriageway box of ~49 m^2.
+##
+## Kept as a named constant rather than deleted because the corner distance is a
+## clamped approximation and a small positive setback is the obvious first knob
+## if mouths ever land inside the cap. Metres.
+const TRIM_SETBACK := 0.0
 
-## Radius of the rounded corner between two adjacent arms, as a fraction of the
-## smaller of the two arms' half-widths. 0 = square corners.
-const FILLET_RATIO := 0.55
-
-## Number of interpolation points used to draw each corner fillet arc. More is
-## smoother but costs vertices on every junction in the world.
-const FILLET_SEGMENTS := 4
+## Number of points used to draw each corner between adjacent arms.
+##
+## The cap is now a straight-edged polygon, so this is 0: each arm contributes
+## exactly two vertices (its left and right mouth corners) and consecutive arms
+## are joined by a single straight chamfer.
+##
+## It used to be 4, feeding a "fillet arc" that was not a corner round-off at all
+## but an arc swept about the junction CENTRE at the mouth radius — in other
+## words a disc. Every cap was a circle of asphalt bulging into the verge on any
+## side without a road, which is what read in-game as a black puddle beside
+## T-junctions. Across 1406 real junctions that made caps 4.7x the ideal
+## carriageway box; the straight polygon is 1.7x.
+##
+## OSMJunctionBuilder still reads this to decide how finely to tessellate its
+## kerb corners, which ARE genuinely curved, so it clamps to a sane minimum.
+const FILLET_SEGMENTS := 0
 
 ## Two arms whose bearings differ by less than this (radians) are treated as the
 ## same direction — a way doubling back on itself, or duplicate geometry. The
@@ -452,35 +470,54 @@ static func _ray_intersect_xz(
 ## polygon area in the XZ plane — the same winding the road ribbons use for their
 ## up-facing quads (see OSMWayBuilder._emit_road_ribbon).
 ##
-## Walking in that order, each arm contributes its trimmed mouth as two points —
-## LEFT edge first, then RIGHT — and the corner between one arm's RIGHT edge and
-## the NEXT arm's LEFT edge is swept as a rounded fillet.
+## Walking in that order, each arm contributes exactly TWO points — its mouth's
+## LEFT edge then its RIGHT edge — and consecutive arms are joined by the
+## straight edge from one arm's RIGHT corner to the next arm's LEFT corner. The
+## cap is therefore a simple 2n-gon threaded through the arm mouths: no more
+## points than the roads themselves justify.
 ##
 ## Getting this pairing the wrong way round does not merely mirror the shape: it
 ## connects each arm to the far side of the junction, producing a self-
 ## intersecting star that will not triangulate at all.
+##
+## Earlier versions inserted a "fillet arc" between consecutive arms. It was not
+## a corner round-off: it swept about the junction CENTRE at the mouth radius, so
+## the cap came out as a disc that bulged into the verge wherever no road left
+## the node — the black puddle beside every T-junction. Straight chamfers are
+## both correct and cheaper.
 static func _build_cap_walk(arms: Array[Arm], center: Vector3) -> PackedVector3Array:
-	var out := PackedVector3Array()
+	var walk := PackedVector3Array()
 	var count := arms.size()
 	if count < MIN_ARMS:
-		return out
+		return walk
 
 	for i: int in range(count):
 		var arm: Arm = arms[i]
 		var mouth := arm.point_at(center, arm.trim)
 		var lat := arm.lateral() * arm.half_width
-		var left := Vector3(mouth.x - lat.x, center.y, mouth.z - lat.z)
-		var right := Vector3(mouth.x + lat.x, center.y, mouth.z + lat.z)
-		out.append(left)
-		out.append(right)
+		walk.append(Vector3(mouth.x - lat.x, center.y, mouth.z - lat.z))
+		walk.append(Vector3(mouth.x + lat.x, center.y, mouth.z + lat.z))
+	return _drop_coincident(walk)
 
-		# Fillet from this arm's RIGHT edge round to the next arm's LEFT edge.
-		var nxt: Arm = arms[(i + 1) % count]
-		var nxt_mouth := nxt.point_at(center, nxt.trim)
-		var nxt_lat := nxt.lateral() * nxt.half_width
-		var nxt_left := Vector3(
-			nxt_mouth.x - nxt_lat.x, center.y, nxt_mouth.z - nxt_lat.z)
-		for p: Vector3 in _fillet_points(right, nxt_left, center):
+
+## Drop points that repeat their predecessor (cyclically).
+##
+## With straight chamfers a chamfer can legitimately have ZERO length: at a clean
+## right-angle crossing, adjacent arms are trimmed to the same distance and their
+## facing mouth corners land on exactly the same spot. That is the correct
+## geometry — the cap really is a square there — but emitting the point twice
+## makes a zero-area triangle, which the triangulator may reject and which shades
+## with a garbage normal if it doesn't.
+##
+## The old fillet arc always inserted points between the two, so this case never
+## arose and the cap could not express a square corner without a wobble in it.
+static func _drop_coincident(poly: PackedVector3Array) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	var n := poly.size()
+	for i: int in range(n):
+		var p := poly[i]
+		var q := poly[(i + 1) % n]
+		if Vector2(p.x, p.z).distance_to(Vector2(q.x, q.z)) > 0.001:
 			out.append(p)
 	return out
 
@@ -520,45 +557,4 @@ static func _ensure_simple(
 	# keeps the same open-ring convention as the normal path.
 	if out.size() > 1 and out[0].distance_to(out[out.size() - 1]) < 0.001:
 		out.remove_at(out.size() - 1)
-	return out
-
-
-## Points of a rounded corner sweeping from `from` to `to` around `center`.
-##
-## Both endpoints sit roughly the same distance from the junction centre, so the
-## fillet is drawn as a circular arc about the centre: interpolate the ANGLE from
-## `from` to `to` while lerping the radius. That keeps the corner convex and
-## never lets it cut inside the cap. Endpoints themselves are not repeated (the
-## caller already emitted `from`, and will emit `to`).
-static func _fillet_points(
-		from: Vector3, to: Vector3, center: Vector3) -> PackedVector3Array:
-	var out := PackedVector3Array()
-	if FILLET_SEGMENTS <= 0 or FILLET_RATIO <= 0.0:
-		return out
-
-	var v0 := Vector3(from.x - center.x, 0.0, from.z - center.z)
-	var v1 := Vector3(to.x - center.x, 0.0, to.z - center.z)
-	var r0 := v0.length()
-	var r1 := v1.length()
-	if r0 < 0.001 or r1 < 0.001:
-		return out
-
-	var a0 := atan2(v0.z, v0.x)
-	var a1 := atan2(v1.z, v1.x)
-	# Sweep the SHORT way round, counter-clockwise (positive) since the cap walk
-	# is counter-clockwise; a negative delta means the corner wraps the far side.
-	var delta := fposmod(a1 - a0, TAU)
-	# A corner spanning more than half the circle means the two arms are nearly
-	# coincident; a straight join is safer than an arc that loops the junction.
-	if delta > PI:
-		return out
-
-	for s: int in range(1, FILLET_SEGMENTS):
-		var t := float(s) / float(FILLET_SEGMENTS)
-		var ang := a0 + delta * t
-		var rad: float = lerpf(r0, r1, t)
-		out.append(Vector3(
-			center.x + cos(ang) * rad,
-			center.y,
-			center.z + sin(ang) * rad))
 	return out

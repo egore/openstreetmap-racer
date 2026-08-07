@@ -65,6 +65,15 @@ const STOP_BAR_INSET := 0.5
 ## meets an arm. This is the dropped-kerb / wheelchair ramp.
 const KERB_RAMP_RUN := 1.2
 
+## Points used to tessellate each Bezier kerb corner.
+##
+## The kerb corner is genuinely curved (a real kerb turns on a radius), unlike
+## the asphalt cap beneath it, which is a straight-edged polygon. This used to
+## borrow the solver's FILLET_SEGMENTS; that constant is now 0 because the cap
+## has no arcs at all, so reusing it would silently flatten every kerb corner
+## into a single straight chord.
+const KERB_CORNER_SEGMENTS := 4
+
 ## Terrain sampling. Set by the tile manager exactly as on OSMWayBuilder, so the
 ## junction drapes onto the same surface the ribbons do.
 var height_provider: HeightProvider = null
@@ -343,8 +352,7 @@ func _emit_one_corner(
 	# corner itself, so the curve must be tangent to both kerb lines: a quadratic
 	# Bezier whose control point is where those two lines actually meet.
 	var corner := _kerb_lines_meet(a_inner, a.dir, b_inner, b.dir)
-	var segments: int = maxi(RoadJunctionSolverScript.FILLET_SEGMENTS, 2)
-	var inner_pts := _bezier_arc(a_inner, corner, b_inner, segments)
+	var inner_pts := _bezier_arc(a_inner, corner, b_inner, KERB_CORNER_SEGMENTS)
 	if inner_pts.size() < 2:
 		return false
 
