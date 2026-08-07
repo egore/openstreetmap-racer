@@ -625,6 +625,259 @@ func test_acute_fork_still_produces_a_usable_cap() -> void:
 		.is_true()
 
 
+# ─── Arms follow the road's real shape, not a straight ray ──────────────────
+
+## A junction whose south arm BENDS inside its own trim distance.
+##
+## The stem leaves the node due south, but its first node is only 3 m out — well
+## inside the ~4 m trim a crossing of 8 m roads produces — and from there the
+## road swings away to the south-east. So the point the ribbon is actually cut
+## at lies on the SECOND segment, pointing about 25 degrees off the direction the
+## arm leaves the node in.
+##
+## This is the shape the whole "arm is a polyline" change exists for, and it is
+## extremely common in real OSM data: mappers put a node a metre or two past a
+## junction wherever a road starts to curve.
+func _bent_arm_data() -> Dictionary:
+	var nodes := {
+		0: _node(0, 0, 0),
+		1: _node(1, 50, 0),      # through road, east
+		2: _node(2, -50, 0),     # through road, west
+		# Stem: 3 m due south, then bending south-east.
+		3: _node(3, 0, 3),
+		4: _node(4, 8, 20),
+		5: _node(5, 20, 60),
+	}
+	var ways: Array = [
+		_way(1, [2, 0, 1]),
+		_way(2, [0, 3, 4, 5]),
+	]
+	return {"nodes": nodes, "ways": ways}
+
+
+func _bent_stem(width: float = 8.0) -> RoadJunctionSolver.Arm:
+	var d := _bent_arm_data()
+	var j: RoadJunctionSolver.Junction = RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width(width))[0]
+	for arm: RoadJunctionSolver.Arm in j.arms:
+		if arm.way_id == 2:
+			return arm
+	return null
+
+
+func test_arm_mouth_follows_the_bend_instead_of_a_straight_ray() -> void:
+	# REGRESSION (the visible bug): the solver placed the mouth by walking a
+	# STRAIGHT RAY from the node, while OSMWayBuilder cuts the ribbon by ARC
+	# LENGTH along the real polyline. On a way that bends inside its trim the two
+	# land in different places, so the cap and the ribbon do not meet.
+	var arm := _bent_stem()
+	assert_object(arm).is_not_null()
+	if arm == null:
+		return
+
+	var centre := Vector3.ZERO
+	var mouth := arm.point_at(centre, arm.trim)
+	# The straight-ray answer is due south of the node with x == 0. Following the
+	# actual road must carry the mouth measurably east of that.
+	assert_float(mouth.x) \
+		.override_failure_message(
+			"mouth stayed on the straight ray (x=%.3f); it must follow the bend"
+			% mouth.x) \
+		.is_greater(0.1)
+
+
+func test_arm_mouth_is_the_correct_arc_length_along_the_road() -> void:
+	# The mouth must sit exactly `trim` metres along the CENTRELINE, because that
+	# is the measure the ribbon builder trims by. Measuring along the polyline is
+	# what makes the two agree; a straight-line distance would be shorter.
+	var arm := _bent_stem()
+	assert_object(arm).is_not_null()
+	if arm == null:
+		return
+
+	var mouth := arm.point_at(Vector3.ZERO, arm.trim)
+	# Walk the arm's own polyline and measure how far along the mouth landed.
+	var travelled := 0.0
+	var found := -1.0
+	for i: int in range(arm.polyline.size() - 1):
+		var a: Vector3 = arm.polyline[i]
+		var b: Vector3 = arm.polyline[i + 1]
+		var seg := Vector2(b.x - a.x, b.z - a.z)
+		var to_mouth := Vector2(mouth.x - a.x, mouth.z - a.z)
+		var seg_len := seg.length()
+		if seg_len < 0.0001:
+			continue
+		var t := to_mouth.dot(seg / seg_len)
+		# Is the mouth on this segment (allowing a hair of numerical slack)?
+		if t >= -0.01 and t <= seg_len + 0.01:
+			var perp := absf(to_mouth.cross(seg / seg_len))
+			if perp < 0.01:
+				found = travelled + t
+				break
+		travelled += seg_len
+	assert_float(found) \
+		.override_failure_message("mouth is not on the arm's centreline at all") \
+		.is_greater_equal(0.0)
+	assert_float(found) \
+		.override_failure_message(
+			"mouth sits %.3f m along the road, expected the trim %.3f m"
+			% [found, arm.trim]) \
+		.is_equal_approx(arm.trim, 0.01)
+
+
+func test_arm_direction_at_the_mouth_is_the_segment_it_lands_on() -> void:
+	# The cap is cut square to dir_at(trim), and the ribbon's end cap is square
+	# to the segment containing the cut (OSMWayBuilder._miter_offset). Those must
+	# be the same vector or the two meet at different angles — the wedge of bare
+	# ground in the screenshot.
+	var arm := _bent_stem()
+	assert_object(arm).is_not_null()
+	if arm == null:
+		return
+
+	# The mouth falls on the 2nd segment: (0,3) -> (8,20).
+	var expected := Vector3(8.0 - 0.0, 0.0, 20.0 - 3.0).normalized()
+	var actual := arm.dir_at(arm.trim)
+	assert_float(actual.dot(expected)) \
+		.override_failure_message(
+			"mouth direction (%.3f, %.3f) is not the segment it lands on"
+			% [actual.x, actual.z]) \
+		.is_equal_approx(1.0, 0.001)
+
+	# And it must genuinely differ from the direction at the NODE, or this
+	# fixture would not be exercising the bug at all.
+	assert_float(actual.dot(arm.dir)) \
+		.override_failure_message(
+			"fixture is not bent: node and mouth directions agree") \
+		.is_less(0.99)
+
+
+func test_cap_mouth_edge_is_square_to_the_road_at_the_mouth() -> void:
+	# The two cap vertices for an arm are its mouth's left and right kerb
+	# corners. The edge between them must be PERPENDICULAR to the road where it
+	# is cut, exactly like the ribbon's square end cap.
+	var d := _bent_arm_data()
+	var j: RoadJunctionSolver.Junction = RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())[0]
+
+	var arm: RoadJunctionSolver.Arm = null
+	var index := -1
+	for i: int in range(j.arms.size()):
+		if j.arms[i].way_id == 2:
+			arm = j.arms[i]
+			index = i
+	assert_object(arm).is_not_null()
+	if arm == null:
+		return
+
+	# raw_cap emits two points per arm in arm order: left mouth then right.
+	var left: Vector3 = j.raw_cap[index * 2]
+	var right: Vector3 = j.raw_cap[index * 2 + 1]
+	var edge := Vector2(right.x - left.x, right.z - left.z)
+	assert_float(edge.length()) \
+		.override_failure_message("mouth edge collapsed to a point") \
+		.is_greater(0.1)
+
+	var road := arm.dir_at(arm.trim)
+	var dot := edge.normalized().dot(Vector2(road.x, road.z))
+	assert_float(absf(dot)) \
+		.override_failure_message(
+			"cap mouth edge is %.1f degrees off square to the road"
+			% rad_to_deg(acos(clampf(1.0 - absf(dot), -1.0, 1.0)))) \
+		.is_less(0.01)
+
+	# The mouth edge must also be the full carriageway width, not a foreshortened
+	# slice of it — the failure mode if the lateral were taken at the node.
+	assert_float(edge.length()) \
+		.override_failure_message(
+			"mouth edge is %.2f m wide, expected the carriageway 8.0 m"
+			% edge.length()) \
+		.is_equal_approx(8.0, 0.01)
+
+
+func test_straight_arms_are_unchanged_by_the_polyline_walk() -> void:
+	# The polyline walk must be a no-op on a straight road: the classic + is the
+	# case everything else is tuned against, so it has to give the same square
+	# cap it always did.
+	var d := _cross_data()
+	var j: RoadJunctionSolver.Junction = RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())[0]
+	for arm: RoadJunctionSolver.Arm in j.arms:
+		var walked := arm.point_at(j.center, arm.trim)
+		var ray := Vector3(
+			j.center.x + arm.dir.x * arm.trim, j.center.y,
+			j.center.z + arm.dir.z * arm.trim)
+		assert_float(Vector2(walked.x, walked.z).distance_to(
+				Vector2(ray.x, ray.z))) \
+			.override_failure_message(
+				"a straight arm must walk exactly along its own ray") \
+			.is_less(0.001)
+	assert_int(j.raw_cap.size()) \
+		.override_failure_message("a straight + must still cap as a square") \
+		.is_equal(4)
+
+
+func test_arm_without_a_polyline_falls_back_to_the_straight_ray() -> void:
+	# Arm is constructed directly in a couple of places (and by tests); with no
+	# centreline supplied it must behave exactly as it did before this change
+	# rather than dividing by zero or returning the origin.
+	var arm := RoadJunctionSolver.Arm.new()
+	arm.dir = Vector3(0.0, 0.0, 1.0)
+	arm.half_width = 4.0
+	var p := arm.point_at(Vector3(5.0, 0.0, 5.0), 10.0)
+	assert_float(p.x).is_equal_approx(5.0, 0.001)
+	assert_float(p.z).is_equal_approx(15.0, 0.001)
+	assert_float(arm.dir_at(10.0).dot(arm.dir)).is_equal_approx(1.0, 0.001)
+	assert_float(arm.lateral_at(10.0).dot(arm.lateral())) \
+		.is_equal_approx(1.0, 0.001)
+
+
+func test_arm_polyline_stops_banking_past_max_trim() -> void:
+	# The centreline is copied per arm, so a long rural way must not drag its
+	# entire length into every junction it touches. Nothing beyond MAX_TRIM can
+	# affect any answer.
+	var nodes := {0: _node(0, 0, 0), 1: _node(1, -50, 0)}
+	var ids: Array = [0]
+	# 40 nodes at 2 m spacing = 80 m of road, far beyond MAX_TRIM (14 m).
+	for k: int in range(1, 41):
+		nodes[100 + k] = _node(100 + k, 0, k * 2)
+		ids.append(100 + k)
+	var ways: Array = [_way(1, [1, 0]), _way(2, ids), _way(3, [0, 1])]
+	var solved := RoadJunctionSolver.solve_all(ways, nodes, _is_road(), _width())
+	if not solved.has(0):
+		return
+	var j: RoadJunctionSolver.Junction = solved[0]
+	for arm: RoadJunctionSolver.Arm in j.arms:
+		if arm.way_id != 2:
+			continue
+		var banked := 0.0
+		for i: int in range(arm.polyline.size() - 1):
+			var a: Vector3 = arm.polyline[i]
+			var b: Vector3 = arm.polyline[i + 1]
+			banked += Vector2(a.x, a.z).distance_to(Vector2(b.x, b.z))
+		assert_float(banked) \
+			.override_failure_message(
+				"arm banked %.1f m of centreline; MAX_TRIM is %.1f"
+				% [banked, RoadJunctionSolver.MAX_TRIM]) \
+			.is_less(RoadJunctionSolver.MAX_TRIM + 4.0)
+
+
+func test_bent_junction_still_covers_its_centre_and_triangulates() -> void:
+	# The invariants the straight-ray cap already had must survive the change:
+	# the cap still fills the hole, and is still a simple polygon built by
+	# construction rather than rescued by the convex-hull repair.
+	var d := _bent_arm_data()
+	var j: RoadJunctionSolver.Junction = RoadJunctionSolver.solve_all(
+		d["ways"], d["nodes"], _is_road(), _width())[0]
+	assert_bool(_point_in_polygon(j.center, j.cap)) \
+		.override_failure_message("bent junction cap must cover the node") \
+		.is_true()
+	assert_int(Geometry2D.triangulate_polygon(_flatten(j.raw_cap)).size()) \
+		.override_failure_message(
+			"bent junction must build simple, not need the hull repair") \
+		.is_greater_equal(3)
+
+
 ## Cap points as a flat XZ polygon, for triangulation checks.
 func _flatten(cap: PackedVector3Array) -> PackedVector2Array:
 	var out := PackedVector2Array()

@@ -61,18 +61,116 @@ class Arm extends RefCounted:
 	## How far along this arm (metres from the junction node) the ribbon must be
 	## cut back. Filled in by solve(); 0 until then.
 	var trim: float = 0.0
+	## The way's real centreline leaving this junction: index 0 IS the junction
+	## node, subsequent points run outward along the arm. Only XZ is used.
+	##
+	## ── Why an arm is not a straight ray ─────────────────────────────────────
+	## `dir` is the chord to the next node, which is the arm's direction only for
+	## the first few metres. OSMWayBuilder cuts the ribbon by ARC LENGTH along
+	## this same centreline, so whenever a way bends WITHIN the trim distance —
+	## very common, OSM litters nodes a metre or two from a junction — the mouth
+	## lands on a later segment pointing somewhere else entirely.
+	##
+	## A cap built from the straight ray then meets that mouth at both the wrong
+	## POSITION and the wrong ANGLE: the two cuts cross, opening a wedge of bare
+	## ground on one side while the ribbon's corner juts past the cap on the
+	## other. Walking the real polyline makes the two agree by construction, the
+	## same "one source of truth" reasoning that put widths in RoadProfile.
+	##
+	## Empty when no polyline was supplied, in which case every accessor below
+	## degrades to the straight-ray behaviour this class had before.
+	var polyline: PackedVector3Array = PackedVector3Array()
 
-	## Point at `distance` metres from the junction along this arm.
+	## Point `distance` metres from the junction, measured ALONG THE CENTRELINE —
+	## the same measure OSMWayBuilder trims by, so the cap mouth and the ribbon
+	## mouth land on exactly the same spot.
 	func point_at(origin: Vector3, distance: float) -> Vector3:
+		if polyline.size() >= 2:
+			var p := _walk(distance)
+			return Vector3(p.x, origin.y, p.z)
 		return Vector3(
 			origin.x + dir.x * distance,
 			origin.y,
 			origin.z + dir.z * distance)
 
-	## Right-hand lateral (unit, XZ) looking away from the junction. Matches
-	## OSMWayBuilder's convention: right = (-dir.z, 0, dir.x).
+	## Unit direction the arm actually runs in `distance` metres out, i.e. the
+	## tangent of the segment the mouth falls on.
+	##
+	## This mirrors OSMWayBuilder._miter_offset's endpoint rule exactly: the
+	## ribbon's first point is the interpolated cut and its second is the next
+	## original vertex, so the end cap is square to the segment CONTAINING the
+	## cut. The `+ 0.01` matches _slice_polyline's vertex-skip epsilon, so a cut
+	## landing precisely on a vertex picks the same segment on both sides.
+	func dir_at(distance: float) -> Vector3:
+		var n := polyline.size()
+		if n < 2:
+			return dir
+		var travelled := 0.0
+		var last := dir
+		for i: int in range(n - 1):
+			var seg := _seg_dir(i)
+			if seg == Vector3.ZERO:
+				continue
+			last = seg
+			var seg_len := _seg_len(i)
+			if travelled + seg_len > distance + 0.01:
+				return last
+			travelled += seg_len
+		return last
+
+	## Right-hand lateral (unit, XZ) looking away from the junction, at the
+	## junction node. Matches OSMWayBuilder's convention: right = (-dir.z, 0, dir.x).
 	func lateral() -> Vector3:
 		return Vector3(-dir.z, 0.0, dir.x)
+
+	## Right-hand lateral `distance` metres out, square to the arm's real
+	## direction there. This is what the mouth's two edge corners are offset by.
+	func lateral_at(distance: float) -> Vector3:
+		var d := dir_at(distance)
+		return Vector3(-d.z, 0.0, d.x)
+
+	## Position at arc length `distance` along the polyline. Distances past the
+	## end extrapolate along the last usable segment, so a way shorter than its
+	## own trim still yields a mouth pointing the right way instead of stopping
+	## dead at its final node.
+	func _walk(distance: float) -> Vector3:
+		var n := polyline.size()
+		if distance <= 0.0:
+			return polyline[0]
+		var travelled := 0.0
+		var last_i := -1
+		for i: int in range(n - 1):
+			var seg_len := _seg_len(i)
+			if seg_len <= 0.0001:
+				continue
+			last_i = i
+			if travelled + seg_len >= distance:
+				return polyline[i].lerp(
+					polyline[i + 1], (distance - travelled) / seg_len)
+			travelled += seg_len
+		if last_i < 0:
+			return polyline[0]
+		var tail := polyline[last_i + 1]
+		var over := distance - travelled
+		var d := _seg_dir(last_i)
+		return Vector3(tail.x + d.x * over, tail.y, tail.z + d.z * over)
+
+	## XZ length of polyline segment i.
+	func _seg_len(i: int) -> float:
+		var a := polyline[i]
+		var b := polyline[i + 1]
+		var dx := b.x - a.x
+		var dz := b.z - a.z
+		return sqrt(dx * dx + dz * dz)
+
+	## Unit XZ direction of polyline segment i, or ZERO when degenerate.
+	func _seg_dir(i: int) -> Vector3:
+		var a := polyline[i]
+		var b := polyline[i + 1]
+		var d := Vector3(b.x - a.x, 0.0, b.z - a.z)
+		if d.length_squared() < 0.000001:
+			return Vector3.ZERO
+		return d.normalized()
 
 
 ## A solved intersection: where it is, which arms meet, and its cap outline.
@@ -154,6 +252,16 @@ const FILLET_SEGMENTS := 0
 ## same direction — a way doubling back on itself, or duplicate geometry. The
 ## narrower one is dropped so it can't produce a degenerate corner.
 const MIN_ARM_SEPARATION := 0.12  # ~7 degrees
+
+## Relaxation passes used to place a corner between two arms (_corner_distance).
+##
+## An arm is a polyline, so the edge line to intersect depends on how far along
+## the arm the corner turns out to be — a fixed point we solve by iterating.
+##
+## A straight arm converges on the first pass (its direction never changes), so
+## this only costs anything at genuinely bent junctions. Four is comfortably
+## more than real road bends need; the loop also exits early once it settles.
+const CORNER_SOLVE_PASSES := 4
 
 
 ## Find every node where MIN_ARMS or more road ARMS meet.
@@ -267,16 +375,61 @@ static func _arms_of_way(
 		if i < n - 1:
 			var fwd := _dir_between(here, nodes, way.node_ids, i, 1)
 			if fwd != Vector3.ZERO:
-				out.append(_make_arm(
-					way.id, nid, fwd, half_w, highway_type, true))
+				var arm := _make_arm(
+					way.id, nid, fwd, half_w, highway_type, true)
+				arm.polyline = _centreline_from(way, nodes, i, 1)
+				out.append(arm)
 
 		# Leaving backward (toward the previous node) — exists unless this is
 		# the way's first node. The ribbon on that side ENDS at this junction.
 		if i > 0:
 			var bwd := _dir_between(here, nodes, way.node_ids, i, -1)
 			if bwd != Vector3.ZERO:
-				out.append(_make_arm(
-					way.id, nid, bwd, half_w, highway_type, false))
+				var arm := _make_arm(
+					way.id, nid, bwd, half_w, highway_type, false)
+				arm.polyline = _centreline_from(way, nodes, i, -1)
+				out.append(arm)
+	return out
+
+
+## The way's centreline starting at node index `i` and walking `step` (+1 = along
+## the way, -1 = against it), as world positions with the junction node first.
+##
+## Missing and coincident nodes are skipped, so a partially-loaded tile still
+## yields a usable centreline rather than a zero-length segment.
+##
+## The walk stops once it has banked MAX_TRIM metres: no arm can ever be trimmed
+## further than that, so trailing points cannot change any answer, and a long
+## rural way would otherwise copy its whole length into every arm.
+##
+## Note this does NOT stop at an intervening junction. It does not need to: the
+## trim computed here is always the one this junction asked for, and where two
+## junctions sit closer together than their trims, OSMWayBuilder._append_span
+## already scales both down to fit the span between them.
+static func _centreline_from(
+		way: OSMParser.OSMWay, nodes: Dictionary, i: int,
+		step: int) -> PackedVector3Array:
+	var out := PackedVector3Array()
+	if not nodes.has(way.node_ids[i]):
+		return out
+	out.append(nodes[way.node_ids[i]].local_pos)
+
+	var banked := 0.0
+	var j := i + step
+	while j >= 0 and j < way.node_ids.size():
+		var nid: int = way.node_ids[j]
+		if nodes.has(nid):
+			var p: Vector3 = nodes[nid].local_pos
+			var prev := out[out.size() - 1]
+			var dx := p.x - prev.x
+			var dz := p.z - prev.z
+			var seg := sqrt(dx * dx + dz * dz)
+			if seg > 0.0001:
+				out.append(p)
+				banked += seg
+				if banked >= MAX_TRIM:
+					break
+		j += step
 	return out
 
 
@@ -342,7 +495,7 @@ static func _solve_one(node_id: int, arms_in: Array, center: Vector3) -> Junctio
 	for i: int in range(count):
 		var a: Arm = arms[i]
 		var b: Arm = arms[(i + 1) % count]
-		corner_dist[i] = _corner_distance(a, b)
+		corner_dist[i] = _corner_distance(a, b, center)
 
 	# Each arm is trimmed past BOTH the corners it touches, plus a setback so the
 	# cap has depth. Corner i-1 is on the arm's right, corner i on its left.
@@ -415,27 +568,59 @@ static func _angle_between(a: float, b: float) -> float:
 ## both arms must clear. Direct line intersection is used rather than the closed
 ## trig form because it stays stable across the wide range of angles real streets
 ## produce, with an explicit guard for the near-parallel case.
-static func _corner_distance(a: Arm, b: Arm) -> float:
+##
+## ── Why this iterates ────────────────────────────────────────────────────────
+## An arm is a polyline, not a ray (see Arm.polyline). Its edge near the node
+## runs along the FIRST segment, but the corner may well land past the bend, on a
+## segment pointing somewhere else — so the edge line depends on the very
+## distance we are solving for.
+##
+## We therefore relax: take the current estimate of each mouth, build both edge
+## lines square to the road THERE, intersect, and step each arm to the crossing.
+## A handful of passes is plenty; real bends are gentle and this converges fast.
+##
+## For a STRAIGHT arm the direction never varies, so the first pass already lands
+## on the exact closed-form answer and the rest are no-ops — the classic +
+## crossing gets bit-for-bit the geometry it always did.
+static func _corner_distance(a: Arm, b: Arm, center: Vector3) -> float:
 	var theta := _angle_between(a.bearing, b.bearing)
 	# Near-parallel arms: edges barely converge, corner runs away to infinity.
 	if theta < MIN_ARM_SEPARATION or theta > PI - 0.001:
 		return maxf(a.half_width, b.half_width)
 
-	var a_off := a.lateral() * a.half_width
-	var b_off := -b.lateral() * b.half_width
+	var floor_d := maxf(a.half_width, b.half_width)
+	var ta := 0.0
+	var tb := 0.0
+	for _pass: int in range(CORNER_SOLVE_PASSES):
+		# The two edges facing each other across this corner, each square to its
+		# own road at the current mouth estimate.
+		var a_dir := a.dir_at(ta)
+		var b_dir := b.dir_at(tb)
+		var a_edge := a.point_at(center, ta) + a.lateral_at(ta) * a.half_width
+		var b_edge := b.point_at(center, tb) - b.lateral_at(tb) * b.half_width
 
-	var hit := _ray_intersect_xz(a_off, a.dir, b_off, b.dir)
-	if not hit.hit:
-		return maxf(a.half_width, b.half_width)
+		var hit := _ray_intersect_xz(a_edge, a_dir, b_edge, b_dir)
+		if not hit.hit:
+			return floor_d
+		var p := hit.point
 
-	var p := hit.point
-	# Project onto each arm axis; the corner must clear both.
-	var da := p.x * a.dir.x + p.z * a.dir.z
-	var db := p.x * b.dir.x + p.z * b.dir.z
-	var d := maxf(da, db)
+		# Advance each arm to where its own edge meets the crossing. Distances
+		# are signed, so a corner already behind the mouth pulls the trim back.
+		var next_a := ta + (p.x - a_edge.x) * a_dir.x + (p.z - a_edge.z) * a_dir.z
+		var next_b := tb + (p.x - b_edge.x) * b_dir.x + (p.z - b_edge.z) * b_dir.z
+		next_a = clampf(next_a, 0.0, MAX_TRIM)
+		next_b = clampf(next_b, 0.0, MAX_TRIM)
+		# Settled: further passes cannot move it.
+		if absf(next_a - ta) < 0.001 and absf(next_b - tb) < 0.001:
+			ta = next_a
+			tb = next_b
+			break
+		ta = next_a
+		tb = next_b
+
 	# A crossing BEHIND the node (negative projection) means the arms diverge;
 	# the minimum sensible clearance is then just the widths.
-	return clampf(d, maxf(a.half_width, b.half_width), MAX_TRIM)
+	return clampf(maxf(ta, tb), floor_d, MAX_TRIM)
 
 
 ## Result of a line/line intersection: whether the lines actually met, and where.
@@ -494,7 +679,12 @@ static func _build_cap_walk(arms: Array[Arm], center: Vector3) -> PackedVector3A
 	for i: int in range(count):
 		var arm: Arm = arms[i]
 		var mouth := arm.point_at(center, arm.trim)
-		var lat := arm.lateral() * arm.half_width
+		# Square to the arm's direction AT THE MOUTH, not at the junction node.
+		# On a way that bends inside its own trim these differ, and the ribbon's
+		# end cap follows the mouth segment (OSMWayBuilder._miter_offset), so
+		# using the node direction here cuts the cap at a different angle from
+		# the ribbon it must meet — a visible wedge of ground at the join.
+		var lat := arm.lateral_at(arm.trim) * arm.half_width
 		walk.append(Vector3(mouth.x - lat.x, center.y, mouth.z - lat.z))
 		walk.append(Vector3(mouth.x + lat.x, center.y, mouth.z + lat.z))
 	return _drop_coincident(walk)
