@@ -69,6 +69,29 @@ func _crossing(tags: Dictionary = {"highway": "residential"}) -> Dictionary:
 	}
 
 
+## A four-way crossing whose two roads differ in class: west-east way 1 is a
+## primary, north-south way 2 a residential. The residential must give way, so
+## this is the fixture for anything about junction MARKINGS — an all-residential
+## crossing (see _crossing) is an unmarked priority-to-the-right junction and
+## correctly paints nothing at all.
+func _priority_crossing() -> Dictionary:
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 60.0, 0.0),
+		4: _node(4, 0.0, -60.0), 5: _node(5, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "primary"}),
+		2: _way(2, [4, 2, 5], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	return {
+		"data": data,
+		"ways": ways,
+		"net": RoadNetworkContext.build(ways, ways, data.nodes, []),
+	}
+
+
 ## The marking surface (surface 1) of a built junction, as a list of per-arm
 ## along/across extents measured in each arm's own frame. `lat_min`/`lat_max`
 ## keep the SIGN of the lateral offset, which is what distinguishes the approach
@@ -475,44 +498,22 @@ func test_stop_bar_runs_across_the_road_not_along_it() -> void:
 	#
 	# A stop bar must be much wider ACROSS the carriageway than it is deep ALONG
 	# the direction of travel.
-	var fx := _crossing()
+	var fx := _priority_crossing()
 	var junction: RoadJunctionSolver.Junction = \
 		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
 	var mi := OSMJunctionBuilder.new().build_junction(junction)
 	assert_object(mi).is_not_null()
 	if mi == null:
 		return
-
-	# Surface 1 is the painted-marking surface; each bar is one quad (6 verts),
-	# emitted in arm order.
-	var mdt := MeshDataTool.new()
-	var ok := mdt.create_from_surface(mi.mesh, 1) == OK
-	var arms := junction.arms
-	var results: Array = []
-	if ok:
-		for qi: int in range(mdt.get_vertex_count() / 6):
-			if qi >= arms.size():
-				break
-			var arm: RoadJunctionSolver.Arm = arms[qi]
-			var c := arm.point_at(junction.center, arm.trim - 0.5)
-			var a_min := INF
-			var a_max := -INF
-			var l_min := INF
-			var l_max := -INF
-			for vi: int in range(qi * 6, (qi + 1) * 6):
-				var v := mdt.get_vertex(vi)
-				var rel := Vector3(v.x - c.x, 0.0, v.z - c.z)
-				var a := rel.dot(arm.dir)
-				var l := rel.dot(arm.lateral())
-				a_min = minf(a_min, a)
-				a_max = maxf(a_max, a)
-				l_min = minf(l_min, l)
-				l_max = maxf(l_max, l)
-			results.append({"depth": a_max - a_min, "span": l_max - l_min})
+	# Bars used to be matched to arms by index, on the assumption that bar i
+	# belongs to arm i. That held only while every arm was painted; now that just
+	# the yielding arms are, the nth bar is not the nth arm and the extents came
+	# out measured against a perpendicular road.
+	var results := _marking_extents(junction, mi)
 	mi.free()
 
-	assert_bool(ok).override_failure_message("expected a marking surface").is_true()
-	assert_int(results.size()).is_greater(0)
+	assert_int(results.size()) \
+		.override_failure_message("expected a marking surface").is_greater(0)
 	for r: Dictionary in results:
 		assert_float(r["span"]) \
 			.override_failure_message(
@@ -535,7 +536,7 @@ func test_stop_bar_sits_on_the_approaching_half_of_the_carriageway() -> void:
 	# Asserting on the SIGN of the lateral extent is the only thing that catches
 	# this. A bar on the wrong half, and one spanning the full width, both give
 	# an identical span and an identical depth to a correct one.
-	var fx := _crossing()
+	var fx := _priority_crossing()
 	var junction: RoadJunctionSolver.Junction = \
 		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
 	var mi := OSMJunctionBuilder.new().build_junction(junction)
@@ -565,7 +566,7 @@ func test_left_hand_traffic_mirrors_the_stop_bar() -> void:
 	# The same junction in a left-hand-traffic country must put the bar on the
 	# OTHER half. Without this, the fix above is just a hardcoded sign flip that
 	# trades one wrong set of countries for another.
-	var fx := _crossing()
+	var fx := _priority_crossing()
 	var junction: RoadJunctionSolver.Junction = \
 		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
 	var builder := OSMJunctionBuilder.new()
@@ -586,6 +587,57 @@ func test_left_hand_traffic_mirrors_the_stop_bar() -> void:
 				% [r["lat_min"], r["lat_max"]]) \
 			.is_greater(-0.01)
 		assert_float(r["lat_max"]).is_greater(0.5)
+
+
+# ─── Junction priority ───────────────────────────────────────────────────────
+
+func test_equal_class_crossing_gets_no_markings() -> void:
+	# REGRESSION ("ring of white blocks"): every arm of every junction was
+	# painted with a stop bar regardless of priority, so a plain residential
+	# crossing read as a controlled intersection with four stop lines.
+	#
+	# An unsignposted crossing of two equal streets is governed by
+	# priority-to-the-right (voorrang van rechts in NL) — an unmarked rule. The
+	# correct amount of paint there is none.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var surfaces := mi.mesh.get_surface_count()
+	mi.free()
+	# Surface 0 is the asphalt cap; a marking surface would be surface 1.
+	assert_int(surfaces) \
+		.override_failure_message(
+			"an equal-class crossing must paint no give-way markings") \
+		.is_equal(1)
+
+
+func test_only_the_minor_road_is_marked() -> void:
+	# A residential meeting a primary yields to it. Only the residential's two
+	# arms may carry markings — painting the primary too would instruct the
+	# driver who has priority to give way.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()) \
+		.override_failure_message("the minor road's two arms must be marked") \
+		.is_equal(2)
+	for r: Dictionary in results:
+		assert_str(r["highway"]) \
+			.override_failure_message(
+				"the priority road must not be marked, but arm %d (%s) was"
+				% [r["arm"], r["highway"]]) \
+			.is_equal("residential")
 
 
 func test_short_connector_road_survives_trimming() -> void:
