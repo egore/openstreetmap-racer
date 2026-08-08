@@ -234,6 +234,12 @@ func _load_osm_data() -> void:
 	tile_size = _tile_source.get_tile_size()
 	_height_provider = _tile_source.get_height_provider()
 
+	# Where in the world this map is, which decides which half of the carriageway
+	# an approach's markings span. Junction caps are built here rather than by
+	# OSMWayBuilder, so the junction builder has to be told separately.
+	_junction_builder.region = RoadRegion.for_coordinates(
+		_tile_source.get_center_lat(), _tile_source.get_center_lon())
+
 	# Pass terrain parameters to builders for draped meshes and subdivided ribbons.
 	if _has_terrain():
 		var grid_step := tile_size / float(max(1, terrain_subdivisions))

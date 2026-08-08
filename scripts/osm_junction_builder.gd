@@ -79,6 +79,11 @@ const KERB_CORNER_SEGMENTS := 4
 var height_provider: HeightProvider = null
 var terrain_grid_step: float = 0.0
 
+## Where in the world this map is, which decides the side of the carriageway an
+## approach's markings span. Defaults to right-hand traffic, so a caller that
+## never sets it gets the convention most of the world uses.
+var region: RoadRegion = RoadRegion.new()
+
 
 ## Build the complete geometry for one junction, or null when it is degenerate.
 ##
@@ -242,17 +247,29 @@ func _emit_stop_bars(
 		# drawn at the node's angle sits visibly skewed across the carriageway.
 		var fwd := arm.dir_at(d)
 
-		# Span the half of the carriageway that traffic APPROACHES on, so the bar
-		# does not run across the oncoming lane too. Traffic drives on the right,
-		# so looking OUTWARD from the junction along this arm, the approaching
-		# lane is the one on the arm's right — i.e. +lateral.
+		# Span only the half of the carriageway traffic APPROACHES on, so the bar
+		# does not run across the oncoming lane too.
+		#
+		# ── Which half that is ────────────────────────────────────────────────
+		# `arm.dir` points AWAY from the junction (RoadJunctionSolver.Arm.dir),
+		# and lateral_at is the right-hand side OF THAT direction. But traffic
+		# arriving at the junction travels along -dir: it comes toward you as you
+		# look outward. So the approaching driver's right-hand side is the arm's
+		# -lateral, not +lateral.
+		#
+		# The previous code used +lateral, reasoning that "looking outward from
+		# the junction, the approaching lane is on the arm's right" — which
+		# inverts the frame, since looking outward you face the oncoming traffic
+		# and its right is your left. The bar was painted across the lane LEAVING
+		# the junction, in every right-hand-traffic country rather than only the
+		# Dutch map it was noticed on.
 		#
 		# The span must run from the road's CENTRELINE to that edge. Previously
 		# one end was left at the arm's centre point and the other pushed out by
 		# half_width, which is the same thing only for a road of zero width: on a
 		# real street the bar sat half off-centre and read as a perpendicular
 		# stub rather than a stop line.
-		var lat := arm.lateral_at(d)
+		var lat := arm.lateral_at(d) * -region.lateral_sign()
 		var inner := centre                              # centreline
 		var outer := centre + lat * arm.half_width       # approach-side kerb
 		var half_depth := STOP_BAR_DEPTH * 0.5
