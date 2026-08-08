@@ -27,6 +27,7 @@ const RoadNetworkContext := preload("res://scripts/road_network_context.gd")
 const RoadJunctionSolver := preload("res://scripts/road_junction_solver.gd")
 const RoadMaterialFactory := preload("res://scripts/road_material_factory.gd")
 const RoadProfile := preload("res://scripts/road_profile.gd")
+const RoadRegion := preload("res://scripts/road_region.gd")
 
 
 func _node(id: int, x: float, z: float) -> OSMParser.OSMNode:
@@ -66,6 +67,75 @@ func _crossing(tags: Dictionary = {"highway": "residential"}) -> Dictionary:
 		"ways": ways,
 		"net": RoadNetworkContext.build(ways, ways, data.nodes, []),
 	}
+
+
+## The marking surface (surface 1) of a built junction, as a list of per-arm
+## along/across extents measured in each arm's own frame. `lat_min`/`lat_max`
+## keep the SIGN of the lateral offset, which is what distinguishes the approach
+## half of the carriageway from the oncoming one.
+##
+## Geometry is grouped by FACE, not by vertex. Per-vertex grouping does not work
+## at a crossing: a bar's outer corner sits out by the kerb, which is genuinely
+## nearer the PERPENDICULAR arm's mouth than its own. A face's centroid lies in
+## the middle of the marking and so is unambiguous.
+func _marking_extents(
+		junction: RoadJunctionSolver.Junction, mi: MeshInstance3D) -> Array:
+	var mdt := MeshDataTool.new()
+	if mi.mesh.get_surface_count() < 2 or mdt.create_from_surface(mi.mesh, 1) != OK:
+		return []
+	var per_arm: Dictionary = {}
+	for f: int in range(mdt.get_face_count()):
+		var v: Array[Vector3] = []
+		for k: int in range(3):
+			v.append(mdt.get_vertex(mdt.get_face_vertex(f, k)))
+		var centroid := (v[0] + v[1] + v[2]) / 3.0
+		# Score each arm by how close the centroid's along-distance is to where
+		# markings are emitted, rejecting arms it falls outside the width of.
+		var best := -1
+		var best_err := INF
+		for ai: int in range(junction.arms.size()):
+			var arm: RoadJunctionSolver.Arm = junction.arms[ai]
+			var d := arm.trim - 0.5
+			var rel := Vector3(centroid.x - junction.center.x, 0.0,
+				centroid.z - junction.center.z)
+			if absf(rel.dot(arm.lateral_at(d))) > arm.half_width + 0.1:
+				continue
+			var err := absf(rel.dot(arm.dir_at(d)) - d)
+			if err < best_err:
+				best_err = err
+				best = ai
+		if best < 0:
+			continue
+		if not per_arm.has(best):
+			per_arm[best] = []
+		for p: Vector3 in v:
+			(per_arm[best] as Array).append(p)
+
+	var out: Array = []
+	for ai: int in per_arm:
+		var arm: RoadJunctionSolver.Arm = junction.arms[ai]
+		var c := arm.point_at(junction.center, arm.trim - 0.5)
+		var a_min := INF
+		var a_max := -INF
+		var l_min := INF
+		var l_max := -INF
+		for v: Vector3 in per_arm[ai]:
+			var rel := Vector3(v.x - c.x, 0.0, v.z - c.z)
+			var a := rel.dot(arm.dir_at(arm.trim - 0.5))
+			var l := rel.dot(arm.lateral_at(arm.trim - 0.5))
+			a_min = minf(a_min, a)
+			a_max = maxf(a_max, a)
+			l_min = minf(l_min, l)
+			l_max = maxf(l_max, l)
+		out.append({
+			"arm": ai,
+			"highway": arm.highway_type,
+			"depth": a_max - a_min,
+			"span": l_max - l_min,
+			"lat_min": l_min,
+			"lat_max": l_max,
+		})
+	return out
 
 
 func _bounds_of_mesh(mesh: Mesh) -> Dictionary:
@@ -449,6 +519,73 @@ func test_stop_bar_runs_across_the_road_not_along_it() -> void:
 				"stop bar must span across the road (span %.2f vs depth %.2f)"
 				% [r["span"], r["depth"]]) \
 			.is_greater(float(r["depth"]) * 2.0)
+
+
+func test_stop_bar_sits_on_the_approaching_half_of_the_carriageway() -> void:
+	# REGRESSION (spotted on a Dutch map): the bar was painted across the lane
+	# LEAVING the junction rather than the one approaching it.
+	#
+	# Arm.dir points AWAY from the junction and lateral_at is the right-hand side
+	# of THAT direction, but traffic arriving travels along -dir. So the
+	# approaching driver's half is the arm's NEGATIVE lateral. The old code used
+	# +lateral, having reasoned "looking outward, the approach is on the right" —
+	# which inverts the frame, since looking outward you face the oncoming
+	# traffic.
+	#
+	# Asserting on the SIGN of the lateral extent is the only thing that catches
+	# this. A bar on the wrong half, and one spanning the full width, both give
+	# an identical span and an identical depth to a correct one.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()).is_greater(0)
+	for r: Dictionary in results:
+		# The whole bar lies on the -lateral side: it runs from the centreline
+		# (0) out to the negative kerb. The small epsilon allows for the
+		# centreline vertices themselves.
+		assert_float(r["lat_max"]) \
+			.override_failure_message(
+				"bar crosses onto the ONCOMING half (lat range %.2f..%.2f)"
+				% [r["lat_min"], r["lat_max"]]) \
+			.is_less(0.01)
+		assert_float(r["lat_min"]) \
+			.override_failure_message(
+				"bar must actually span the approach half, got %.2f" % r["lat_min"]) \
+			.is_less(-0.5)
+
+
+func test_left_hand_traffic_mirrors_the_stop_bar() -> void:
+	# The same junction in a left-hand-traffic country must put the bar on the
+	# OTHER half. Without this, the fix above is just a hardcoded sign flip that
+	# trades one wrong set of countries for another.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var builder := OSMJunctionBuilder.new()
+	builder.region = RoadRegion.for_style(
+		RoadRegion.DrivingSide.LEFT, RoadRegion.GiveWayStyle.DASHED)
+	var mi := builder.build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()).is_greater(0)
+	for r: Dictionary in results:
+		assert_float(r["lat_min"]) \
+			.override_failure_message(
+				"left-hand traffic bar crosses onto the oncoming half (%.2f..%.2f)"
+				% [r["lat_min"], r["lat_max"]]) \
+			.is_greater(-0.01)
+		assert_float(r["lat_max"]).is_greater(0.5)
 
 
 func test_short_connector_road_survives_trimming() -> void:
