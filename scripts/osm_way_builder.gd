@@ -122,7 +122,11 @@ func build_road(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData) -> MeshInsta
 	# rebasing, every marking on a road that meets an intersection is painted
 	# trim_start metres too far along — which is what put zebra crossings and
 	# stop lines in visibly wrong places, sometimes out in the intersection.
-	var marking_spec := RoadMarkingSpec.from_way(way.node_ids, osm_data.nodes)
+	#
+	# The region comes from the extract's own bounds, so a Dutch map paints
+	# shark's teeth at a give-way and a British one paints a dashed line.
+	var marking_spec := RoadMarkingSpec.from_way(
+		way.node_ids, osm_data.nodes, RoadRegion.for_osm_data(osm_data))
 	marking_spec = marking_spec.rebased(trim_start)
 	# Cumulative along-road distance at each point, plus total length, so the
 	# ribbon UVs (metres travelled) and the shader's end-fade line up.

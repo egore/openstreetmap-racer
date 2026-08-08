@@ -640,6 +640,113 @@ func test_only_the_minor_road_is_marked() -> void:
 			.is_equal("residential")
 
 
+# ─── Shark's teeth (NL/BE) ───────────────────────────────────────────────────
+
+func test_dutch_junction_paints_shark_teeth_pointing_at_the_driver() -> void:
+	# In the Netherlands a give-way is marked with haaientanden: triangles whose
+	# apexes point back at the driver who must yield. The direction the point
+	# faces IS the instruction, so an apex on the wrong end reverses the meaning
+	# — and a backwards row still renders and still looks plausible, which is
+	# why this has to be asserted rather than eyeballed.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var builder := OSMJunctionBuilder.new()
+	builder.region = RoadRegion.for_style(
+		RoadRegion.DrivingSide.RIGHT, RoadRegion.GiveWayStyle.SHARK_TEETH)
+	var mi := builder.build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+
+	var mdt := MeshDataTool.new()
+	var ok := mi.mesh.get_surface_count() >= 2 \
+		and mdt.create_from_surface(mi.mesh, 1) == OK
+	var teeth := 0
+	var wrong_way := 0
+	if ok:
+		for f: int in range(mdt.get_face_count()):
+			var v: Array[Vector3] = []
+			for k: int in range(3):
+				v.append(mdt.get_vertex(mdt.get_face_vertex(f, k)))
+			# Which arm this tooth belongs to, so "away from the junction" is
+			# measured along the right road.
+			var centroid := (v[0] + v[1] + v[2]) / 3.0
+			var best: RoadJunctionSolver.Arm = null
+			var best_d := INF
+			for arm: RoadJunctionSolver.Arm in junction.arms:
+				var c := arm.point_at(junction.center, arm.trim - 0.5)
+				var d := Vector2(centroid.x - c.x, centroid.z - c.z).length_squared()
+				if d < best_d:
+					best_d = d
+					best = arm
+			if best == null:
+				continue
+			var fwd := best.dir_at(best.trim - 0.5)
+			var c0 := best.point_at(junction.center, best.trim - 0.5)
+			# Along-road offset of each corner. A triangle has one lone extreme
+			# (the apex) and two corners sharing the other end (the base), so the
+			# apex is identifiable from the offsets alone.
+			var offs: Array[float] = []
+			for p: Vector3 in v:
+				offs.append(Vector3(p.x - c0.x, 0.0, p.z - c0.z).dot(fwd))
+			offs.sort()
+			teeth += 1
+			# The apex points AWAY from the junction (at the approaching driver),
+			# so the two base corners are the ones nearest it: the gap between
+			# the lowest two offsets must be smaller than the gap up to the top.
+			var base_spread: float = absf(offs[1] - offs[0])
+			var apex_gap: float = absf(offs[2] - offs[1])
+			if not (base_spread < apex_gap):
+				wrong_way += 1
+	mi.free()
+
+	assert_bool(ok).override_failure_message("expected a marking surface").is_true()
+	assert_int(teeth) \
+		.override_failure_message("expected a row of shark's teeth") \
+		.is_greater(3)
+	assert_int(wrong_way) \
+		.override_failure_message(
+			"%d of %d teeth point the wrong way (apex must face the driver)"
+			% [wrong_way, teeth]) \
+		.is_equal(0)
+
+
+func test_shark_teeth_faces_point_upward() -> void:
+	# Teeth are built from a direction vector whose handedness flips with the
+	# driving side, so their three corners can arrive in either winding order.
+	# Without normalisation half of them would be backface-culled and invisible —
+	# the same class of bug that once made the whole cap disappear.
+	for side: int in [RoadRegion.DrivingSide.RIGHT, RoadRegion.DrivingSide.LEFT]:
+		var fx := _priority_crossing()
+		var junction: RoadJunctionSolver.Junction = \
+			(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+		var builder := OSMJunctionBuilder.new()
+		builder.region = RoadRegion.for_style(
+			side, RoadRegion.GiveWayStyle.SHARK_TEETH)
+		var mi := builder.build_junction(junction)
+		if mi == null:
+			fail("expected a junction mesh")
+			continue
+		var mdt := MeshDataTool.new()
+		var ok := mi.mesh.get_surface_count() >= 2 \
+			and mdt.create_from_surface(mi.mesh, 1) == OK
+		var down := 0
+		if ok:
+			for f: int in range(mdt.get_face_count()):
+				var a := mdt.get_vertex(mdt.get_face_vertex(f, 0))
+				var b := mdt.get_vertex(mdt.get_face_vertex(f, 1))
+				var c := mdt.get_vertex(mdt.get_face_vertex(f, 2))
+				if Plane(a, b, c).normal.y <= 0.0:
+					down += 1
+		mi.free()
+		assert_bool(ok).is_true()
+		assert_int(down) \
+			.override_failure_message(
+				"%d tooth faces point DOWN (driving side %d)" % [down, side]) \
+			.is_equal(0)
+
+
 func test_short_connector_road_survives_trimming() -> void:
 	# REGRESSION ("streets no longer connect"): a short way between two close
 	# junctions was asked to give up more length than it had, so it vanished

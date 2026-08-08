@@ -98,6 +98,11 @@ const DEFAULT_CLASS_RANK := 1
 ## crossing read as a controlled intersection.
 const YIELD_RANK_MARGIN := 1
 
+## Width of the base of one shark's tooth, and the gap to the next, in metres.
+## Both ~0.5 m per the Dutch RVV 1990 specification for marking B6.
+const SHARK_TOOTH_BASE := 0.5
+const SHARK_TOOTH_GAP := 0.5
+
 ## How far inside the cap mouth the stop bar sits, so it reads as being at the
 ## junction rather than floating in the middle of it.
 const STOP_BAR_INSET := 0.5
@@ -121,8 +126,9 @@ var height_provider: HeightProvider = null
 var terrain_grid_step: float = 0.0
 
 ## Where in the world this map is, which decides the side of the carriageway an
-## approach's markings span. Defaults to right-hand traffic, so a caller that
-## never sets it gets the convention most of the world uses.
+## approach's markings span and whether a give-way marking is a plain bar or
+## shark's teeth. Defaults to right-hand traffic with a bar — the behaviour
+## before regions existed — so a caller that never sets it is unaffected.
 var region: RoadRegion = RoadRegion.new()
 
 
@@ -322,11 +328,14 @@ func _emit_stop_bars(
 		var half_depth := STOP_BAR_DEPTH * 0.5
 		var back := fwd * half_depth
 
-		var p0 := inner - back
-		var p1 := outer - back
-		var p2 := outer + back
-		var p3 := inner + back
-		_add_flat_quad(st, p0, p1, p2, p3, CAP_Y + PAINT_Y)
+		if region.give_way_style == RoadRegion.GiveWayStyle.SHARK_TEETH:
+			_add_shark_teeth(st, inner, outer, fwd, half_depth)
+		else:
+			var p0 := inner - back
+			var p1 := outer - back
+			var p2 := outer + back
+			var p3 := inner + back
+			_add_flat_quad(st, p0, p1, p2, p3, CAP_Y + PAINT_Y)
 		emitted = true
 	return emitted
 
@@ -357,11 +366,68 @@ func _class_rank(highway_type: String) -> int:
 	return int(CLASS_RANK.get(highway_type, DEFAULT_CLASS_RANK))
 
 
+## Emit a row of shark's teeth (haaientanden) from `inner` to `outer`.
+##
+## Each tooth is a triangle whose base sits on the junction side and whose apex
+## points back down the approach at the driver who must yield — the direction of
+## the point IS the instruction, so the apex must be the end furthest from the
+## junction. `fwd` points away from the junction, hence apex at +fwd.
+##
+## Drawn as explicit geometry for the same reason the bar is: the cap has no
+## along/across parameterisation for the shader to paint into.
+func _add_shark_teeth(
+		st: SurfaceTool, inner: Vector3, outer: Vector3, fwd: Vector3,
+		half_depth: float) -> void:
+	var across := outer - inner
+	var span := across.length()
+	if span < 0.01:
+		return
+	var across_dir := across / span
+	# Teeth are ~0.5 m wide on a ~0.5 m pitch (NL RVV 1990 marking B6). Fit a
+	# whole number across the half-carriageway so the row does not end on a
+	# fragment of a tooth at the kerb.
+	var pitch := SHARK_TOOTH_BASE + SHARK_TOOTH_GAP
+	var count: int = maxi(1, int(floor(span / pitch)))
+	var step := span / float(count)
+	var base_w: float = minf(SHARK_TOOTH_BASE, step * 0.75)
+
+	# Teeth are as deep as the bar they replace, so a give-way row and a stop bar
+	# sit at the same distance from the mouth.
+	var base_off := fwd * -half_depth
+	var apex_off := fwd * half_depth
+	for i: int in range(count):
+		var c := inner + across_dir * (step * (float(i) + 0.5))
+		var half_base := across_dir * (base_w * 0.5)
+		var b0 := c - half_base + base_off
+		var b1 := c + half_base + base_off
+		var apex := c + apex_off
+		_add_flat_tri_up(st, b0, b1, apex, CAP_Y + PAINT_Y)
+
+
 ## Emit an upward-facing quad at a fixed offset above the terrain.
 func _add_flat_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
 		d: Vector3, y_offset: float) -> void:
 	_add_flat_tri(st, a, c, b, y_offset)
 	_add_flat_tri(st, a, d, c, y_offset)
+
+
+## Emit a triangle at `y_offset`, wound so it faces UP whichever order the three
+## corners arrive in.
+##
+## _add_flat_tri takes the winding on trust, which is fine for the quad path
+## above where the corner order is fixed by construction. A shark's tooth is
+## built from a direction vector whose handedness flips with the driving side, so
+## its three corners can arrive either way round; without this the teeth on one
+## side of the world would be backface-culled and simply not render.
+func _add_flat_tri_up(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3,
+		y_offset: float) -> void:
+	var up := _wound_upward(a, b, c)
+	_add_flat_tri(
+		st,
+		Vector3(up[0].x, 0.0, up[0].y),
+		Vector3(up[1].x, 0.0, up[1].y),
+		Vector3(up[2].x, 0.0, up[2].y),
+		y_offset)
 
 
 ## Wrap kerbs around the intersection corners.

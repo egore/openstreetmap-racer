@@ -15,6 +15,7 @@ const OSMParser := preload("res://scripts/osm_parser.gd")
 const RoadMarkingSpec := preload("res://scripts/road_marking_spec.gd")
 const RoadMaterialFactory := preload("res://scripts/road_material_factory.gd")
 const RoadLaneSpec := preload("res://scripts/road_lane_spec.gd")
+const RoadRegion := preload("res://scripts/road_region.gd")
 
 
 func _node(id: int, x: float, z: float, tags: Dictionary = {}) -> OSMParser.OSMNode:
@@ -92,6 +93,78 @@ func test_give_way_line() -> void:
 	assert_int(spec.markings[0].kind).is_equal(RoadMarkingSpec.Kind.GIVE_WAY)
 
 
+# ─── Region-dependent give-way style ─────────────────────────────────────────
+
+func test_give_way_is_shark_teeth_in_the_netherlands() -> void:
+	# NL/BE paint haaientanden rather than a dashed line. Same OSM tag, different
+	# marking — the only thing that decides is where the map is.
+	var nl := RoadRegion.for_style(
+		RoadRegion.DrivingSide.RIGHT, RoadRegion.GiveWayStyle.SHARK_TEETH)
+	var spec := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({4: {"highway": "give_way"}}), nl)
+	assert_int(spec.markings.size()).is_equal(1)
+	assert_int(spec.markings[0].kind) \
+		.override_failure_message("a Dutch give-way must be shark's teeth") \
+		.is_equal(RoadMarkingSpec.Kind.SHARK_TEETH)
+
+
+func test_give_way_stays_dashed_outside_the_shark_teeth_region() -> void:
+	var uk := RoadRegion.for_style(
+		RoadRegion.DrivingSide.LEFT, RoadRegion.GiveWayStyle.DASHED)
+	var spec := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({4: {"highway": "give_way"}}), uk)
+	assert_int(spec.markings[0].kind).is_equal(RoadMarkingSpec.Kind.GIVE_WAY)
+
+
+func test_stop_bar_is_unaffected_by_region() -> void:
+	# A stop line is a solid bar the world over; only give-way varies.
+	var nl := RoadRegion.for_style(
+		RoadRegion.DrivingSide.RIGHT, RoadRegion.GiveWayStyle.SHARK_TEETH)
+	var spec := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({5: {"highway": "stop"}}), nl)
+	assert_int(spec.markings[0].kind).is_equal(RoadMarkingSpec.Kind.STOP)
+
+
+# ─── Marking orientation ─────────────────────────────────────────────────────
+
+func test_explicit_direction_tag_sets_facing() -> void:
+	# OSM states the direction outright on some nodes; it is authoritative.
+	var fwd := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({2: {"highway": "give_way", "direction": "forward"}}))
+	assert_float(fwd.markings[0].facing).is_equal_approx(1.0, 0.001)
+	var back := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({4: {"highway": "give_way", "direction": "backward"}}))
+	assert_float(back.markings[0].facing).is_equal_approx(-1.0, 0.001)
+
+
+func test_facing_is_inferred_from_the_nearest_way_end() -> void:
+	# Without a direction tag, a give-way node sits at the approach to the
+	# junction at the near end of the way, so traffic reaching it is heading
+	# toward that end.
+	var near_end := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({5: {"highway": "give_way"}}))
+	assert_float(near_end.markings[0].facing) \
+		.override_failure_message("a node at the way's end faces forward") \
+		.is_equal_approx(1.0, 0.001)
+	var near_start := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({1: {"highway": "give_way"}}))
+	assert_float(near_start.markings[0].facing) \
+		.override_failure_message("a node at the way's start faces backward") \
+		.is_equal_approx(-1.0, 0.001)
+
+
+func test_rebasing_preserves_facing() -> void:
+	# Junction trimming shifts markings along the way; it must not silently
+	# reorient them, or teeth would flip direction on any road meeting a
+	# junction — which is every road that has a give-way in the first place.
+	var spec := RoadMarkingSpec.from_way(
+		_ids(), _road_nodes({5: {"highway": "give_way", "direction": "backward"}}))
+	var moved := spec.rebased(10.0)
+	assert_int(moved.markings.size()).is_equal(1)
+	assert_float(moved.markings[0].along).is_equal_approx(90.0, 0.001)
+	assert_float(moved.markings[0].facing).is_equal_approx(-1.0, 0.001)
+
+
 func test_stop_wins_over_crossing_on_same_node() -> void:
 	# A node tagged both a crossing and a stop paints the stop bar (stronger cue).
 	var spec := RoadMarkingSpec.from_way(
@@ -158,6 +231,25 @@ func test_material_sets_transverse_uniforms() -> void:
 	var kinds: PackedFloat32Array = mat.get_shader_parameter("transverse_kind")
 	assert_float(along[0]).is_equal_approx(50.0, 0.001)
 	assert_float(kinds[0]).is_equal(float(RoadMarkingSpec.Kind.ZEBRA))
+
+
+func test_material_sets_facing_uniform() -> void:
+	# The shark's-teeth shape depends on `facing`; an unset uniform would leave
+	# every row pointing the same way regardless of approach direction.
+	var nl := RoadRegion.for_style(
+		RoadRegion.DrivingSide.RIGHT, RoadRegion.GiveWayStyle.SHARK_TEETH)
+	var spec := RoadMarkingSpec.from_way(
+		_ids(),
+		_road_nodes({3: {"highway": "give_way", "direction": "backward"}}),
+		nl)
+	var lane := RoadLaneSpec.from_tags("residential", {})
+	var mat := RoadMaterialFactory.create_road_material(
+		"residential", Color(0.2, 0.2, 0.2), lane, 5.0, 100.0, spec) as ShaderMaterial
+	assert_int(mat.get_shader_parameter("transverse_count")).is_equal(1)
+	var kinds: PackedFloat32Array = mat.get_shader_parameter("transverse_kind")
+	var facings: PackedFloat32Array = mat.get_shader_parameter("transverse_facing")
+	assert_float(kinds[0]).is_equal(float(RoadMarkingSpec.Kind.SHARK_TEETH))
+	assert_float(facings[0]).is_equal_approx(-1.0, 0.001)
 
 
 func test_material_disables_transverse_when_empty() -> void:

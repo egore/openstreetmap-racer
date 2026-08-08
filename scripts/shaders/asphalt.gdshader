@@ -87,9 +87,13 @@ const int MAX_TRANSVERSE_MARKINGS = 8;
 uniform int transverse_count = 0;
 // Metres-along-road (UV.x space) of each transverse marking.
 uniform float transverse_along[MAX_TRANSVERSE_MARKINGS];
-// Kind of each marking: 1 = zebra, 2 = stop bar, 3 = give-way (see
-// RoadMarkingSpec.Kind). Anything else is skipped.
+// Kind of each marking: 1 = zebra, 2 = stop bar, 3 = give-way (dashed),
+// 4 = shark's teeth (see RoadMarkingSpec.Kind). Anything else is skipped.
 uniform float transverse_kind[MAX_TRANSVERSE_MARKINGS];
+// Which way each marking faces: +1 when the yielding traffic drives toward
+// increasing UV.x, -1 toward decreasing. Only the oriented kinds (shark's
+// teeth) use it — everything else is symmetric about its centre.
+uniform float transverse_facing[MAX_TRANSVERSE_MARKINGS];
 
 // World-space XZ position of the fragment, passed from the vertex stage.
 varying vec3 world_pos;
@@ -101,16 +105,57 @@ float line_coverage(float pos_m, float center, float half_w, float aa) {
 	return 1.0 - smoothstep(half_w - aa, half_w + aa, d);
 }
 
+// --- Shark's teeth (haaientanden) -------------------------------------------
+// Dutch/Belgian give-way marking: a row of solid triangles across the
+// carriageway whose apexes point back at the driver who must yield. Per NL RVV
+// 1990 the teeth are ~0.5 m base by ~0.5 m tall with ~0.5 m gaps.
+const float TOOTH_BASE = 0.5;    // metres across the road
+const float TOOTH_HEIGHT = 0.5;  // metres along the road
+const float TOOTH_PERIOD = 1.0;  // base + gap
+
+// Coverage of the shark's-teeth row centred `centre` metres along the road.
+//
+// `facing` is the direction the YIELDING traffic travels (+1 toward increasing
+// `along`). The apex must point back at that driver, so the triangle tapers
+// toward SMALLER signed distance: base at the far edge, point at the near one.
+// Multiplying the along-offset by `facing` puts the row into the driver's own
+// frame, after which the shape is written once and works from either approach.
+float shark_teeth_coverage(
+		float centre, float facing, float along, float across,
+		float span, float along_aa, float across_aa) {
+	// Signed depth into the row from the driver's point of view, normalised so
+	// 0 = apex (nearest the driver) and 1 = base (furthest).
+	float u = ((along - centre) * facing + TOOTH_HEIGHT * 0.5) / TOOTH_HEIGHT;
+	if (u < -along_aa || u > 1.0 + along_aa) {
+		return 0.0;
+	}
+	// A triangle's half-width grows linearly from the apex to the base.
+	float half_w_here = TOOTH_BASE * 0.5 * clamp(u, 0.0, 1.0);
+	// Position within this tooth's slot, measured from the slot's centre.
+	float phase = fract((across + span) / TOOTH_PERIOD) * TOOTH_PERIOD;
+	float offset = abs(phase - TOOTH_PERIOD * 0.5);
+	// Antialias the sloped sides across BOTH axes: near the apex the triangle is
+	// narrower than a pixel, and a pure across-axis smoothstep leaves the tip
+	// aliasing into a ragged spike.
+	float aa = across_aa + along_aa * (TOOTH_BASE / TOOTH_HEIGHT) * 0.5;
+	float tooth = 1.0 - smoothstep(half_w_here - aa, half_w_here + aa, offset);
+	// Clip the row to the along-road extent so it does not bleed past its ends.
+	float ends = (1.0 - smoothstep(1.0 - along_aa, 1.0 + along_aa, u))
+		* smoothstep(-along_aa, along_aa, u);
+	return tooth * ends;
+}
+
 // Coverage of one transverse marking of `kind`, evaluated at (`along`, `across`)
 // in metres. `centre` is the marking's metres-along position; `half_w` is half
 // the carriageway width so bands can be sized/insets relative to the road. The
 // `along_aa`/`across_aa` are the screen-projected antialias widths of each axis.
+// `facing` orients the asymmetric kinds (see shark_teeth_coverage).
 //
 // Bands are drawn as a function of the along-road distance to `centre`, so they
 // stay perpendicular to travel and follow the road on curves for free (the UV
 // frame already rotates with the ribbon).
 float transverse_coverage(
-		float kind, float centre, float along, float across,
+		float kind, float centre, float facing, float along, float across,
 		float half_w, float along_aa, float across_aa) {
 	float da = abs(along - centre);          // metres along, from the band centre
 	// Keep every band a little inside the kerbs so it reads as on-carriageway.
@@ -138,7 +183,7 @@ float transverse_coverage(
 		float bar_half = 0.2;
 		float bar = 1.0 - smoothstep(bar_half - along_aa, bar_half + along_aa, da);
 		return bar * edge;
-	} else {
+	} else if (kind < 3.5) {
 		// Give-way: a dashed transverse line (short dashes across the road).
 		float bar_half = 0.15;
 		float bar = 1.0 - smoothstep(bar_half - along_aa, bar_half + along_aa, da);
@@ -146,6 +191,13 @@ float transverse_coverage(
 		float dash_phase = fract((across + span) / dash_period);
 		float dash = step(dash_phase, 0.55);
 		return bar * edge * dash;
+	} else {
+		// Shark's teeth: triangles pointing at the yielding driver (NL/BE).
+		// The early-out above already rejected fragments outside the
+		// carriageway; the row's own along-extent is handled internally since
+		// it is asymmetric about `centre`.
+		return shark_teeth_coverage(
+			centre, facing, along, across, span, along_aa, across_aa) * edge;
 	}
 }
 
@@ -345,7 +397,7 @@ void fragment() {
 				break;
 			}
 			tpaint = max(tpaint, transverse_coverage(
-				transverse_kind[i], transverse_along[i],
+				transverse_kind[i], transverse_along[i], transverse_facing[i],
 				along, across, half_w, along_aa, across_aa));
 		}
 
