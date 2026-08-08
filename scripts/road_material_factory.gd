@@ -201,12 +201,14 @@ static func _apply_transverse_markings(
 		return
 	var along := marking_spec.along_positions()
 	var kinds := marking_spec.kinds()
+	var facings := marking_spec.facings()
 	mat.set_shader_parameter("transverse_count", along.size())
 	# The shader arrays are fixed-size (MAX_TRANSVERSE_MARKINGS); passing the
 	# packed arrays sets the leading entries and leaves the rest at their
 	# defaults, which transverse_count keeps the loop from reading.
 	mat.set_shader_parameter("transverse_along", along)
 	mat.set_shader_parameter("transverse_kind", kinds)
+	mat.set_shader_parameter("transverse_facing", facings)
 	# road_width is already set by the lane-marking path, but a road may have
 	# crossings without lane markings (e.g. service road); set it here too so
 	# the transverse block has a valid carriageway width regardless.
