@@ -57,6 +57,47 @@ const STOP_BAR_TYPES := {
 	"unclassified": true,
 }
 
+## Road-class ranking used to decide which arms of a junction must give way.
+##
+## A stop line marks a boundary a driver must yield AT, so it belongs only on
+## the arms that actually yield. Painting one on every arm — which this builder
+## used to do — states that all four approaches stop, which is not a junction
+## that exists. It also tells the driver on the main road to give way to the
+## side street they have priority over.
+##
+## Real priority comes from signage, which OSM records on NODES
+## (highway=stop / highway=give_way) rather than derivably from the ways. Where
+## those nodes exist the ribbon shader already paints the marking (see
+## RoadMarkingSpec), so the cap does not need to guess. What is left for the cap
+## is the unsigned junction, where priority follows road class: a residential
+## street meeting a primary yields to it.
+const CLASS_RANK := {
+	"motorway": 8,
+	"trunk": 7,
+	"primary": 6,
+	"secondary": 5,
+	"tertiary": 4,
+	"unclassified": 3,
+	"residential": 3,
+	"living_street": 2,
+	"service": 1,
+}
+
+## Rank for a highway class not in CLASS_RANK. Below every named through-road so
+## an unknown class is treated as minor and yields, rather than claiming a
+## priority it may not have.
+const DEFAULT_CLASS_RANK := 1
+
+## How much higher-ranked another arm must be before this arm is marked as
+## giving way to it.
+##
+## One full step. Equal-class arms (the classic residential + residential
+## crossing) get NO markings at all, which is correct across most of Europe:
+## such a junction is governed by priority-to-the-right / voorrang van rechts,
+## an unmarked rule. Painting stop bars there is what made every suburban
+## crossing read as a controlled intersection.
+const YIELD_RANK_MARGIN := 1
+
 ## How far inside the cap mouth the stop bar sits, so it reads as being at the
 ## junction rather than floating in the middle of it.
 const STOP_BAR_INSET := 0.5
@@ -227,8 +268,14 @@ func _emit_stop_bars(
 	if junction.arms.size() < RoadJunctionSolverScript.MIN_ARMS:
 		return false
 
+	# Only the subordinate arms are marked; see _yielding_arms.
+	var yields := _yielding_arms(junction.arms)
+
 	var emitted := false
-	for arm: RoadJunctionSolverScript.Arm in junction.arms:
+	for i: int in range(junction.arms.size()):
+		if not yields[i]:
+			continue
+		var arm: RoadJunctionSolverScript.Arm = junction.arms[i]
 		# Only real streets get a painted stop line. A driveway or alley meeting
 		# a road has no bar in reality, and painting one on every arm of every
 		# junction made the intersections read as a grid of white blocks rather
@@ -282,6 +329,32 @@ func _emit_stop_bars(
 		_add_flat_quad(st, p0, p1, p2, p3, CAP_Y + PAINT_Y)
 		emitted = true
 	return emitted
+
+
+## Which arms of a junction must give way, as a bool per arm in `arms` order.
+##
+## Priority follows road class: an arm yields when some other arm at the junction
+## outranks it by at least YIELD_RANK_MARGIN. When every arm is the same class
+## nothing is marked — an unsignposted equal crossing is governed by
+## priority-to-the-right, which has no road markings at all.
+##
+## This deliberately ignores highway=stop / highway=give_way nodes. Those are
+## already painted on the ribbon by the shader (RoadMarkingSpec), a few metres
+## back from the mouth where the real marking sits; re-emitting them on the cap
+## would paint the same instruction twice.
+func _yielding_arms(arms: Array[RoadJunctionSolverScript.Arm]) -> Array[bool]:
+	var out: Array[bool] = []
+	var top := -1
+	for arm: RoadJunctionSolverScript.Arm in arms:
+		top = maxi(top, _class_rank(arm.highway_type))
+	for arm: RoadJunctionSolverScript.Arm in arms:
+		out.append(_class_rank(arm.highway_type) + YIELD_RANK_MARGIN <= top)
+	return out
+
+
+## Priority rank of a highway class; higher wins.
+func _class_rank(highway_type: String) -> int:
+	return int(CLASS_RANK.get(highway_type, DEFAULT_CLASS_RANK))
 
 
 ## Emit an upward-facing quad at a fixed offset above the terrain.
