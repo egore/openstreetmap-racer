@@ -23,15 +23,15 @@ var _cache_center: Vector3 = Vector3.ZERO
 var _clip_circle: PackedVector2Array
 
 # Colors
-const BG_COLOR := Color(0.15, 0.18, 0.15, 0.85)
-const ROAD_COLOR := Color(0.85, 0.82, 0.75, 0.9)
-const MAJOR_ROAD_COLOR := Color(0.95, 0.9, 0.8, 1.0)
-const BUILDING_FILL := Color(0.45, 0.42, 0.38, 0.7)
-const WATERWAY_COLOR := Color(0.2, 0.5, 0.9, 0.95)
-const CAR_COLOR := Color(0.95, 0.3, 0.2, 1.0)
-const BORDER_COLOR := Color(0.3, 0.35, 0.3, 0.9)
-const NORTH_COLOR := Color(0.9, 0.15, 0.15, 1.0)
-const NORTH_BORDER_COLOR := Color(1.0, 1.0, 1.0, 1.0)
+const BG_COLOR := Color(0.067, 0.098, 0.11, 0.95)
+const ROAD_COLOR := Color("80918e")
+const MAJOR_ROAD_COLOR := Color("ece9d9")
+const BUILDING_FILL := Color("2b3a3e")
+const WATERWAY_COLOR := Color("548d9c")
+const CAR_COLOR := Color("d5f36b")
+const BORDER_COLOR := Color("516163")
+const NORTH_COLOR := Color("ff806b")
+const NORTH_BORDER_COLOR := Color("f5f2e8")
 
 const MAJOR_HIGHWAYS := ["motorway", "trunk", "primary", "secondary", "tertiary",
 	"motorway_link", "trunk_link", "primary_link"]
@@ -147,7 +147,9 @@ func _draw() -> void:
 	draw_set_transform(center_pos)
 
 	# Background circle
+	draw_circle(Vector2(0, 3), radius + 3, Color(0, 0, 0, 0.22))
 	draw_circle(Vector2.ZERO, radius, BG_COLOR)
+	draw_arc(Vector2.ZERO, radius * 0.5, 0, TAU, 64, Color(0.32, 0.38, 0.39, 0.25), 1, true)
 
 	# Draw buildings (clipped to circle)
 	for outline: PackedVector3Array in _cached_building_outlines:
@@ -172,7 +174,8 @@ func _draw() -> void:
 		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, MAJOR_ROAD_COLOR, 2.5)
 
 	# Car indicator: triangle pointing up
-	var tri_size := 6.0
+	draw_circle(Vector2.ZERO, 13, Color(0.835, 0.953, 0.42, 0.12))
+	var tri_size := 7.0
 	var tri := PackedVector2Array([
 		Vector2(0, -tri_size * 1.4),
 		Vector2(-tri_size * 0.7, tri_size * 0.7),
@@ -181,7 +184,11 @@ func _draw() -> void:
 	draw_colored_polygon(tri, CAR_COLOR)
 
 	# Border ring
-	draw_arc(Vector2.ZERO, radius - 1.0, 0, TAU, 64, BORDER_COLOR, 2.5)
+	draw_arc(Vector2.ZERO, radius - 1.0, 0, TAU, 64, BORDER_COLOR, 1.0, true)
+	for i in range(36):
+		var direction := Vector2.from_angle(TAU * float(i) / 36.0)
+		var length := 7.0 if i % 3 == 0 else 3.0
+		draw_line(direction * (radius - length), direction * (radius - 2), BORDER_COLOR, 1, true)
 
 	# North indicator: red arrow pointing toward true north, drawn near the
 	# rim. The minimap rotates with the car, so north spins with the heading.

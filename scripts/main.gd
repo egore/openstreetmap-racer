@@ -27,20 +27,20 @@ const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 @onready var combo_label: Label = $HUD/ComboLabel
 @onready var kudos_popup: Label = $HUD/KudosPopup
 @onready var pause_menu: CanvasLayer = $PauseMenu
-@onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/ResumeButton
-@onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/QuitButton
+@onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/ResumeButton
+@onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/QuitButton
 @onready var sky_controller: SkyController = $SkyController
 ## Post-processing stack (glow/SSAO/SSIL/SSR/grade). Self-wires to the
 ## WorldEnvironment and SkyController via its exported paths; referenced here for
 ## discoverability and so effect toggles can be reached from the composition root.
 @onready var post_processing: PostProcessing = $PostProcessing
-@onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DayNightToggle
-@onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DebugLabelsToggle
-@onready var wet_weather_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/WetWeatherToggle
-@onready var speed_blur_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/SpeedBlurToggle
-@onready var driving_assists_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/DrivingAssistsToggle
-@onready var frame_tracer_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/FrameTracerToggle
-@onready var dump_frame_times_button: Button = $PauseMenu/CenterContainer/Panel/DumpFrameTimesButton
+@onready var day_night_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/DayNightToggle
+@onready var debug_labels_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/DebugLabelsToggle
+@onready var wet_weather_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/WetWeatherToggle
+@onready var speed_blur_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/SpeedBlurToggle
+@onready var driving_assists_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/DrivingAssistsToggle
+@onready var frame_tracer_toggle: CheckButton = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/FrameTracerToggle
+@onready var dump_frame_times_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/DumpFrameTimesButton
 @onready var headlights: Headlights = $Car/Headlights
 @onready var street_lamp_lights: StreetLampLights = $StreetLampLights
 ## Wet-road weather. Self-wires via the global `wetness` shader uniform; kept
@@ -361,7 +361,7 @@ func _on_car_gear_changed(gear: int) -> void:
 ## multiplier line. The combo line is hidden at x1 to keep the HUD quiet during
 ## ordinary driving and only shouts once the player is stringing moves together.
 func _on_car_kudos_changed(total: int, combo: float) -> void:
-	kudos_label.text = "KUDOS %d" % total
+	kudos_label.text = "KUDOS   %06d" % total
 	if combo > 1.01:
 		combo_label.text = "x%.1f COMBO" % combo
 	else:
@@ -375,7 +375,7 @@ func _on_car_kudos_event(label: String, amount: int, is_penalty: bool) -> void:
 	kudos_popup.text = "%s  %s%d" % [label, sign_str, amount]
 	kudos_popup.add_theme_color_override(
 		"font_color",
-		Color(1.0, 0.3, 0.25) if is_penalty else Color(1.0, 0.85, 0.2)
+		Color("ff806b") if is_penalty else Color("d5f36b")
 	)
 	_play_kudos_popup()
 
@@ -401,6 +401,6 @@ func _on_tiles_changed(_tile_key: Vector2i) -> void:
 
 func _update_info_label() -> void:
 	var pos := car.global_position
-	info_label.text = "Pos: (%.0f, %.0f) | Tiles: %d" % [
+	info_label.text = "FREE DRIVE  /  E %.0f  ·  S %.0f  /  %d TILES LIVE" % [
 		pos.x, pos.z, tile_manager.get_loaded_tile_count()
 	]

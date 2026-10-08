@@ -16,6 +16,34 @@
 [ext_resource type="Script" uid="uid://bja4t4xylv62m" path="res://scripts/speed_blur.gd" id="14_speedblur"]
 [ext_resource type="Shader" uid="uid://6px6s5m73t2k" path="res://scripts/shaders/speed_blur.gdshader" id="15_blurshader"]
 [ext_resource type="Script" path="res://scripts/top_down_camera.gd" id="16_topdown"]
+[ext_resource type="Script" path="res://scripts/hud_style.gd" id="17_hud"]
+[ext_resource type="Script" path="res://scripts/pause_menu.gd" id="18_pause"]
+[ext_resource type="FontFile" path="res://assets/ui/fonts/BarlowCondensed-SemiBold.ttf" id="19_display"]
+[ext_resource type="Texture2D" path="res://assets/ui/route-art.svg" id="20_route"]
+[ext_resource type="Texture2D" path="res://assets/ui/racer-mark.svg" id="21_mark"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_score"]
+bg_color = Color(0.067, 0.098, 0.11, 0.9)
+border_width_left = 3
+border_color = Color(0.835, 0.953, 0.42, 1)
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+content_margin_left = 18.0
+content_margin_right = 18.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBox_pause"]
+bg_color = Color(0.067, 0.098, 0.11, 0.98)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.204, 0.267, 0.282, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_left = 12
+corner_radius_bottom_right = 12
+shadow_color = Color(0, 0, 0, 0.35)
+shadow_size = 32
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
 shader = ExtResource("6_sky")
@@ -235,6 +263,7 @@ script = ExtResource("14_speedblur")
 
 [node name="HUD" type="CanvasLayer" parent="." unique_id=153076246]
 layer = 1
+script = ExtResource("17_hud")
 
 [node name="DialCluster" type="Control" parent="HUD" unique_id=153076247]
 layout_mode = 3
@@ -242,52 +271,56 @@ anchors_preset = 2
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 24.0
-offset_top = -252.0
-offset_right = 252.0
+offset_top = -264.0
+offset_right = 264.0
 offset_bottom = -24.0
 grow_vertical = 0
 mouse_filter = 2
 script = ExtResource("13_cluster")
 
 [node name="InfoLabel" type="Label" parent="HUD" unique_id=281558808]
-offset_left = 20.0
-offset_top = 60.0
+offset_left = 78.0
+offset_top = 53.0
 offset_right = 500.0
-offset_bottom = 90.0
-theme_override_font_sizes/font_size = 16
+offset_bottom = 76.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.65, 0.72, 0.71, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.8)
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 12
 text = "Loading..."
 
 [node name="KudosLabel" type="Label" parent="HUD" unique_id=153076300]
-anchors_preset = 5
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -200.0
-offset_top = 16.0
-offset_right = 200.0
-offset_bottom = 70.0
-grow_horizontal = 2
-theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
-theme_override_constants/outline_size = 6
-theme_override_font_sizes/font_size = 40
-text = "KUDOS 0"
-horizontal_alignment = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -248.0
+offset_top = 24.0
+offset_right = -28.0
+offset_bottom = 80.0
+grow_horizontal = 0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.96, 0.95, 0.91, 1)
+theme_override_fonts/font = ExtResource("19_display")
+theme_override_styles/normal = SubResource("StyleBox_score")
+theme_override_font_sizes/font_size = 30
+text = "KUDOS   000000"
+horizontal_alignment = 2
 vertical_alignment = 1
 
 [node name="ComboLabel" type="Label" parent="HUD" unique_id=153076301]
-anchors_preset = 5
-anchor_left = 0.5
-anchor_right = 0.5
-offset_left = -200.0
-offset_top = 62.0
-offset_right = 200.0
-offset_bottom = 92.0
-grow_horizontal = 2
-theme_override_colors/font_color = Color(1, 0.55, 0.1, 1)
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -248.0
+offset_top = 84.0
+offset_right = -28.0
+offset_bottom = 112.0
+grow_horizontal = 0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.835, 0.953, 0.42, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 22
-horizontal_alignment = 1
+theme_override_constants/outline_size = 2
+theme_override_font_sizes/font_size = 16
+horizontal_alignment = 2
 vertical_alignment = 1
 
 [node name="KudosPopup" type="Label" parent="HUD" unique_id=153076302]
@@ -302,8 +335,10 @@ offset_bottom = 180.0
 grow_horizontal = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
-theme_override_constants/outline_size = 6
-theme_override_font_sizes/font_size = 44
+mouse_filter = 2
+theme_override_constants/outline_size = 3
+theme_override_fonts/font = ExtResource("19_display")
+theme_override_font_sizes/font_size = 36
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -314,10 +349,10 @@ anchor_left = 1.0
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = -220.0
-offset_top = -220.0
-offset_right = -10.0
-offset_bottom = -10.0
+offset_left = -248.0
+offset_top = -242.0
+offset_right = -28.0
+offset_bottom = -22.0
 grow_horizontal = 0
 grow_vertical = 0
 mouse_filter = 2
@@ -329,6 +364,7 @@ tile_manager_node_path = NodePath("../../OSMTileManager")
 process_mode = 3
 layer = 10
 visible = false
+script = ExtResource("18_pause")
 
 [node name="Dimmer" type="ColorRect" parent="PauseMenu" unique_id=300100002]
 anchors_preset = 15
@@ -336,7 +372,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0, 0, 0, 0.5)
+color = Color(0.025, 0.045, 0.05, 0.8)
 
 [node name="CenterContainer" type="CenterContainer" parent="PauseMenu" unique_id=300100003]
 anchors_preset = 15
@@ -345,68 +381,131 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="Panel" type="VBoxContainer" parent="PauseMenu/CenterContainer" unique_id=300100004]
-custom_minimum_size = Vector2(280, 0)
+[node name="Panel" type="PanelContainer" parent="PauseMenu/CenterContainer" unique_id=300100004]
+custom_minimum_size = Vector2(820, 0)
 layout_mode = 2
-theme_override_constants/separation = 16
+theme_override_styles/panel = SubResource("StyleBox_pause")
 
-[node name="Title" type="Label" parent="PauseMenu/CenterContainer/Panel" unique_id=300100005]
+[node name="Margin" type="MarginContainer" parent="PauseMenu/CenterContainer/Panel"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 40
-text = "Paused"
-horizontal_alignment = 1
+theme_override_constants/margin_left = 32
+theme_override_constants/margin_top = 28
+theme_override_constants/margin_right = 32
+theme_override_constants/margin_bottom = 28
 
-[node name="DayNightToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100008]
-custom_minimum_size = Vector2(0, 48)
+[node name="Columns" type="HBoxContainer" parent="PauseMenu/CenterContainer/Panel/Margin"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
+theme_override_constants/separation = 36
+
+[node name="Identity" type="VBoxContainer" parent="PauseMenu/CenterContainer/Panel/Margin/Columns"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 12
+
+[node name="Mark" type="TextureRect" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+size_flags_horizontal = 0
+texture = ExtResource("21_mark")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Eyebrow" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.835, 0.953, 0.42, 1)
+theme_override_font_sizes/font_size = 12
+text = "OPENSTREETMAP RACER  /  FREE DRIVE"
+
+[node name="Title" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity" unique_id=300100005]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("19_display")
+theme_override_font_sizes/font_size = 64
+text = "TAKE A\nBREATHER."
+
+[node name="Description" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.65, 0.72, 0.71, 1)
+text = "Real streets. Your own racing line.\nThe road will be here when you're ready."
+
+[node name="RouteArt" type="TextureRect" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity"]
+custom_minimum_size = Vector2(340, 180)
+layout_mode = 2
+size_flags_vertical = 3
+texture = ExtResource("20_route")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Shortcut" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Identity"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.65, 0.72, 0.71, 1)
+theme_override_font_sizes/font_size = 12
+text = "ESC  RETURN TO THE ROAD"
+
+[node name="Settings" type="VBoxContainer" parent="PauseMenu/CenterContainer/Panel/Margin/Columns"]
+custom_minimum_size = Vector2(340, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="SettingsTitle" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings"]
+layout_mode = 2
+theme_override_fonts/font = ExtResource("19_display")
+theme_override_font_sizes/font_size = 26
+text = "YOUR DRIVE"
+
+[node name="DayNightToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100008]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
 button_pressed = true
 text = "Daytime"
 
-[node name="DebugLabelsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100009]
-custom_minimum_size = Vector2(0, 48)
+[node name="WetWeatherToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100010]
+custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Debug Labels"
+text = "Wet roads"
 
-[node name="WetWeatherToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100010]
-custom_minimum_size = Vector2(0, 48)
+[node name="SpeedBlurToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100014]
+custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Wet Weather"
+text = "Motion blur"
 
-[node name="SpeedBlurToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100014]
-custom_minimum_size = Vector2(0, 48)
+[node name="DrivingAssistsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100015]
+custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Speed Blur"
+text = "Driving assists"
 
-[node name="DrivingAssistsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100015]
-custom_minimum_size = Vector2(0, 48)
+[node name="Diagnostics" type="Label" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Driving Assists"
+theme_override_colors/font_color = Color(0.65, 0.72, 0.71, 1)
+theme_override_font_sizes/font_size = 12
+text = "DEVELOPER TOOLS"
 
-[node name="FrameTracerToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100011]
-custom_minimum_size = Vector2(0, 48)
+[node name="DebugLabelsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100009]
+custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Frame Tracer"
+text = "Map debug labels"
 
-[node name="DumpFrameTimesButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100012]
-custom_minimum_size = Vector2(0, 48)
+[node name="FrameTracerToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100011]
+custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Dump Frame Times"
+text = "Frame tracer"
 
-[node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100006]
-custom_minimum_size = Vector2(0, 48)
+[node name="DumpFrameTimesButton" type="Button" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100012]
+custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Resume"
+theme_override_font_sizes/font_size = 13
+text = "Export frame timings  /  F4"
 
-[node name="QuitButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100007]
-custom_minimum_size = Vector2(0, 48)
+[node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100006]
+custom_minimum_size = Vector2(0, 52)
 layout_mode = 2
-theme_override_font_sizes/font_size = 22
-text = "Quit"
+theme_override_fonts/font = ExtResource("19_display")
+theme_override_font_sizes/font_size = 24
+text = "BACK TO THE ROAD  →"
+
+[node name="QuitButton" type="Button" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100007]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Quit game"

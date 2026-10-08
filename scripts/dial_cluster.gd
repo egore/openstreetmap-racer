@@ -14,9 +14,9 @@ extends Control
 ## behaviour is unit-testable without a viewport, and the styling can change
 ## without touching the maths.
 ##
-## Everything is drawn with Godot's primitives rather than sprite assets, matching
-## the project's texture-free approach elsewhere (procedural shaders, the minimap):
-## the cluster scales to any size and needs no art pipeline.
+## Geometry is drawn with primitives so the dial stays sharp at any size.
+
+const InterfaceTheme := preload("res://scripts/interface_theme.gd")
 
 ## Emitted when the dial enters or leaves the shift-up zone, so other systems
 ## (audio, force feedback) can react to the shift light without polling.
@@ -25,7 +25,7 @@ signal redline_changed(redlining: bool)
 ## Outer radius of the dial as a fraction of the control's smaller dimension.
 @export var dial_radius_ratio: float = 0.46
 ## Thickness of the rev arc, as a fraction of the dial radius.
-@export var arc_width_ratio: float = 0.13
+@export var arc_width_ratio: float = 0.07
 
 ## Engine speed (RPM) at the top of the range. Feeds the model.
 @export var max_rpm: float = 7500.0
@@ -33,14 +33,14 @@ signal redline_changed(redlining: bool)
 @export var redline_rpm: float = 6500.0
 
 ## Colours. Kept as exports so the cluster can be re-themed per car later.
-@export var face_color: Color = Color(0.04, 0.05, 0.07, 0.72)
-@export var rim_color: Color = Color(0.55, 0.60, 0.68, 0.55)
-@export var arc_track_color: Color = Color(0.16, 0.18, 0.22, 0.85)
-@export var arc_fill_color: Color = Color(0.35, 0.78, 1.0, 0.95)
-@export var redline_color: Color = Color(1.0, 0.22, 0.18, 0.95)
+@export var face_color: Color = Color(0.067, 0.098, 0.11, 0.94)
+@export var rim_color: Color = Color("516163")
+@export var arc_track_color: Color = Color("29373b")
+@export var arc_fill_color: Color = Color("d5f36b")
+@export var redline_color: Color = Color("ff806b")
 @export var needle_color: Color = Color(1.0, 0.95, 0.90, 1.0)
-@export var text_color: Color = Color(0.96, 0.97, 1.0, 1.0)
-@export var muted_text_color: Color = Color(0.62, 0.66, 0.74, 1.0)
+@export var text_color: Color = Color("f5f2e8")
+@export var muted_text_color: Color = Color("a5b1b0")
 
 ## Rev logic. The cluster feeds it gear/speed each frame and reads back the
 ## needle position and redline state.
@@ -153,11 +153,13 @@ func _draw() -> void:
 ## The dial's dark backing disc and its rim. The rim brightens toward red as the
 ## engine approaches the limiter, which is the shift light.
 func _draw_face(centre: Vector2, radius: float) -> void:
+	draw_circle(centre + Vector2(0, 4), radius + 3, Color(0, 0, 0, 0.18))
 	draw_circle(centre, radius, face_color)
 	var intensity := _tacho.redline_intensity()
 	var rim := rim_color.lerp(redline_color, intensity)
-	var width := maxf(2.0, radius * 0.03) * (1.0 + intensity)
+	var width := maxf(1.0, radius * 0.01) * (1.0 + intensity)
 	draw_arc(centre, radius, 0.0, TAU, _ARC_SEGMENTS, rim, width, true)
+	draw_arc(centre, radius * 0.83, 0.0, TAU, _ARC_SEGMENTS, Color(0.32, 0.38, 0.39, 0.25), 1, true)
 
 
 ## The swept rev bar: a dim track for the whole range, the filled portion up to
@@ -201,6 +203,12 @@ func _draw_ticks(centre: Vector2, radius: float) -> void:
 		# Ticks inside the red zone are drawn red, marking the shift point.
 		var tint := redline_color if fraction >= _tacho.redline_fraction() else muted_text_color
 		draw_line(centre + dir * inner, centre + dir * outer, tint, maxf(1.0, radius * 0.018), true)
+	for i in range(_TICK_COUNT * 4 + 1):
+		if i % 4 == 0:
+			continue
+		var angle := _tacho.angle_for_fraction(float(i) / float(_TICK_COUNT * 4))
+		var dir := _dial_direction(angle)
+		draw_line(centre + dir * radius * 0.87, centre + dir * outer, rim_color, 1, true)
 
 
 ## The needle itself: a tapered pointer from just past the hub out to the arc.
@@ -232,7 +240,7 @@ func _draw_hub_and_gear(centre: Vector2, radius: float) -> void:
 		rim_color.lerp(redline_color, intensity), maxf(1.5, radius * 0.02), true
 	)
 
-	var font := ThemeDB.fallback_font
+	var font := InterfaceTheme.DISPLAY
 	var gear_size := int(maxf(12.0, hub_radius * 1.15))
 	var label := Transmission.gear_label(_gear)
 	var colour := text_color.lerp(redline_color, intensity)
@@ -242,21 +250,21 @@ func _draw_hub_and_gear(centre: Vector2, radius: float) -> void:
 ## The digital speed readout below the dial, with its unit. Speed stays a number
 ## because that is what the player checks precisely; the dial handles revs.
 func _draw_speed(centre: Vector2, radius: float) -> void:
-	var font := ThemeDB.fallback_font
-	var speed_size := int(maxf(14.0, radius * 0.30))
+	var font := InterfaceTheme.DISPLAY
+	var speed_size := int(maxf(14.0, radius * 0.40))
 	var speed_pos := centre + Vector2(0.0, radius * 0.52)
 	_draw_centred_text(font, "%d" % int(round(_speed_kmh)), speed_size, speed_pos, text_color)
 
 	var unit_size := int(maxf(9.0, radius * 0.13))
 	var unit_pos := speed_pos + Vector2(0.0, radius * 0.24)
-	_draw_centred_text(font, "km/h", unit_size, unit_pos, muted_text_color)
+	_draw_centred_text(InterfaceTheme.BODY, "KM/H", unit_size, unit_pos, muted_text_color)
 
 
 ## Assist telltales along the bottom of the cluster: TC, ABS and stability, lit
 ## while the corresponding aid is working. This is how the player learns the car
 ## is helping them, instead of the aids being invisible magic.
 func _draw_telltales(centre: Vector2, radius: float) -> void:
-	var font := ThemeDB.fallback_font
+	var font := InterfaceTheme.BODY
 	var lamp_size := int(maxf(8.0, radius * 0.13))
 	var y := centre.y - radius * 0.42
 	var spacing := radius * 0.42
@@ -270,7 +278,7 @@ func _draw_telltales(centre: Vector2, radius: float) -> void:
 		var level: float = entry[1]
 		# Unlit lamps stay faintly visible so the cluster looks complete at rest.
 		var lit: Color = entry[2]
-		var colour := Color(lit.r, lit.g, lit.b, lerpf(0.18, 1.0, level))
+		var colour := muted_text_color.lerp(lit, level)
 		var x := centre.x + (float(i) - 1.0) * spacing
 		_draw_centred_text(font, entry[0], lamp_size, Vector2(x, y), colour)
 
