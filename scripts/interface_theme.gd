@@ -19,6 +19,34 @@ static func panel(fill: Color, border: Color = Color("344448"), padding: float =
 	style.content_margin_bottom = padding
 	return style
 
+## Turn a button into the big accent call to action (dark ink on lime), the
+## style of "BACK TO THE ROAD" in the pause menu.
+static func style_primary(button: Button, font_size: int = 26) -> void:
+	button.custom_minimum_size.y = maxf(button.custom_minimum_size.y, 56)
+	button.add_theme_font_override("font", DISPLAY)
+	button.add_theme_font_size_override("font_size", font_size)
+	button.add_theme_stylebox_override("normal", panel(ACCENT, ACCENT, 12))
+	button.add_theme_stylebox_override("hover", panel(Color("e4ff92"), ACCENT, 12))
+	button.add_theme_stylebox_override("pressed", panel(Color("b9d65a"), ACCENT, 12))
+	var ring := panel(Color(0, 0, 0, 0), PAPER, 0)
+	ring.set_border_width_all(2)
+	button.add_theme_stylebox_override("focus", ring)
+	for state: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		button.add_theme_color_override(state, INK)
+
+
+## A plain label in the interface palette; `display` picks the condensed face.
+static func label(text: String, size: int, color: Color = PAPER, display: bool = false) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", color)
+	if display:
+		l.add_theme_font_override("font", DISPLAY)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return l
+
+
 static func create() -> Theme:
 	var theme := Theme.new()
 	theme.default_font = BODY

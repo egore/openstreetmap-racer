@@ -12,6 +12,7 @@ extends CanvasLayer
 ## Then the world becomes the current scene and this fades out and frees itself.
 
 const InterfaceTheme := preload("res://scripts/interface_theme.gd")
+const RunSessionScript := preload("res://scripts/run_session.gd")
 
 ## Emitted once the world is built and the overlay has begun to lift.
 signal finished(world: Node)
@@ -19,6 +20,8 @@ signal finished(world: Node)
 ## The world scene to load. Must emit loading_progress(fraction, status) and
 ## world_ready; tests point this at a lightweight stand-in.
 @export_file("*.tscn") var scene_path: String = "res://scenes/main.tscn"
+## Handed to the world as its game_mode before it enters the tree.
+var game_mode: RunSessionScript.Mode = RunSessionScript.Mode.FREE_DRIVE
 
 ## How the overall bar is split between the three stages above.
 const _ASSETS_SHARE := 0.3
@@ -103,6 +106,8 @@ func _run() -> void:
 	await get_tree().process_frame
 
 	_world = packed.instantiate()
+	if "game_mode" in _world:
+		_world.set("game_mode", game_mode)
 	_world.connect("loading_progress", _on_world_progress)
 	_world.connect("world_ready", _on_world_ready, CONNECT_ONE_SHOT)
 	get_tree().root.add_child(_world)
@@ -196,7 +201,7 @@ func _build_ui() -> void:
 	mark.size = Vector2(36, 36)
 	_root.add_child(mark)
 
-	var brand := _label("OPENSTREETMAP / RACER", 24, InterfaceTheme.PAPER, true)
+	var brand := InterfaceTheme.label("OPENSTREETMAP / RACER", 24, InterfaceTheme.PAPER, true)
 	brand.position = Vector2(114, 57)
 	_root.add_child(brand)
 
@@ -217,13 +222,14 @@ func _build_ui() -> void:
 	_pulse.custom_minimum_size = Vector2(8, 8)
 	_pulse.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	eyebrow_row.add_child(_pulse)
-	eyebrow_row.add_child(_label("PREPARING YOUR DRIVE", 13, InterfaceTheme.ACCENT))
+	eyebrow_row.add_child(InterfaceTheme.label(
+		"PREPARING  /  " + RunSessionScript.mode_name(game_mode), 13, InterfaceTheme.ACCENT))
 
-	_stage_label = _label("", 64, InterfaceTheme.PAPER, true)
+	_stage_label = InterfaceTheme.label("", 64, InterfaceTheme.PAPER, true)
 	_stage_label.name = "Stage"
 	column.add_child(_stage_label)
 
-	_location_label = _label("", 14, InterfaceTheme.MUTED)
+	_location_label = InterfaceTheme.label("", 14, InterfaceTheme.MUTED)
 	_location_label.name = "Location"
 	column.add_child(_location_label)
 
@@ -242,7 +248,7 @@ func _build_ui() -> void:
 	_bar.add_theme_stylebox_override("background", _bar_style(Color("263337")))
 	_bar.add_theme_stylebox_override("fill", _bar_style(InterfaceTheme.ACCENT))
 	bar_row.add_child(_bar)
-	_percent_label = _label("0%", 22, InterfaceTheme.PAPER, true)
+	_percent_label = InterfaceTheme.label("0%", 22, InterfaceTheme.PAPER, true)
 	_percent_label.custom_minimum_size = Vector2(64, 0)
 	_percent_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	bar_row.add_child(_percent_label)
@@ -254,21 +260,10 @@ func _build_ui() -> void:
 	var tip_row := HBoxContainer.new()
 	tip_row.add_theme_constant_override("separation", 14)
 	column.add_child(tip_row)
-	tip_row.add_child(_label("TIP", 13, InterfaceTheme.ACCENT, true))
-	_tip_label = _label(TIPS[_tip_index], 15, InterfaceTheme.MUTED)
+	tip_row.add_child(InterfaceTheme.label("TIP", 13, InterfaceTheme.ACCENT, true))
+	_tip_label = InterfaceTheme.label(TIPS[_tip_index], 15, InterfaceTheme.MUTED)
 	_tip_label.name = "Tip"
 	tip_row.add_child(_tip_label)
-
-
-func _label(text: String, size: int, color: Color, display: bool = false) -> Label:
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", size)
-	label.add_theme_color_override("font_color", color)
-	if display:
-		label.add_theme_font_override("font", InterfaceTheme.DISPLAY)
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return label
 
 
 func _bar_style(color: Color) -> StyleBoxFlat:

@@ -6,6 +6,9 @@ extends Node
 signal loading_progress(fraction: float, status: String)
 signal world_ready
 
+## Set by the loading screen, as on the real world.
+var game_mode: int = 0
+
 ## Set by a test to hold the world in its loading state.
 static var hold: bool = false
 

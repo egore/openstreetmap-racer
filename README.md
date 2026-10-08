@@ -61,6 +61,8 @@ On top of the world renderer sits a thin, testable "make it a game" layer:
 
 23. **Recovery** (`scripts/recovery_tracker.gd`) — While the car drives cleanly it drops breadcrumbs; **R** puts it back, upright and stopped, on the newest one at least two seconds old, so it lands before the line that led into the crash.
 
+24. **Kudos Attack** (`scripts/run_session.gd`, `run_controller.gd`, `run_hud.gd`, `results_screen.gd`, `profile_store.gd`) — A three-minute score run picked from the title screen. The car is held at the line through a "3, 2, 1, GO!" countdown, the clock runs at the top of the screen (red for the last ten seconds), and when it runs out the world pauses behind a results card: score, personal best, distance, top speed, drifts, near misses, mistakes and the best single move. **Run it back** restarts from the same line without reloading; **Keep driving** drops the clock and carries on in free drive. Bests, run counts and lifetime distance are saved to `user://profile.cfg`. The run logic (`RunSession`) and the save file (`ProfileStore`) are pure and unit-tested; `RunController` is the glue that `main.gd` adds for timed modes. The car is held at the line with `CarController.input_locked` (controls ignored, brakes on) and **not** with `freeze`: a `VehicleBody3D` frozen while its wheels touch the ground reports NaN wheel rpm, which on release turns the whole body NaN.
+
 ### Dynamic Loading
 
 The tile manager tracks which tile the camera is in. When the camera crosses into a new tile, it:

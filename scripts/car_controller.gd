@@ -238,6 +238,11 @@ var _last_kudos_total: int = -1
 ## speed at query time so fast passes have a longer detection reach.
 const _NEAR_MISS_PROBE_BASE := 6.0
 
+## While true the driver's inputs are ignored and the brakes held, e.g. on the
+## start line. Use this rather than `freeze` to hold a car that is standing on
+## its wheels: a VehicleBody3D frozen in ground contact reports NaN wheel rpm.
+var input_locked: bool = false
+
 ## Breadcrumbs of recent safe driving, used by recover(). Preloaded rather than
 ## referenced by class_name so it resolves before the global class cache does.
 const RecoveryTrackerScript := preload("res://scripts/recovery_tracker.gd")
@@ -587,6 +592,11 @@ func _physics_process(_delta: float) -> void:
 	var reverse_input := Input.get_action_strength("move_backward")
 	var steer_input := Input.get_action_strength("steer_left") - Input.get_action_strength("steer_right")
 	var handbrake_input := Input.get_action_strength("handbrake")
+	if input_locked:
+		forward_input = 0.0
+		reverse_input = 0.0
+		steer_input = 0.0
+		handbrake_input = 0.0
 	var handbrake_active := handbrake_input > 0.0
 	var forward_speed := linear_velocity.dot(global_transform.basis.z)
 
@@ -604,6 +614,8 @@ func _physics_process(_delta: float) -> void:
 
 	if forward_speed > max_speed and drive_force > 0.0:
 		drive_force = 0.0
+	if input_locked:
+		brake_force = brake_force_value
 
 	# Handbrake: lock the rear axle and break its grip so the back end can slide.
 	# Cut engine force so the player can't power through the locked wheels, and apply
@@ -712,6 +724,10 @@ func _slip_direction() -> float:
 ## linear speed via the tyre circumference.
 func _driven_wheel_surface_speed() -> float:
 	var rpm := (rear_left_wheel.get_rpm() + rear_right_wheel.get_rpm()) * 0.5
+	# A VehicleBody3D frozen with its wheels on the ground reports NaN rpm. Fed to
+	# the aids, that NaN becomes a NaN force and the whole body goes with it.
+	if not is_finite(rpm):
+		return 0.0
 	# rev/min -> rad/s is (2*PI/60); multiplying by the radius gives m/s.
 	return rpm * (TAU / 60.0) * rear_left_wheel.wheel_radius
 

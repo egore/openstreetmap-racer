@@ -14,6 +14,8 @@ const ScreenshotScript := preload("res://scripts/screenshot.gd")
 ## rather than as an obvious error.
 const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 const SceneFlowScript := preload("res://scripts/scene_flow.gd")
+const RunSessionScript := preload("res://scripts/run_session.gd")
+const RunControllerScript := preload("res://scripts/run_controller.gd")
 
 ## Spawn progress for the loading screen: `fraction` runs 0..1 over building the
 ## spawn tiles and settling the world; `status` names the current step.
@@ -21,6 +23,10 @@ signal loading_progress(fraction: float, status: String)
 ## The world around the spawn is built, the car is on the ground and the first
 ## frames have rendered. The loading screen lifts on this.
 signal world_ready
+
+## What the player is doing in this world. Set by the loading screen before the
+## scene enters the tree; running main.tscn directly is a free drive.
+@export var game_mode: RunSessionScript.Mode = RunSessionScript.Mode.FREE_DRIVE
 
 ## Share of the spawn progress spent building tiles; the rest is warm-up.
 const _TILE_PROGRESS_SHARE := 0.85
@@ -50,6 +56,7 @@ const _WARMUP_FRAMES := 30
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/QuitButton
 @onready var main_menu_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/MainMenuButton
+@onready var pause_eyebrow: Label = $PauseMenu/CenterContainer/Panel/Margin/Columns/Identity/Eyebrow
 @onready var sky_controller: SkyController = $SkyController
 ## Post-processing stack (glow/SSAO/SSIL/SSR/grade). Self-wires to the
 ## WorldEnvironment and SkyController via its exported paths; referenced here for
@@ -92,6 +99,9 @@ var _kudos_popup_tween: Tween = null
 ## the loading screen would be invisible and stall nothing.
 var _is_world_ready: bool = false
 
+## The timed run in progress, or null in free drive.
+var _run: RunControllerScript = null
+
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -108,6 +118,16 @@ func _ready() -> void:
 	car.assists_changed.connect(dial_cluster.set_assist_levels)
 	car.kudos_changed.connect(_on_car_kudos_changed)
 	car.kudos_event.connect(_on_car_kudos_event)
+
+	if game_mode != RunSessionScript.Mode.FREE_DRIVE:
+		_run = RunControllerScript.new()
+		_run.name = "RunController"
+		_run.mode = game_mode
+		_run.car = car
+		add_child(_run)
+		car.kudos_event.connect(_run.record_event)
+		_run.free_drive_requested.connect(_on_run_abandoned)
+	_update_mode_labels()
 
 	# React to tile streaming instead of polling a private field every frame.
 	tile_manager.tile_loaded.connect(_on_tiles_changed)
@@ -193,12 +213,16 @@ func _process(delta: float) -> void:
 	# Escape toggles the pause state.
 	if not _is_world_ready:
 		return
+	# The results card owns the screen (and the pause) until it's dismissed.
+	if _run != null and _run.is_showing_results():
+		return
 
 	if Input.is_action_just_pressed("ui_cancel"):
 		_set_paused(not get_tree().paused)
 
-	# R / gamepad Y. Ignored while frozen so the spawn drop can't be interrupted.
-	if Input.is_action_just_pressed("reset_car") and not get_tree().paused and not car.freeze:
+	# R / gamepad Y. Ignored while the car is held (spawn drop, start line).
+	if Input.is_action_just_pressed("reset_car") and not get_tree().paused \
+			and not car.freeze and not car.input_locked:
 		recover_car()
 
 	# Drive the speed blur from here rather than from the car's speed signal,
@@ -354,10 +378,26 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 		await get_tree().process_frame
 	_is_world_ready = true
 	world_ready.emit()
+	if _run != null:
+		_run.begin()
 
 
 func is_world_ready() -> bool:
 	return _is_world_ready
+
+
+## The player left a timed run for free drive: drop the clock, keep the world.
+func _on_run_abandoned() -> void:
+	car.kudos_event.disconnect(_run.record_event)
+	_run.queue_free()
+	_run = null
+	game_mode = RunSessionScript.Mode.FREE_DRIVE
+	_update_mode_labels()
+
+
+func _update_mode_labels() -> void:
+	pause_eyebrow.text = "OPENSTREETMAP RACER  /  " + RunSessionScript.mode_name(game_mode)
+	_update_info_label()
 
 ## Raycast straight down through the spawn column to find the terrain collider's
 ## surface Y. Starts well above the sampled height and reaches well below it.
@@ -473,6 +513,7 @@ func _on_tiles_changed(_tile_key: Vector2i) -> void:
 
 func _update_info_label() -> void:
 	var pos := car.global_position
-	info_label.text = "FREE DRIVE  /  E %.0f  ·  S %.0f  /  %d TILES LIVE" % [
-		pos.x, pos.z, tile_manager.get_loaded_tile_count()
+	info_label.text = "%s  /  E %.0f  ·  S %.0f  /  %d TILES LIVE" % [
+		RunSessionScript.mode_name(game_mode), pos.x, pos.z,
+		tile_manager.get_loaded_tile_count()
 	]
