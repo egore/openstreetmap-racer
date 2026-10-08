@@ -122,3 +122,29 @@ func test_one_way_road_never_reverses() -> void:
 		mgr._assign_to_road(car, road, randf() * road.length)
 		assert_bool(car.is_reversed()).override_failure_message(
 			"a one-way road must never be driven reversed").is_false()
+
+
+func test_player_spawns_in_the_right_hand_lane_of_the_nearest_street() -> void:
+	var data := OSMParser.OSMData.new()
+	for spec: Array in [[1, Vector3(0, 0, 0)], [2, Vector3(100, 0, 0)]]:
+		var node := OSMParser.OSMNode.new()
+		node.id = spec[0]
+		node.local_pos = spec[1]
+		data.nodes[node.id] = node
+	var way := OSMParser.OSMWay.new()
+	way.id = 100
+	way.node_ids = [1, 2]
+	way.tags = {"highway": "residential"}
+	data.ways[100] = way
+	var mgr := _make_manager()
+	mgr._network.build(data)
+
+	var pose := mgr.spawn_pose_near(Vector3(50, 0, -20))
+
+	# Heading east, the right-hand lane is south (+Z) of the centreline.
+	assert_vector(pose["position"]).is_equal_approx(Vector3(50, 0, 1.25), Vector3.ONE * 0.001)
+	assert_vector(pose["forward"]).is_equal_approx(Vector3.RIGHT, Vector3.ONE * 0.001)
+
+
+func test_no_road_graph_means_no_spawn_pose() -> void:
+	assert_bool(_make_manager().spawn_pose_near(Vector3.ZERO).is_empty()).is_true()

@@ -16,6 +16,8 @@ const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
+## Its road graph doubles as the spawn finder: the car starts on a street.
+@onready var traffic_manager: TrafficManager = $TrafficManager
 ## Instrument cluster: swept rev counter, gear in the hub, digital speed and the
 ## driver-aid telltales. Replaces the old plain speed/gear corner labels.
 @onready var dial_cluster: DialCluster = $HUD/DialCluster
@@ -273,8 +275,15 @@ func _set_paused(paused: bool) -> void:
 ## it, then release physics. Runs once at startup (data_loaded fires a single
 ## time after the spatial index is ready).
 func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
+	# Start in a lane of the street nearest the authored spawn. The map origin is
+	# wherever the bounding box happened to centre, often a building, and the
+	# ground raycast below would happily land the car on its roof.
+	var pose := traffic_manager.spawn_pose_near(car.global_position)
+	if not pose.is_empty():
+		car.teleport(pose["position"], pose["forward"])
+
 	# Force the tiles around the spawn XZ to exist so there is a collider to land
-	# on before we drop the car. Keep the car's authored XZ; only Y is corrected.
+	# on before we drop the car. Only Y is corrected from here on.
 	var spawn_xz := car.global_position
 	tile_manager.ensure_tiles_around(spawn_xz)
 

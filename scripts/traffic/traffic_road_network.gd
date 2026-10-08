@@ -221,6 +221,37 @@ func total_capacity() -> int:
 	return total
 
 
+## The closest centreline point, in the ground plane, on any road at least
+## `min_width` wide. Returns {road, position, direction}: `direction` is the flat
+## unit tangent there, in the road's point order. Empty when no road qualifies.
+func nearest_point(pos: Vector3, min_width: float = 0.0) -> Dictionary:
+	var target := Vector2(pos.x, pos.z)
+	var best := {}
+	var best_d2 := INF
+	for road: Road in _roads:
+		if road.width < min_width:
+			continue
+		var pts := road.points
+		for i: int in range(pts.size() - 1):
+			var a := Vector2(pts[i].x, pts[i].z)
+			var b := Vector2(pts[i + 1].x, pts[i + 1].z)
+			var seg_len := a.distance_to(b)
+			if seg_len < 0.001:
+				continue
+			var q := Geometry2D.get_closest_point_to_segment(target, a, b)
+			var d2 := target.distance_squared_to(q)
+			if d2 >= best_d2:
+				continue
+			best_d2 = d2
+			var along := a.distance_to(q) / seg_len
+			best = {
+				"road": road,
+				"position": pts[i].lerp(pts[i + 1], along),
+				"direction": Vector3(b.x - a.x, 0.0, b.y - a.y) / seg_len,
+			}
+	return best
+
+
 ## Whether a highway value is one AI cars may drive on.
 static func is_drivable(highway_type: String) -> bool:
 	return DRIVABLE_TYPES.has(highway_type)

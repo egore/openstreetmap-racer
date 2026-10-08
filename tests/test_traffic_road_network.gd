@@ -206,3 +206,31 @@ func test_total_capacity_sums_roads() -> void:
 	for r: TrafficRoadNetwork.Road in net.get_roads():
 		sum += r.capacity
 	assert_int(net.total_capacity()).is_equal(sum)
+
+
+# ─── Nearest point (player spawn) ────────────────────────────────────────────
+
+func test_nearest_point_projects_onto_the_centreline() -> void:
+	var net := TrafficRoadNetwork.new()
+	net.build(_data_with_road("residential", 100.0))
+	var hit := net.nearest_point(Vector3(30, 5, 12))
+	assert_vector(hit["position"]).is_equal_approx(Vector3(30, 0, 0), Vector3.ONE * 0.001)
+	assert_vector(hit["direction"]).is_equal_approx(Vector3.RIGHT, Vector3.ONE * 0.001)
+
+
+func test_nearest_point_clamps_to_the_road_ends() -> void:
+	var net := TrafficRoadNetwork.new()
+	net.build(_data_with_road("residential", 100.0))
+	var hit := net.nearest_point(Vector3(-40, 0, 3))
+	assert_vector(hit["position"]).is_equal_approx(Vector3.ZERO, Vector3.ONE * 0.001)
+
+
+func test_nearest_point_skips_roads_narrower_than_asked() -> void:
+	var net := TrafficRoadNetwork.new()
+	net.build(_data_with_road("service", 100.0))
+	assert_bool(net.nearest_point(Vector3.ZERO, 4.0).is_empty()).is_true()
+	assert_bool(net.nearest_point(Vector3.ZERO).is_empty()).is_false()
+
+
+func test_nearest_point_on_empty_network_is_empty() -> void:
+	assert_bool(TrafficRoadNetwork.new().nearest_point(Vector3.ZERO).is_empty()).is_true()

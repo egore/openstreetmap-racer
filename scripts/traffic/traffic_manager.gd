@@ -114,6 +114,10 @@ var _routes: Dictionary = {}
 ## re-planning is cheap and traffic still spreads out over the network.
 const _PLAN_AHEAD := 6
 
+## Narrowest road (m) the player is spawned on when a wider one is in reach; a
+## 3 m service alley behind a supermarket is a poor first view of the city.
+const _SPAWN_MIN_WIDTH := 4.0
+
 ## World position the current road graph was built around, and whether a graph
 ## has been built at all. Used to decide when to rebuild as the player drives.
 var _network_center: Vector3 = Vector3.ZERO
@@ -445,6 +449,23 @@ func _assign_to_road(car: TrafficCar, road: TrafficRoadNetwork.Road, start_dista
 	# intention the moment it's placed (rather than deciding only when it reaches
 	# the first junction).
 	_routes[car.get_instance_id()] = _network.plan_route(road, reversed, _PLAN_AHEAD, _rng)
+
+
+## Where the player should start near `pos`: in the right-hand lane of the
+## nearest proper street (alleys and service roads only as a fallback), facing
+## along it. Returns {position, forward}, or {} until a road graph exists.
+func spawn_pose_near(pos: Vector3) -> Dictionary:
+	var hit := _network.nearest_point(pos, _SPAWN_MIN_WIDTH)
+	if hit.is_empty():
+		hit = _network.nearest_point(pos)
+	if hit.is_empty():
+		return {}
+	var forward: Vector3 = hit["direction"]
+	var right := forward.cross(Vector3.UP)
+	return {
+		"position": (hit["position"] as Vector3) + right * _lane_offset_for(hit["road"]),
+		"forward": forward,
+	}
 
 
 ## How far right of the centreline a car on this road should drive, in meters.
