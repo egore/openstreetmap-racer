@@ -36,9 +36,15 @@ func _capture() -> void:
 	await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("user://pause-preview.png")
-	print("UI previews: ", ProjectSettings.globalize_path("user://"))
 	hud.free()
 	menu.free()
 	car.free()
 	backdrop.free()
+	var title: Control = load("res://scenes/title_screen.tscn").instantiate()
+	root.add_child(title)
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png("user://title-preview.png")
+	title.free()
+	print("UI previews: ", ProjectSettings.globalize_path("user://"))
 	quit()

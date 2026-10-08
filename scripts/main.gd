@@ -13,6 +13,24 @@ const ScreenshotScript := preload("res://scripts/screenshot.gd")
 ## still instantiates, the failure shows up as the T key silently doing nothing
 ## rather than as an obvious error.
 const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
+const SceneFlowScript := preload("res://scripts/scene_flow.gd")
+
+## Spawn progress for the loading screen: `fraction` runs 0..1 over building the
+## spawn tiles and settling the world; `status` names the current step.
+signal loading_progress(fraction: float, status: String)
+## The world around the spawn is built, the car is on the ground and the first
+## frames have rendered. The loading screen lifts on this.
+signal world_ready
+
+## Share of the spawn progress spent building tiles; the rest is warm-up.
+const _TILE_PROGRESS_SHARE := 0.85
+## Main-thread time (ms) spent building spawn tiles before yielding a frame so
+## the loading screen can redraw.
+const _SPAWN_FRAME_BUDGET_MS := 50.0
+## Frames rendered behind the loading screen before it lifts. The first frames
+## of a new world compile shaders and pipelines and hitch badly; better behind an
+## opaque overlay than in the player's first seconds of driving.
+const _WARMUP_FRAMES := 30
 
 @onready var tile_manager: OSMTileManager = $OSMTileManager
 @onready var car: CarController = $Car
@@ -31,6 +49,7 @@ const TopDownCameraScript := preload("res://scripts/top_down_camera.gd")
 @onready var pause_menu: CanvasLayer = $PauseMenu
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/QuitButton
+@onready var main_menu_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/MainMenuButton
 @onready var sky_controller: SkyController = $SkyController
 ## Post-processing stack (glow/SSAO/SSIL/SSR/grade). Self-wires to the
 ## WorldEnvironment and SkyController via its exported paths; referenced here for
@@ -68,6 +87,10 @@ var _camera_index: int = 0
 ## Active tween for the centre kudos popup's pop-and-fade, kept so a new event can
 ## kill the in-flight animation before starting its own (avoids stacked tweens).
 var _kudos_popup_tween: Tween = null
+
+## False until world_ready. Pausing and recovery wait for it: a pause menu over
+## the loading screen would be invisible and stall nothing.
+var _is_world_ready: bool = false
 
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
@@ -114,6 +137,7 @@ func _ready() -> void:
 	# Wire up the pause menu buttons.
 	resume_button.pressed.connect(_set_paused.bind(false))
 	quit_button.pressed.connect(_on_quit_pressed)
+	main_menu_button.pressed.connect(SceneFlowScript.go_to_title.bind(get_tree()))
 
 	# Day/night toggle: reflect the controller's starting state in the checkbox,
 	# then let the user flip it. The controller owns the actual transition.
@@ -167,6 +191,9 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	# Escape toggles the pause state.
+	if not _is_world_ready:
+		return
+
 	if Input.is_action_just_pressed("ui_cancel"):
 		_set_paused(not get_tree().paused)
 
@@ -284,8 +311,19 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 
 	# Force the tiles around the spawn XZ to exist so there is a collider to land
 	# on before we drop the car. Only Y is corrected from here on.
+	# Built a frame-budget at a time (rather than ensure_tiles_around's one long
+	# frame) so the loading screen can show progress between tiles.
 	var spawn_xz := car.global_position
-	tile_manager.ensure_tiles_around(spawn_xz)
+	var spawn_tiles := tile_manager.spawn_tiles_around(spawn_xz)
+	var frame_start := Time.get_ticks_msec()
+	for i: int in spawn_tiles.size():
+		tile_manager.load_tile_now(spawn_tiles[i])
+		var fraction := _TILE_PROGRESS_SHARE * float(i + 1) / spawn_tiles.size()
+		if Time.get_ticks_msec() - frame_start >= _SPAWN_FRAME_BUDGET_MS:
+			loading_progress.emit(fraction, "Building streets")
+			await get_tree().process_frame
+			frame_start = Time.get_ticks_msec()
+	loading_progress.emit(_TILE_PROGRESS_SHARE, "Dropping the car")
 
 	# The terrain collider is a concave trimesh, which is registered into the
 	# physics space a frame after add_child. Resolve the spawn height by raycasting
@@ -309,6 +347,17 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 	car.angular_velocity = Vector3.ZERO
 	await get_tree().physics_frame
 	car.freeze = false
+
+	for i: int in _WARMUP_FRAMES:
+		var warm := float(i + 1) / _WARMUP_FRAMES
+		loading_progress.emit(lerpf(_TILE_PROGRESS_SHARE, 1.0, warm), "Warming up")
+		await get_tree().process_frame
+	_is_world_ready = true
+	world_ready.emit()
+
+
+func is_world_ready() -> bool:
+	return _is_world_ready
 
 ## Raycast straight down through the spawn column to find the terrain collider's
 ## surface Y. Starts well above the sampled height and reaches well below it.

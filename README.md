@@ -57,6 +57,10 @@ On top of the world renderer sits a thin, testable "make it a game" layer:
 
 21. **Camera Feel & Impact FX** (`scripts/camera_shake.gd`, `impact_particles.gd`) — The follow camera **widens its FOV with speed** and gets a **trauma-based shake** on crashes and hard landings (trauma², coherent noise, linear decay — the classic GDC recipe, kept as a pure unit-tested helper). A crash also throws a one-shot **spark/debris burst** (`ImpactParticles`, sized by severity), and the tyres **screech** and impacts **thump** via `CarAudioTriggers` (a pure logic helper that decides *when* to squeal and *how loud* to hit, with a cooldown so a multi-frame crash thumps once).
 
+22. **Front End & Loading Screen** (`scripts/title_screen.gd`, `loading_screen.gd`, `scene_flow.gd`) — The game boots into a title screen (`scenes/title_screen.tscn`). Starting a drive hands over to a loading screen that shows **real progress**: it loads `main.tscn` on a background thread, then the world builds the tiles around the spawn **a frame budget at a time** (`OSMTileManager.spawn_tiles_around` + `load_tile_now`) and reports each step through `main.gd`'s `loading_progress` signal, then renders some warm-up frames behind the overlay so first-frame shader compilation hitches happen there rather than in the first seconds of driving. On `world_ready` the overlay fades and the world becomes the current scene. The car starts **in the right-hand lane of the nearest proper street** (`TrafficManager.spawn_pose_near`) rather than wherever the map's centre falls, which used to be a rooftop. `main.tscn` still runs on its own (F6), just without the overlay. The pause menu's **Main menu** button returns to the title.
+
+23. **Recovery** (`scripts/recovery_tracker.gd`) — While the car drives cleanly it drops breadcrumbs; **R** puts it back, upright and stopped, on the newest one at least two seconds old, so it lands before the line that led into the crash.
+
 ### Dynamic Loading
 
 The tile manager tracks which tile the camera is in. When the camera crosses into a new tile, it:
@@ -187,7 +191,8 @@ count for slope smoothness.
 
 1. Open this project in Godot 4.7+
 2. Ensure `data/map.osm` exists with your desired map data
-3. Press F5 in the editor to run
+3. Press F5 in the editor to run (starts at the title screen; F6 on
+   `scenes/main.tscn` drops straight into the world)
 
 ### Controls
 

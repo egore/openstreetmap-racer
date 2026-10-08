@@ -19,7 +19,7 @@ func test_menu_keeps_all_game_controls() -> void:
 	var menu := _make_menu()
 	for name in ["DayNightToggle", "WetWeatherToggle", "SpeedBlurToggle", "DrivingAssistsToggle", "DebugLabelsToggle", "FrameTracerToggle"]:
 		assert_object(menu.get_node(SETTINGS + name)).is_instanceof(CheckButton)
-	for name in ["ResumeButton", "QuitButton", "DumpFrameTimesButton"]:
+	for name in ["ResumeButton", "MainMenuButton", "QuitButton", "DumpFrameTimesButton"]:
 		assert_object(menu.get_node(SETTINGS + name)).is_instanceof(Button)
 
 func test_opening_menu_focuses_resume() -> void:

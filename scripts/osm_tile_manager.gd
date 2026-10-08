@@ -776,12 +776,35 @@ func set_show_debug_labels(enabled: bool) -> void:
 func ensure_tiles_around(world_pos: Vector3) -> bool:
 	if _tile_source == null:
 		return false
-	_current_tile = _pos_to_tile(world_pos)
 	# Instance the in-range tiles synchronously so a ground collider is live now.
+	for tkey: Vector2i in spawn_tiles_around(world_pos):
+		load_tile_now(tkey)
+	return true
+
+
+## The tiles a spawn at `world_pos` needs, nearest first, and make that the
+## current tile. Lets a caller (the loading screen path) build them one at a time
+## with load_tile_now and report progress between them, instead of the single
+## long frame ensure_tiles_around takes. Nearest first so the tile the car lands
+## on exists before anything else.
+func spawn_tiles_around(world_pos: Vector3) -> Array[Vector2i]:
+	_current_tile = _pos_to_tile(world_pos)
+	var keys: Array[Vector2i] = []
 	for dx: int in range(-load_radius, load_radius + 1):
 		for dz: int in range(-load_radius, load_radius + 1):
-			_load_tile(Vector2i(_current_tile.x + dx, _current_tile.y + dz))
-	return true
+			keys.append(Vector2i(_current_tile.x + dx, _current_tile.y + dz))
+	var center := _current_tile
+	keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return (a - center).length_squared() < (b - center).length_squared())
+	return keys
+
+
+## Parse and instance one tile on the calling (main) thread, right now. A no-op
+## for a tile that is already loaded or without a tile source.
+func load_tile_now(tkey: Vector2i) -> void:
+	if _tile_source == null:
+		return
+	_load_tile(tkey)
 
 func _has_terrain() -> bool:
 	return _height_provider != null and _height_provider.is_ready()

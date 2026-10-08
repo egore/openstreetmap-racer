@@ -147,6 +147,28 @@ func test_ensure_tiles_around_instances_synchronously() -> void:
 		.override_failure_message("spawn tiles instanced synchronously").is_greater(0)
 
 
+func test_spawn_tiles_cover_the_load_radius_nearest_first() -> void:
+	# The loading screen builds these one by one; the tile the car lands on must
+	# come first so its collider exists earliest.
+	var mgr := _make_manager()
+	var keys := mgr.spawn_tiles_around(Vector3(250, 0, 50))
+	assert_int(keys.size()).is_equal(9)
+	assert_that(keys[0]).is_equal(Vector2i(1, 0))
+	assert_that(keys.back()).is_not_equal(Vector2i(1, 0))
+	for k: Vector2i in keys:
+		assert_int(maxi(absi(k.x - 1), absi(k.y))).is_less_equal(1)
+	assert_int(mgr.get_loaded_tile_count()) \
+		.override_failure_message("listing spawn tiles builds nothing").is_equal(0)
+
+
+func test_load_tile_now_builds_one_tile_and_is_idempotent() -> void:
+	var mgr := _make_manager()
+	mgr.spawn_tiles_around(Vector3.ZERO)
+	mgr.load_tile_now(Vector2i(0, 0))
+	mgr.load_tile_now(Vector2i(0, 0))
+	assert_int(mgr.get_loaded_tile_count()).is_equal(1)
+
+
 func test_empty_tiles_get_ground_placeholder() -> void:
 	# A tile with no baked file is still instanced as an empty ground placeholder
 	# (so there's a surface to drive on), synchronously via _load_tile.

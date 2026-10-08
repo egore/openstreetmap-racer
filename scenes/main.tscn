@@ -504,6 +504,12 @@ theme_override_fonts/font = ExtResource("19_display")
 theme_override_font_sizes/font_size = 24
 text = "BACK TO THE ROAD  →"
 
+[node name="MainMenuButton" type="Button" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100016]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Main menu"
+
 [node name="QuitButton" type="Button" parent="PauseMenu/CenterContainer/Panel/Margin/Columns/Settings" unique_id=300100007]
 custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
