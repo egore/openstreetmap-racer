@@ -52,6 +52,7 @@ const _WARMUP_FRAMES := 30
 @onready var kudos_label: Label = $HUD/KudosLabel
 @onready var combo_label: Label = $HUD/ComboLabel
 @onready var kudos_popup: Label = $HUD/KudosPopup
+@onready var street_banner: Control = $HUD/StreetBanner
 @onready var pause_menu: CanvasLayer = $PauseMenu
 @onready var resume_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/ResumeButton
 @onready var quit_button: Button = $PauseMenu/CenterContainer/Panel/Margin/Columns/Settings/QuitButton
@@ -377,6 +378,7 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 		loading_progress.emit(lerpf(_TILE_PROGRESS_SHARE, 1.0, warm), "Warming up")
 		await get_tree().process_frame
 	_is_world_ready = true
+	street_banner.reset()
 	world_ready.emit()
 	if _run != null:
 		_run.begin()

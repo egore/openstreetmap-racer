@@ -21,6 +21,7 @@
 [ext_resource type="FontFile" path="res://assets/ui/fonts/BarlowCondensed-SemiBold.ttf" id="19_display"]
 [ext_resource type="Texture2D" path="res://assets/ui/route-art.svg" id="20_route"]
 [ext_resource type="Texture2D" path="res://assets/ui/racer-mark.svg" id="21_mark"]
+[ext_resource type="Script" path="res://scripts/street_banner.gd" id="22_street"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBox_score"]
 bg_color = Color(0.067, 0.098, 0.11, 0.9)
@@ -289,6 +290,18 @@ theme_override_colors/font_shadow_color = Color(0, 0, 0, 0.8)
 theme_override_constants/shadow_offset_y = 1
 theme_override_font_sizes/font_size = 12
 text = "Loading..."
+
+[node name="StreetBanner" type="Control" parent="HUD" unique_id=153076303]
+layout_mode = 3
+anchors_preset = 0
+offset_left = 30.0
+offset_top = 92.0
+offset_right = 530.0
+offset_bottom = 152.0
+mouse_filter = 2
+script = ExtResource("22_street")
+car_node_path = NodePath("../../Car")
+traffic_manager_node_path = NodePath("../../TrafficManager")
 
 [node name="KudosLabel" type="Label" parent="HUD" unique_id=153076300]
 anchor_left = 1.0

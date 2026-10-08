@@ -468,6 +468,12 @@ func spawn_pose_near(pos: Vector3) -> Dictionary:
 	}
 
 
+## The road a car at `pos` heading along `heading` is driving on, or null when
+## off-road or before the road graph exists.
+func road_under(pos: Vector3, heading: Vector3) -> TrafficRoadNetwork.Road:
+	return _network.road_under(pos, heading)
+
+
 ## How far right of the centreline a car on this road should drive, in meters.
 ##
 ## A two-way road carries traffic in both directions, so each direction gets half

@@ -48,6 +48,10 @@ class Road:
 	## is how a car flows from one road onto the next instead of teleporting.
 	var start_node: int = 0
 	var end_node: int = 0
+	## The street's OSM `name` and `ref` (route number, e.g. "N57"); empty when
+	## untagged. Shown to the player as they drive onto the street.
+	var name: String = ""
+	var ref: String = ""
 
 ## Highway classes we let AI cars drive on. Footways, cycleways, steps, etc. are
 ## excluded — pedestrians/bikes aren't modelled and a block-car on a 1 m path
@@ -222,8 +226,10 @@ func total_capacity() -> int:
 
 
 ## The closest centreline point, in the ground plane, on any road at least
-## `min_width` wide. Returns {road, position, direction}: `direction` is the flat
-## unit tangent there, in the road's point order. Empty when no road qualifies.
+## `min_width` wide. Returns {road, position, direction, distance, index}:
+## `direction` is the flat unit tangent there, in the road's point order,
+## `distance` the ground-plane distance from `pos`, and `index` the polyline
+## segment the point lies on. Empty when no road qualifies.
 func nearest_point(pos: Vector3, min_width: float = 0.0) -> Dictionary:
 	var target := Vector2(pos.x, pos.z)
 	var best := {}
@@ -248,7 +254,42 @@ func nearest_point(pos: Vector3, min_width: float = 0.0) -> Dictionary:
 				"road": road,
 				"position": pts[i].lerp(pts[i + 1], along),
 				"direction": Vector3(b.x - a.x, 0.0, b.y - a.y) / seg_len,
+				"index": i,
 			}
+	if not best.is_empty():
+		best["distance"] = sqrt(best_d2)
+	return best
+
+
+## The road the car at `pos` is driving along: of the roads whose carriageway
+## (widened by `margin` m each side) contains the point, the one whose direction
+## best matches `heading`. Matching the heading matters at junctions, where the
+## cross street is just as close as the one being driven. Null when off-road.
+func road_under(pos: Vector3, heading: Vector3, margin: float = 1.5) -> Road:
+	var flat_heading := Vector2(heading.x, heading.z)
+	if flat_heading.length_squared() > 0.0001:
+		flat_heading = flat_heading.normalized()
+	var target := Vector2(pos.x, pos.z)
+	var best: Road = null
+	var best_alignment := -1.0
+	var best_dist := INF
+	for road: Road in _roads:
+		var reach := road.width * 0.5 + margin
+		var pts := road.points
+		for i: int in range(pts.size() - 1):
+			var a := Vector2(pts[i].x, pts[i].z)
+			var b := Vector2(pts[i + 1].x, pts[i + 1].z)
+			if a.distance_squared_to(b) < 0.000001:
+				continue
+			var dist := target.distance_to(Geometry2D.get_closest_point_to_segment(target, a, b))
+			if dist > reach:
+				continue
+			var alignment := absf((b - a).normalized().dot(flat_heading))
+			if alignment > best_alignment + 0.01 \
+					or (absf(alignment - best_alignment) <= 0.01 and dist < best_dist):
+				best = road
+				best_alignment = alignment
+				best_dist = dist
 	return best
 
 
@@ -513,6 +554,8 @@ func _roads_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData, junctio
 				way.id, highway_type, width, one_way,
 				present_ids, seg_start, i, osm_data)
 			if seg != null:
+				seg.name = String(way.tags.get("name", ""))
+				seg.ref = String(way.tags.get("ref", ""))
 				out.append(seg)
 			seg_start = i
 	return out
