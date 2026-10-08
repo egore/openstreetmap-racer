@@ -32,21 +32,24 @@ uniform vec4 base_color : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 // an intersection darkens and glosses with the street it belongs to.
 global uniform float wetness;
 
-uniform float grain_scale : hint_range(0.05, 5.0) = 0.35;
+uniform float grain_scale : hint_range(0.005, 0.1) = 0.02;
 uniform float patch_scale : hint_range(1.0, 40.0) = 8.0;
-uniform float albedo_variation : hint_range(0.0, 1.0) = 0.06;
+uniform float albedo_variation : hint_range(0.0, 1.0) = 0.025;
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.92;
-uniform float roughness_variation : hint_range(0.0, 0.5) = 0.12;
-uniform float bump_strength : hint_range(0.0, 2.0) = 0.6;
+uniform float roughness_variation : hint_range(0.0, 0.5) = 0.04;
+uniform float bump_strength : hint_range(0.0, 2.0) = 0.12;
 
 varying vec3 world_pos;
 
 // --- Value noise (identical to asphalt.gdshader so the surfaces match) ------
 
 float hash(vec2 p) {
-	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-	p3 += dot(p3, p3.yzx + 33.33);
-	return fract((p3.x + p3.y) * p3.z);
+	uvec2 cell = uvec2(ivec2(p));
+	uint h = cell.x * 1597334677u ^ cell.y * 3812015801u;
+	h = (h ^ (h >> 16u)) * 2246822519u;
+	h = (h ^ (h >> 13u)) * 3266489917u;
+	h ^= h >> 16u;
+	return float(h >> 8u) / 16777216.0;
 }
 
 float value_noise(vec2 p) {
@@ -60,13 +63,20 @@ float value_noise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float fbm(vec2 p) {
+float fbm(vec2 p, float footprint) {
 	const mat2 rot = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
 	float sum = 0.0;
 	float amp = 0.5;
 	for (int i = 0; i < 4; i++) {
-		sum += amp * value_noise(p);
+		// Average away subpixel octaves rather than letting them shimmer.
+		float visibility = 1.0 - smoothstep(0.25, 1.0, footprint);
+		float sample_value = 0.5;
+		if (visibility > 0.0) {
+			sample_value = mix(0.5, value_noise(p), visibility);
+		}
+		sum += amp * sample_value;
 		p = rot * p * 2.0 + 17.3;
+		footprint *= 2.0;
 		amp *= 0.5;
 	}
 	return sum / 0.9375;
@@ -77,17 +87,15 @@ void vertex() {
 }
 
 void fragment() {
-	// Wrap world XZ into repeating windows before scaling, so coordinates stay
-	// small enough for the hash to stay precise far from the dataset origin.
-	vec2 wrapped_xz = mod(world_pos.xz, 1024.0);
-	vec2 grain_wrapped = mod(world_pos.xz, 64.0);
-	vec2 grain_uv = grain_wrapped / grain_scale;
-	vec2 patch_uv = wrapped_xz / patch_scale;
+	// Integer hashing keeps centimetre cells decorrelated without wrap seams.
+	vec2 grain_uv = world_pos.xz / grain_scale;
+	vec2 patch_uv = world_pos.xz / patch_scale;
 
-	float grain = fbm(grain_uv);
+	float footprint = max(length(dFdx(grain_uv)), length(dFdy(grain_uv)));
+	float grain = fbm(grain_uv, footprint);
 	float patch = value_noise(patch_uv);
 
-	float lum = (grain - 0.5) * albedo_variation + (patch - 0.5) * albedo_variation * 0.5;
+	float lum = (grain - 0.5) * albedo_variation + (patch - 0.5) * albedo_variation * 0.25;
 	vec3 col = clamp(base_color.rgb + vec3(lum), vec3(0.0), vec3(1.0));
 	ALBEDO = col;
 
@@ -107,11 +115,10 @@ void fragment() {
 	SPECULAR = spec;
 
 	float bump = bump_strength * (1.0 - 0.85 * wet);
-	float e = 0.5 * grain_scale;
-	float hx = fbm((grain_wrapped + vec2(e, 0.0)) / grain_scale)
-		- fbm((grain_wrapped - vec2(e, 0.0)) / grain_scale);
-	float hz = fbm((grain_wrapped + vec2(0.0, e)) / grain_scale)
-		- fbm((grain_wrapped - vec2(0.0, e)) / grain_scale);
+	float hx = fbm(grain_uv + vec2(0.5, 0.0), footprint)
+		- fbm(grain_uv - vec2(0.5, 0.0), footprint);
+	float hz = fbm(grain_uv + vec2(0.0, 0.5), footprint)
+		- fbm(grain_uv - vec2(0.0, 0.5), footprint);
 	vec3 n = normalize(vec3(-hx * bump, -hz * bump, 1.0));
 	NORMAL_MAP = n * 0.5 + 0.5;
 	NORMAL_MAP_DEPTH = 1.0;

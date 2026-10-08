@@ -34,20 +34,20 @@ uniform vec4 base_color : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 global uniform float wetness;
 
 // Size of one noise "tile" in meters. Smaller = finer grain.
-uniform float grain_scale : hint_range(0.05, 5.0) = 0.35;
+uniform float grain_scale : hint_range(0.005, 0.1) = 0.02;
 // Size of the larger blotchy patches (oil stains, wear) in meters.
 uniform float patch_scale : hint_range(1.0, 40.0) = 8.0;
 
 // How much the albedo darkens/lightens with the grain (0 = flat color).
 // Kept low so the dark asphalt base stays cohesive (large swings on a dark
 // base read as blotchy / washed-out and clamp at black).
-uniform float albedo_variation : hint_range(0.0, 1.0) = 0.06;
+uniform float albedo_variation : hint_range(0.0, 1.0) = 0.025;
 // Base roughness and how much the noise modulates it. Asphalt is rough.
 uniform float roughness_base : hint_range(0.0, 1.0) = 0.92;
-uniform float roughness_variation : hint_range(0.0, 0.5) = 0.12;
+uniform float roughness_variation : hint_range(0.0, 0.5) = 0.04;
 
 // Strength of the faked bump (normal perturbation). 0 = perfectly smooth.
-uniform float bump_strength : hint_range(0.0, 2.0) = 0.6;
+uniform float bump_strength : hint_range(0.0, 2.0) = 0.12;
 
 // --- Lane markings ----------------------------------------------------------
 // Painted markings are derived from OSM lane tags (see RoadLaneSpec) and drawn
@@ -208,12 +208,15 @@ float transverse_coverage(
 // The classic `fract(sin(dot(...)))` / `fract(p.x * p.y)` hashes correlate
 // strongly along axis lines, which on a large flat road ribbon lines the noise
 // cells up into big diagonal streaks (the "very large noise pattern"). This is
-// an integer bit-mix (Dave Hoskins' hash12) that decorrelates neighbouring
+// an integer bit-mix that decorrelates neighbouring
 // cells in every direction, so no coherent large-scale structure emerges.
 float hash(vec2 p) {
-	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-	p3 += dot(p3, p3.yzx + 33.33);
-	return fract((p3.x + p3.y) * p3.z);
+	uvec2 cell = uvec2(ivec2(p));
+	uint h = cell.x * 1597334677u ^ cell.y * 3812015801u;
+	h = (h ^ (h >> 16u)) * 2246822519u;
+	h = (h ^ (h >> 13u)) * 3266489917u;
+	h ^= h >> 16u;
+	return float(h >> 8u) / 16777216.0;
 }
 
 float value_noise(vec2 p) {
@@ -235,14 +238,21 @@ float value_noise(vec2 p) {
 // axis — this is what actually kills the directional "large pattern" and gives
 // an even, isotropic grain. Four octaves are enough for asphalt while staying
 // cheap.
-float fbm(vec2 p) {
+float fbm(vec2 p, float footprint) {
 	// ~40 degree rotation reused per octave to break axis alignment.
 	const mat2 rot = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
 	float sum = 0.0;
 	float amp = 0.5;
 	for (int i = 0; i < 4; i++) {
-		sum += amp * value_noise(p);
+		// Average away subpixel octaves rather than letting them shimmer.
+		float visibility = 1.0 - smoothstep(0.25, 1.0, footprint);
+		float sample_value = 0.5;
+		if (visibility > 0.0) {
+			sample_value = mix(0.5, value_noise(p), visibility);
+		}
+		sum += amp * sample_value;
 		p = rot * p * 2.0 + 17.3;
+		footprint *= 2.0;
 		amp *= 0.5;
 	}
 	// Normalise 0.5+0.25+0.125+0.0625 = 0.9375 back to ~[0,1].
@@ -256,27 +266,16 @@ void vertex() {
 }
 
 void fragment() {
-	// World XZ can be several km from the dataset origin; dividing by the small
-	// grain_scale then pushes noise inputs into the tens-of-thousands, where
-	// float precision erodes the fractional part the hash depends on (visible as
-	// coarse blocky repetition). Wrap XZ into a large repeating window first: the
-	// window (1024 m) is far bigger than anything on screen at once, so the
-	// wrap seam is never visible, but coordinates stay small and precise.
-	vec2 wrapped_xz = mod(world_pos.xz, 1024.0);
-	// The fine grain divides by the small grain_scale, so even the 1024 m wrap
-	// leaves its noise input in the thousands — enough for the hash to degrade
-	// into coarse multi-metre blocks. Sample the grain from a tighter window so
-	// its input stays small and it reads as fine speckle, not big smears; the
-	// wear patches keep the wide window (they are metres-scale by design).
-	vec2 grain_wrapped = mod(world_pos.xz, 64.0);
-	vec2 grain_uv = grain_wrapped / grain_scale;
-	vec2 patch_uv = wrapped_xz / patch_scale;
+	// Integer hashing keeps centimetre cells decorrelated without wrap seams.
+	vec2 grain_uv = world_pos.xz / grain_scale;
+	vec2 patch_uv = world_pos.xz / patch_scale;
 
-	float grain = fbm(grain_uv);
+	float footprint = max(length(dFdx(grain_uv)), length(dFdy(grain_uv)));
+	float grain = fbm(grain_uv, footprint);
 	float patch = value_noise(patch_uv);
 
 	// Albedo: tint, darkened/lightened by grain, with subtle large blotches.
-	float lum = (grain - 0.5) * albedo_variation + (patch - 0.5) * albedo_variation * 0.5;
+	float lum = (grain - 0.5) * albedo_variation + (patch - 0.5) * albedo_variation * 0.25;
 	vec3 col = clamp(base_color.rgb + vec3(lum), vec3(0.0), vec3(1.0));
 	ALBEDO = col;
 
@@ -305,11 +304,10 @@ void fragment() {
 	// normal accordingly. Surface geometry is untouched (flat, collision-safe).
 	// A water film smooths the surface, so fade the bump out as it gets wet.
 	float bump = bump_strength * (1.0 - 0.85 * wet);
-	float e = 0.5 * grain_scale; // sample offset in meters
-	float hx = fbm((grain_wrapped + vec2(e, 0.0)) / grain_scale)
-		- fbm((grain_wrapped - vec2(e, 0.0)) / grain_scale);
-	float hz = fbm((grain_wrapped + vec2(0.0, e)) / grain_scale)
-		- fbm((grain_wrapped - vec2(0.0, e)) / grain_scale);
+	float hx = fbm(grain_uv + vec2(0.5, 0.0), footprint)
+		- fbm(grain_uv - vec2(0.5, 0.0), footprint);
+	float hz = fbm(grain_uv + vec2(0.0, 0.5), footprint)
+		- fbm(grain_uv - vec2(0.0, 0.5), footprint);
 	// Perturb in tangent space (Godot's NORMAL_MAP expects a [0,1] tangent normal).
 	vec3 n = normalize(vec3(-hx * bump, -hz * bump, 1.0));
 	NORMAL_MAP = n * 0.5 + 0.5;
