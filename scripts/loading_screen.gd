@@ -38,6 +38,8 @@ const TIPS: Array[String] = [
 	"Switch the driving assists off in the pause menu for a rawer car.",
 	"Every street, building and lamp post comes from OpenStreetMap.",
 	"F5 brings the rain. Wet roads mirror the city lights.",
+	"Sprinting? Head for the beam of light. The minimap traces the course.",
+	"Sprint courses are planned through the real streets. Know a shortcut? Gates still count in order.",
 ]
 
 var _root: Control

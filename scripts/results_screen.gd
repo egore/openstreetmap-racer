@@ -4,7 +4,6 @@ extends CanvasLayer
 ## where to go next. Shown over the paused world.
 
 const InterfaceTheme := preload("res://scripts/interface_theme.gd")
-const RunSessionScript := preload("res://scripts/run_session.gd")
 
 signal retry_pressed
 signal free_drive_pressed
@@ -15,6 +14,8 @@ var free_drive_button: Button
 var main_menu_button: Button
 
 var _eyebrow: Label
+var _headline: Label
+var _caption: Label
 var _score_label: Label
 var _best_label: Label
 var _stats: GridContainer
@@ -30,28 +31,26 @@ func _ready() -> void:
 	main_menu_button.pressed.connect(main_menu_pressed.emit)
 
 
-func present(session: RunSessionScript, mode: RunSessionScript.Mode,
-		is_new_best: bool, best: int) -> void:
-	_eyebrow.text = "%s  /  RESULTS" % RunSessionScript.mode_name(mode)
-	_score_label.text = RunSessionScript.format_score(session.score)
-	if is_new_best:
+## Show the card. `card` holds: eyebrow, headline ("TIME'S UP."), caption and
+## value (the result, e.g. "KUDOS" / "12,345"), is_new_best, best (text shown
+## when it isn't a new best), and stats: an array of [title, value] pairs.
+func present(card: Dictionary) -> void:
+	_eyebrow.text = card.get("eyebrow", "")
+	_headline.text = card.get("headline", "")
+	_caption.text = card.get("caption", "")
+	_score_label.text = card.get("value", "")
+	if card.get("is_new_best", false):
 		_best_label.text = "NEW PERSONAL BEST"
 		_best_label.add_theme_color_override("font_color", InterfaceTheme.ACCENT)
 	else:
-		_best_label.text = "PERSONAL BEST  %s" % RunSessionScript.format_score(best)
+		_best_label.text = card.get("best", "")
 		_best_label.add_theme_color_override("font_color", InterfaceTheme.MUTED)
 
 	for child: Node in _stats.get_children():
+		_stats.remove_child(child)
 		child.queue_free()
-	var best_move := "—"
-	if session.best_move_amount > 0:
-		best_move = "%s  +%d" % [session.best_move_label, session.best_move_amount]
-	_add_stat("DISTANCE", "%.2f km" % (session.distance_m / 1000.0))
-	_add_stat("TOP SPEED", "%d km/h" % roundi(session.top_speed_ms * 3.6))
-	_add_stat("DRIFTS", str(session.drifts))
-	_add_stat("NEAR MISSES", str(session.near_misses))
-	_add_stat("MISTAKES", str(session.mistakes))
-	_add_stat("BEST MOVE", best_move)
+	for stat: Array in card.get("stats", []):
+		_add_stat(stat[0], stat[1])
 
 	visible = true
 	retry_button.grab_focus.call_deferred()
@@ -118,11 +117,13 @@ func _build_ui() -> void:
 
 	_eyebrow = InterfaceTheme.label("", 12, InterfaceTheme.ACCENT)
 	left.add_child(_eyebrow)
-	left.add_child(InterfaceTheme.label("TIME'S UP.", 64, InterfaceTheme.PAPER, true))
+	_headline = InterfaceTheme.label("", 64, InterfaceTheme.PAPER, true)
+	left.add_child(_headline)
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(0, 8)
 	left.add_child(gap)
-	left.add_child(InterfaceTheme.label("KUDOS", 13, InterfaceTheme.MUTED))
+	_caption = InterfaceTheme.label("", 13, InterfaceTheme.MUTED)
+	left.add_child(_caption)
 	_score_label = InterfaceTheme.label("0", 84, InterfaceTheme.PAPER, true)
 	_score_label.name = "Score"
 	_score_label.add_theme_constant_override("line_spacing", -12)

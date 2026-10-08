@@ -468,6 +468,12 @@ func spawn_pose_near(pos: Vector3) -> Dictionary:
 	}
 
 
+## The current road graph around the player. Replaced (not mutated) when it is
+## rebuilt, so a caller holding it keeps a consistent snapshot.
+func road_network() -> TrafficRoadNetwork:
+	return _network
+
+
 ## The road a car at `pos` heading along `heading` is driving on, or null when
 ## off-road or before the road graph exists.
 func road_under(pos: Vector3, heading: Vector3) -> TrafficRoadNetwork.Road:

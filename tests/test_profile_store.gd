@@ -47,3 +47,14 @@ func test_records_survive_a_save_and_reload() -> void:
 	assert_int(reloaded.best_score("kudos_attack")).is_equal(1234)
 	assert_int(reloaded.runs("kudos_attack")).is_equal(1)
 	assert_float(reloaded.total_distance_m()).is_equal_approx(1750.0, 0.001)
+
+
+func test_only_a_faster_time_is_a_new_best() -> void:
+	var p := ProfileStoreScript.new(PATH)
+	assert_float(p.best_time("sprint_a")).is_equal(0.0)
+	assert_bool(p.submit_time("sprint_a", 75.5)).is_true()
+	assert_bool(p.submit_time("sprint_a", 80.0)).is_false()
+	assert_bool(p.submit_time("sprint_a", 70.2)).is_true()
+	assert_float(p.best_time("sprint_a")).is_equal_approx(70.2, 0.0001)
+	assert_float(p.best_time("sprint_b")).is_equal(0.0)
+	assert_int(p.runs("sprint_a")).is_equal(3)

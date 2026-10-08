@@ -125,6 +125,7 @@ func _ready() -> void:
 		_run.name = "RunController"
 		_run.mode = game_mode
 		_run.car = car
+		_run.minimap = $HUD/Minimap
 		add_child(_run)
 		car.kudos_event.connect(_run.record_event)
 		_run.free_drive_requested.connect(_on_run_abandoned)
@@ -381,6 +382,7 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 	street_banner.reset()
 	world_ready.emit()
 	if _run != null:
+		_run.road_network = traffic_manager.road_network()
 		_run.begin()
 
 

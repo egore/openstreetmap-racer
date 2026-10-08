@@ -1,7 +1,8 @@
 extends CanvasLayer
 
-## The timed run's overlay: the clock at the top of the screen and the big
-## "3, 2, 1, GO!" in the middle. Display only; the run controller feeds it.
+## The timed run's overlay: the clock at the top of the screen, a progress line
+## under it, split times, and the big "3, 2, 1, GO!" in the middle. Display
+## only; the run controller feeds it.
 
 const InterfaceTheme := preload("res://scripts/interface_theme.gd")
 const RunSessionScript := preload("res://scripts/run_session.gd")
@@ -13,6 +14,9 @@ const WARNING_COLOR := Color("ff806b")
 var _clock_panel: PanelContainer
 var _mode_label: Label
 var _time_label: Label
+var _detail_label: Label
+var _split_label: Label
+var _split_tween: Tween = null
 var _count_label: Label
 var _count_tween: Tween = null
 var _shown_count: int = -1
@@ -50,17 +54,47 @@ func show_finish() -> void:
 	_pop("TIME!", WARNING_COLOR, 1.2)
 
 
+## Count-down clock (Kudos Attack): red and pulsing near the end.
 func set_time(seconds: float, delta: float = 0.0) -> void:
-	_time_label.text = RunSessionScript.format_time(seconds)
 	var warning := seconds <= WARNING_SECONDS and seconds > 0.0
-	_time_label.add_theme_color_override(
-		"font_color", WARNING_COLOR if warning else InterfaceTheme.PAPER)
+	set_clock_text(RunSessionScript.format_time(seconds), warning)
 	if warning:
 		_pulse_time += delta
 		_time_label.modulate.a = 0.6 + 0.4 * (0.5 + 0.5 * cos(_pulse_time * TAU))
 	else:
 		_pulse_time = 0.0
 		_time_label.modulate.a = 1.0
+
+
+func set_clock_text(text: String, warning: bool = false) -> void:
+	_time_label.text = text
+	_time_label.add_theme_color_override(
+		"font_color", WARNING_COLOR if warning else InterfaceTheme.PAPER)
+
+
+## The small line under the clock, e.g. "CHECKPOINT 2/7  ·  240 m"; "" hides it.
+func set_detail(text: String) -> void:
+	_detail_label.text = text
+	_detail_label.visible = text != ""
+
+
+## Flash a split under the kudos popup, e.g. "CHECKPOINT 3/7   0:42.3".
+func show_split(text: String) -> void:
+	if _split_tween != null and _split_tween.is_valid():
+		_split_tween.kill()
+	_split_label.text = text
+	_split_label.modulate.a = 1.0
+	_split_tween = create_tween()
+	_split_tween.tween_interval(1.6)
+	_split_tween.tween_property(_split_label, "modulate:a", 0.0, 0.4)
+
+
+func get_detail_text() -> String:
+	return _detail_label.text
+
+
+func get_split_text() -> String:
+	return _split_label.text
 
 
 func get_time_text() -> String:
@@ -122,6 +156,24 @@ func _build_ui() -> void:
 	_time_label.name = "Time"
 	_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(_time_label)
+	_detail_label = InterfaceTheme.label("", 11, InterfaceTheme.MUTED)
+	_detail_label.name = "Detail"
+	_detail_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_detail_label.visible = false
+	stack.add_child(_detail_label)
+
+	_split_label = InterfaceTheme.label("", 28, InterfaceTheme.ACCENT, true)
+	_split_label.name = "Split"
+	_split_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_split_label.add_theme_constant_override("outline_size", 6)
+	_split_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_split_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_split_label.offset_left = -300
+	_split_label.offset_right = 300
+	_split_label.offset_top = 188
+	_split_label.offset_bottom = 228
+	_split_label.modulate.a = 0.0
+	root.add_child(_split_label)
 
 	_count_label = InterfaceTheme.label("", 150, InterfaceTheme.PAPER, true)
 	_count_label.name = "Count"

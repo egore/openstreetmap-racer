@@ -8,6 +8,7 @@ const RunSessionScript := preload("res://scripts/run_session.gd")
 const ProfileStoreScript := preload("res://scripts/profile_store.gd")
 
 var kudos_attack_button: Button
+var sprint_button: Button
 var free_drive_button: Button
 var quit_button: Button
 var best_label: Label
@@ -23,6 +24,7 @@ func _ready() -> void:
 	_build_ui()
 	_show_records()
 	kudos_attack_button.pressed.connect(_start.bind(RunSessionScript.Mode.KUDOS_ATTACK))
+	sprint_button.pressed.connect(_start.bind(RunSessionScript.Mode.SPRINT))
 	free_drive_button.pressed.connect(_start.bind(RunSessionScript.Mode.FREE_DRIVE))
 	quit_button.pressed.connect(_on_quit_pressed)
 	kudos_attack_button.grab_focus.call_deferred()
@@ -68,22 +70,22 @@ func _build_ui() -> void:
 	column.set_anchors_and_offsets_preset(Control.PRESET_LEFT_WIDE)
 	column.offset_left = 72
 	column.offset_right = 72 + 460
-	column.offset_top = 48
+	column.offset_top = 40
 	column.offset_bottom = -64
 	column.alignment = BoxContainer.ALIGNMENT_CENTER
-	column.add_theme_constant_override("separation", 14)
+	column.add_theme_constant_override("separation", 10)
 	add_child(column)
 
 	var mark := TextureRect.new()
 	mark.texture = preload("res://assets/ui/racer-mark.svg")
 	mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT
-	mark.custom_minimum_size = Vector2(52, 52)
+	mark.custom_minimum_size = Vector2(44, 44)
 	mark.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	column.add_child(mark)
 
 	column.add_child(InterfaceTheme.label("REAL STREETS  /  YOUR RACING LINE", 13, InterfaceTheme.ACCENT))
-	var title := InterfaceTheme.label("OPENSTREETMAP\nRACER", 92, InterfaceTheme.PAPER, true)
+	var title := InterfaceTheme.label("OPENSTREETMAP\nRACER", 76, InterfaceTheme.PAPER, true)
 	title.add_theme_constant_override("line_spacing", -18)
 	column.add_child(title)
 	column.add_child(InterfaceTheme.label(
@@ -92,14 +94,14 @@ func _build_ui() -> void:
 		16, InterfaceTheme.MUTED))
 
 	var gap := Control.new()
-	gap.custom_minimum_size = Vector2(0, 12)
+	gap.custom_minimum_size = Vector2(0, 6)
 	column.add_child(gap)
 
 	var menu := VBoxContainer.new()
 	menu.name = "Menu"
 	menu.custom_minimum_size = Vector2(360, 0)
 	menu.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	menu.add_theme_constant_override("separation", 10)
+	menu.add_theme_constant_override("separation", 8)
 	column.add_child(menu)
 
 	kudos_attack_button = Button.new()
@@ -112,18 +114,18 @@ func _build_ui() -> void:
 	best_label.name = "BestLabel"
 	menu.add_child(best_label)
 
-	free_drive_button = Button.new()
+	sprint_button = _mode_button("CHECKPOINT SPRINT")
+	sprint_button.name = "SprintButton"
+	menu.add_child(sprint_button)
+
+	free_drive_button = _mode_button("FREE DRIVE")
 	free_drive_button.name = "FreeDriveButton"
-	free_drive_button.text = "FREE DRIVE"
-	free_drive_button.custom_minimum_size = Vector2(0, 48)
-	free_drive_button.add_theme_font_override("font", InterfaceTheme.DISPLAY)
-	free_drive_button.add_theme_font_size_override("font_size", 22)
 	menu.add_child(free_drive_button)
 
 	quit_button = Button.new()
 	quit_button.name = "QuitButton"
 	quit_button.text = "Quit game"
-	quit_button.custom_minimum_size = Vector2(0, 38)
+	quit_button.custom_minimum_size = Vector2(0, 34)
 	quit_button.add_theme_font_size_override("font_size", 13)
 	menu.add_child(quit_button)
 
@@ -132,8 +134,8 @@ func _build_ui() -> void:
 		12, InterfaceTheme.MUTED)
 	controls.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT)
 	controls.offset_left = 72
-	controls.offset_top = -48
-	controls.offset_bottom = -28
+	controls.offset_top = -40
+	controls.offset_bottom = -22
 	add_child(controls)
 
 	# ODbL requires the attribution wherever the map data is shown.
@@ -141,7 +143,16 @@ func _build_ui() -> void:
 	credit.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
 	credit.offset_left = -320
 	credit.offset_right = -32
-	credit.offset_top = -48
-	credit.offset_bottom = -28
+	credit.offset_top = -40
+	credit.offset_bottom = -22
 	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(credit)
+
+
+func _mode_button(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0, 44)
+	button.add_theme_font_override("font", InterfaceTheme.DISPLAY)
+	button.add_theme_font_size_override("font_size", 22)
+	return button

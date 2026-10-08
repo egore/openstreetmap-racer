@@ -7,6 +7,7 @@ const RunControllerScript := preload("res://scripts/run_controller.gd")
 const RunSessionScript := preload("res://scripts/run_session.gd")
 const ProfileStoreScript := preload("res://scripts/profile_store.gd")
 const CarFixture := preload("res://tests/fixtures/car_fixture.gd")
+const TrafficRoadNetwork := preload("res://scripts/traffic/traffic_road_network.gd")
 const PROFILE := "user://_test_run_profile.cfg"
 
 
@@ -59,6 +60,7 @@ func test_the_end_of_the_clock_saves_the_result_and_shows_it() -> void:
 
 	assert_bool(paused).override_failure_message("world pauses behind the results").is_true()
 	assert_bool(run.is_showing_results()).is_true()
+	assert_str(run._results.get_score_text()).is_equal("0")
 	assert_int(run.session.drifts).is_equal(1)
 	var profile := ProfileStoreScript.new(PROFILE)
 	assert_int(profile.runs(RunSessionScript.record_key(RunSessionScript.Mode.KUDOS_ATTACK))).is_equal(1)
@@ -139,3 +141,99 @@ func test_the_car_drives_off_the_line_after_the_countdown() -> void:
 
 	assert_bool(car.global_transform.origin.is_finite()).is_true()
 	assert_float(car.global_position.z).is_greater(0.5)
+
+
+# ─── Checkpoint Sprint ───────────────────────────────────────────────────────
+
+const GridNetwork := preload("res://tests/fixtures/grid_network.gd")
+
+
+func _setup_sprint() -> Array:
+	var car := CarFixture.make_car()
+	add_child(car)
+	auto_free(car)
+	car.teleport(Vector3(100, 0, 0), Vector3.RIGHT)
+	var minimap: Minimap = auto_free(Minimap.new())
+	var run: RunControllerScript = RunControllerScript.new()
+	run.mode = RunSessionScript.Mode.SPRINT
+	run.car = car
+	run.road_network = GridNetwork.build()
+	run.minimap = minimap
+	run.profile_path = PROFILE
+	add_child(run)
+	auto_free(run)
+	return [run, car, minimap]
+
+
+## Drive the course by teleporting through each gate in turn.
+func _drive_course(run: RunControllerScript, car: CarController) -> void:
+	for gate: Vector3 in run.route.checkpoints:
+		car.teleport(gate, Vector3.RIGHT)
+		run._process(1.0)
+
+
+func test_a_sprint_plans_a_course_and_shows_it() -> void:
+	var parts := _setup_sprint()
+	var run: RunControllerScript = parts[0]
+	var minimap: Minimap = parts[2]
+	run.begin()
+	assert_object(run.route).is_not_null()
+	assert_bool(minimap.has_route()).is_true()
+	assert_bool(run._markers.is_showing_next()).is_true()
+	assert_float(run.session.duration).is_equal(0.0)
+	assert_str(run._hud.get_detail_text()).contains("CHECKPOINTS")
+
+
+func test_passing_a_gate_flashes_a_split_and_targets_the_next() -> void:
+	var parts := _setup_sprint()
+	var run: RunControllerScript = parts[0]
+	var car: CarController = parts[1]
+	run.begin()
+	run._process(3.5)
+	car.teleport(run.route.checkpoints[0], Vector3.RIGHT)
+	run._process(2.0)
+	assert_int(run._checkpoints.next_index).is_equal(1)
+	assert_str(run._hud.get_split_text()).contains("CHECKPOINT 1/")
+	assert_int(parts[2]._next_gate).is_equal(1)
+
+
+func test_the_last_gate_ends_the_sprint_and_saves_the_time() -> void:
+	var parts := _setup_sprint()
+	var run: RunControllerScript = parts[0]
+	var car: CarController = parts[1]
+	run.begin()
+	run._process(3.5)
+	_drive_course(run, car)
+	var paused := get_tree().paused
+	get_tree().paused = false
+
+	assert_bool(paused).is_true()
+	assert_bool(run.is_showing_results()).is_true()
+	assert_str(run._results.get_best_text()).is_equal("NEW PERSONAL BEST")
+	var key := RunSessionScript.record_key(RunSessionScript.Mode.SPRINT, run.route.id)
+	assert_float(ProfileStoreScript.new(PROFILE).best_time(key)) \
+		.is_equal_approx(run.session.elapsed, 0.001)
+
+
+func test_cutting_a_gate_does_not_finish_the_sprint() -> void:
+	var parts := _setup_sprint()
+	var run: RunControllerScript = parts[0]
+	var car: CarController = parts[1]
+	run.begin()
+	run._process(3.5)
+	var finish := run.route.checkpoints[run.route.checkpoints.size() - 1]
+	car.teleport(finish, Vector3.RIGHT)
+	run._process(1.0)
+	assert_bool(run.is_showing_results()).is_false()
+	assert_int(run._checkpoints.next_index).is_equal(0)
+
+
+func test_a_sprint_without_a_course_falls_back_to_free_drive() -> void:
+	var parts := _setup_sprint()
+	var run: RunControllerScript = parts[0]
+	run.road_network = TrafficRoadNetwork.new()
+	var requested: Array[bool] = []
+	run.free_drive_requested.connect(func() -> void: requested.append(true))
+	run.begin()
+	await get_tree().process_frame
+	assert_int(requested.size()).is_equal(1)

@@ -19,6 +19,12 @@ var _cached_waterway_segments: Array = []  # Array of { points: PackedVector3Arr
 var _cached_building_outlines: Array = []  # Array of PackedVector3Array
 var _cache_center: Vector3 = Vector3.ZERO
 
+# A course to follow (sprint): the line to drive and its gates, of which the
+# ones from _next_gate on are still to come. Empty in free drive.
+var _route := PackedVector3Array()
+var _route_gates := PackedVector3Array()
+var _next_gate: int = 0
+
 # Pre-built circle polygon used for geometric clipping (built once in _ready)
 var _clip_circle: PackedVector2Array
 
@@ -32,6 +38,9 @@ const CAR_COLOR := Color("d5f36b")
 const BORDER_COLOR := Color("516163")
 const NORTH_COLOR := Color("ff806b")
 const NORTH_BORDER_COLOR := Color("f5f2e8")
+const ROUTE_COLOR := Color("d5f36b")
+const ROUTE_CASING := Color(0.02, 0.04, 0.05, 0.85)
+const FINISH_COLOR := Color("f5f2e8")
 
 const MAJOR_HIGHWAYS := ["motorway", "trunk", "primary", "secondary", "tertiary",
 	"motorway_link", "trunk_link", "primary_link"]
@@ -53,6 +62,28 @@ func _ready() -> void:
 	call_deferred("_resolve_nodes")
 	# Build clip circle once; will be rebuilt if size changes
 	_build_clip_circle()
+
+
+## Show a course on the map: the line to drive and its gates in order.
+func set_route(points: PackedVector3Array, gates: PackedVector3Array) -> void:
+	_route = points
+	_route_gates = gates
+	_next_gate = 0
+
+
+## Gates before `index` have been passed and are no longer drawn.
+func set_next_gate(index: int) -> void:
+	_next_gate = index
+
+
+func clear_route() -> void:
+	_route = PackedVector3Array()
+	_route_gates = PackedVector3Array()
+	_next_gate = 0
+
+
+func has_route() -> bool:
+	return not _route.is_empty()
 
 
 func _build_clip_circle() -> void:
@@ -173,6 +204,8 @@ func _draw() -> void:
 			continue
 		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, MAJOR_ROAD_COLOR, 2.5)
 
+	_draw_route(car_pos, car_angle, scale_factor, radius)
+
 	# Car indicator: triangle pointing up
 	draw_circle(Vector2.ZERO, 13, Color(0.835, 0.953, 0.42, 0.12))
 	var tri_size := 7.0
@@ -196,6 +229,35 @@ func _draw() -> void:
 	_draw_north_arrow(car_angle, radius)
 
 	draw_set_transform(Vector2.ZERO)
+
+
+## The course line, the gates still to come, and, when the next gate is beyond
+## the map's edge, a marker on the rim pointing at it.
+func _draw_route(car_pos: Vector3, car_angle: float, scale_factor: float, radius: float) -> void:
+	if _route.is_empty():
+		return
+	_draw_road_on_map(_route, car_pos, car_angle, scale_factor, radius, ROUTE_CASING, 6.0)
+	_draw_road_on_map(_route, car_pos, car_angle, scale_factor, radius, ROUTE_COLOR, 3.0)
+	var last := _route_gates.size() - 1
+	for i: int in range(last, _next_gate - 1, -1):
+		var p := _world_to_minimap(_route_gates[i], car_pos, car_angle, scale_factor)
+		if p.length() > radius - 4.0:
+			continue
+		var color := FINISH_COLOR if i == last else ROUTE_COLOR
+		if i == _next_gate:
+			draw_circle(p, 7.0, ROUTE_CASING)
+			draw_arc(p, 7.0, 0, TAU, 24, color, 2.5, true)
+		else:
+			draw_circle(p, 3.5, color)
+	if _next_gate > last:
+		return
+	var next := _world_to_minimap(_route_gates[_next_gate], car_pos, car_angle, scale_factor)
+	if next.length() > radius - 4.0:
+		var dir := next.normalized()
+		var tip := dir * (radius - 3.0)
+		var side := Vector2(-dir.y, dir.x) * 6.0
+		var base := dir * (radius - 15.0)
+		draw_colored_polygon(PackedVector2Array([tip, base + side, base - side]), ROUTE_COLOR)
 
 
 ## Returns the on-screen unit vector that points toward true north for a given

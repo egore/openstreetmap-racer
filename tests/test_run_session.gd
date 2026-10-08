@@ -108,3 +108,33 @@ func test_score_text_groups_thousands() -> void:
 	assert_str(RunSessionScript.format_score(999)).is_equal("999")
 	assert_str(RunSessionScript.format_score(12345)).is_equal("12,345")
 	assert_str(RunSessionScript.format_score(1234567)).is_equal("1,234,567")
+
+
+# ─── Runs without a time limit (sprint) ──────────────────────────────────────
+
+func test_an_open_run_counts_up_until_finished() -> void:
+	var s := _session(0.0)
+	_tick_until_cue(s, 5.0)
+	assert_int(s.tick(100.0, 10.0, 50)).is_equal(RunSessionScript.Cue.NONE)
+	assert_float(s.elapsed).is_equal(100.0)
+	assert_float(s.distance_m).is_equal(1000.0)
+	s.finish(70)
+	assert_int(s.state).is_equal(RunSessionScript.State.FINISHED)
+	assert_int(s.score).is_equal(70)
+
+
+func test_finish_is_ignored_before_go() -> void:
+	var s := _session(0.0)
+	s.finish(10)
+	assert_int(s.state).is_equal(RunSessionScript.State.COUNTDOWN)
+
+
+func test_race_time_shows_truncated_tenths() -> void:
+	assert_str(RunSessionScript.format_race_time(0.0)).is_equal("0:00.0")
+	assert_str(RunSessionScript.format_race_time(62.39)).is_equal("1:02.3")
+	assert_str(RunSessionScript.format_race_time(59.99)).is_equal("0:59.9")
+
+
+func test_sprint_records_are_kept_per_course() -> void:
+	assert_str(RunSessionScript.record_key(RunSessionScript.Mode.SPRINT, "12_34")).is_equal("sprint_12_34")
+	assert_str(RunSessionScript.mode_name(RunSessionScript.Mode.SPRINT)).is_equal("CHECKPOINT SPRINT")

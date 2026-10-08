@@ -1,19 +1,21 @@
 class_name RunSession
 extends RefCounted
 
-## One timed run: a countdown, a fixed stretch of driving, then a result.
+## One timed run: a countdown, the driving, then a result.
 ##
 ## Pure logic, like KudosTracker: the run controller ticks it each frame with
 ## the car's speed and running kudos, and forwards each kudos event. The session
 ## keeps the clock and the run's statistics, and says when the run starts (GO)
-## and ends (FINISHED).
+## and ends (FINISHED). A run with a `duration` ends when the clock runs out
+## (Kudos Attack); one without runs until the controller calls finish() (a
+## sprint, at the last checkpoint).
 
-enum Mode { FREE_DRIVE, KUDOS_ATTACK }
+enum Mode { FREE_DRIVE, KUDOS_ATTACK, SPRINT }
 enum State { IDLE, COUNTDOWN, RUNNING, FINISHED }
 ## What tick() wants the caller to act on this frame.
 enum Cue { NONE, GO, FINISHED }
 
-## Seconds of scored driving.
+## Seconds of scored driving, or 0 for a run that ends on finish().
 var duration: float = 180.0
 ## Seconds of "3, 2, 1" before the run starts.
 var countdown_time: float = 3.0
@@ -32,6 +34,9 @@ var mistakes: int = 0
 var best_move_label: String = ""
 var best_move_amount: int = 0
 
+## Seconds since GO.
+var elapsed: float = 0.0
+
 var _countdown_left: float = 0.0
 var _time_left: float = 0.0
 
@@ -41,6 +46,7 @@ func start() -> void:
 	state = State.COUNTDOWN
 	_countdown_left = countdown_time
 	_time_left = duration
+	elapsed = 0.0
 	score = 0
 	distance_m = 0.0
 	top_speed_ms = 0.0
@@ -63,16 +69,29 @@ func tick(delta: float, speed_ms: float, kudos: int) -> Cue:
 				return Cue.GO
 		State.RUNNING:
 			# Clamp so the frame that crosses zero doesn't count driving past it.
-			var step := minf(delta, _time_left)
+			var step := minf(delta, _time_left) if has_time_limit() else delta
 			_time_left -= step
+			elapsed += step
 			distance_m += speed_ms * step
 			top_speed_ms = maxf(top_speed_ms, speed_ms)
 			score = kudos
-			if _time_left <= 0.0:
+			if has_time_limit() and _time_left <= 0.0:
 				_time_left = 0.0
 				state = State.FINISHED
 				return Cue.FINISHED
 	return Cue.NONE
+
+
+## End a run that has no time limit, e.g. at the last checkpoint.
+func finish(kudos: int) -> void:
+	if state != State.RUNNING:
+		return
+	score = kudos
+	state = State.FINISHED
+
+
+func has_time_limit() -> bool:
+	return duration > 0.0
 
 
 ## Count a kudos event towards the run's statistics. Ignored outside the run.
@@ -112,6 +131,13 @@ static func format_time(seconds: float) -> String:
 	return "%d:%02d" % [whole / 60, whole % 60]
 
 
+## "1:02.3" style race time: tenths, truncated like a real timer.
+static func format_race_time(seconds: float) -> String:
+	var tenths := floori(maxf(seconds, 0.0) * 10.0)
+	@warning_ignore("integer_division")
+	return "%d:%02d.%d" % [tenths / 600, (tenths % 600) / 10, tenths % 10]
+
+
 ## "12,345" style score text.
 static func format_score(value: int) -> String:
 	var digits := str(absi(value))
@@ -123,9 +149,21 @@ static func format_score(value: int) -> String:
 
 
 ## The key a mode's records are saved under in the profile.
-static func record_key(mode: Mode) -> String:
-	return "kudos_attack" if mode == Mode.KUDOS_ATTACK else "free_drive"
+## Sprints are keyed per course too (see SprintRoute.id), since a time on one
+## course says nothing about another.
+static func record_key(mode: Mode, course: String = "") -> String:
+	match mode:
+		Mode.KUDOS_ATTACK:
+			return "kudos_attack"
+		Mode.SPRINT:
+			return "sprint_" + course
+	return "free_drive"
 
 
 static func mode_name(mode: Mode) -> String:
-	return "KUDOS ATTACK" if mode == Mode.KUDOS_ATTACK else "FREE DRIVE"
+	match mode:
+		Mode.KUDOS_ATTACK:
+			return "KUDOS ATTACK"
+		Mode.SPRINT:
+			return "CHECKPOINT SPRINT"
+	return "FREE DRIVE"

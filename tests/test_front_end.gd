@@ -81,6 +81,7 @@ func test_title_screen_offers_both_modes_and_focuses_the_run() -> void:
 	var title := _make_title("user://_test_no_profile.cfg")
 	await _frames(2)
 	assert_object(title.free_drive_button).is_not_null()
+	assert_object(title.sprint_button).is_not_null()
 	assert_object(title.quit_button).is_not_null()
 	assert_bool(title.kudos_attack_button.has_focus()).is_true()
 	assert_str(title.best_label.text).contains("THREE MINUTES")
@@ -110,3 +111,13 @@ func test_loading_screen_hands_the_mode_to_the_world() -> void:
 		await get_tree().process_frame
 	assert_int(handed_over[0].game_mode).is_equal(RunSessionScript.Mode.KUDOS_ATTACK)
 	await loading.tree_exited
+
+
+func test_title_menu_clears_the_footer() -> void:
+	# canvas_items stretching lays the UI out at the 1280 x 720 design size.
+	var title := _make_title("user://_test_no_profile.cfg")
+	title.size = Vector2(1280, 720)
+	await _frames(2)
+	var quit_bottom: float = title.quit_button.get_global_rect().end.y
+	# The controls line sits 40 px above the bottom edge.
+	assert_float(quit_bottom).is_less_equal(720.0 - 40.0)
