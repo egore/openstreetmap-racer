@@ -331,3 +331,39 @@ func test_zero_delta_is_a_noop() -> void:
 		.override_failure_message("A zero-length frame does nothing").is_equal(0)
 	assert_int(k.get_kudos()) \
 		.override_failure_message("A zero-length frame earns no kudos").is_equal(0)
+
+
+# ─── Manual moves (recovery / new run) ───────────────────────────────────────
+
+func test_forgetting_motion_stops_a_teleport_reading_as_a_crash() -> void:
+	var k := _make()
+	var t := _cruising()
+	k.update(t, STEP)
+	# The car is lifted out of a 20 m/s slide and placed stationary on the road.
+	k.forget_motion()
+	t.speed = 0.0
+	t.forward_speed = 0.0
+	var events := k.update(t, STEP)
+	assert_int(_count_label(events, "CRASH")) \
+		.override_failure_message("A recovery teleport is not a crash").is_equal(0)
+
+
+func test_forgetting_motion_ends_the_combo_but_keeps_the_score() -> void:
+	var k := _make()
+	var t := _cruising()
+	t.slip_angle = 0.6
+	_run(k, t, 1.0)
+	var earned := k.get_kudos()
+	k.forget_motion()
+	assert_float(k.get_combo()).is_equal(1.0)
+	assert_int(k.get_kudos()).is_equal(earned)
+
+
+func test_reset_starts_a_fresh_score() -> void:
+	var k := _make()
+	var t := _cruising()
+	t.slip_angle = 0.6
+	_run(k, t, 1.0)
+	k.reset()
+	assert_int(k.get_kudos()).is_equal(0)
+	assert_float(k.get_combo()).is_equal(1.0)

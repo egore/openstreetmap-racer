@@ -168,6 +168,10 @@ func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("ui_cancel"):
 		_set_paused(not get_tree().paused)
 
+	# R / gamepad Y. Ignored while frozen so the spawn drop can't be interrupted.
+	if Input.is_action_just_pressed("reset_car") and not get_tree().paused and not car.freeze:
+		recover_car()
+
 	# Drive the speed blur from here rather than from the car's speed signal,
 	# because the ramp is smoothed and therefore needs a frame delta. Reading the
 	# car's velocity directly also means the blur keeps easing back to zero after
@@ -231,6 +235,15 @@ func cycle_camera() -> int:
 	return _camera_index
 
 
+## Put the car back on the road at its last safe spot. The overhead cameras ease
+## after their target, so the live one is snapped to avoid a swoop across the map.
+func recover_car() -> void:
+	car.recover()
+	var cam := get_viewport().get_camera_3d()
+	if cam != null and cam.has_method("snap_to_target"):
+		cam.call("snap_to_target")
+
+
 ## Save a PNG of the current frame and report where it went.
 ##
 ## The viewport texture is only valid once the frame has actually been drawn, so
@@ -280,6 +293,7 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 	var t := car.global_transform
 	t.origin.y = ground_y + SPAWN_CLEARANCE
 	car.global_transform = t
+	car.remember_safe_point()
 
 	# Zero any velocity accumulated while frozen, then unfreeze on the next step.
 	car.linear_velocity = Vector3.ZERO

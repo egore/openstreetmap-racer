@@ -269,3 +269,36 @@ func test_assist_state_stays_settled_when_coasting() -> void:
 	assert_float(car._assists.abs_release) \
 		.override_failure_message("ABS is idle while coasting") \
 		.is_equal_approx(0.0, 0.05)
+
+
+# ─── Recovery ────────────────────────────────────────────────────────────────
+
+func test_recover_rights_a_flipped_car_and_stops_it() -> void:
+	var car := _make_car()
+	_spawn(car)
+	car.global_transform = Transform3D(Basis(Vector3.FORWARD, PI), Vector3(3, 2, 4))
+	car.linear_velocity = Vector3(8, -3, 2)
+	car.angular_velocity = Vector3(1, 2, 3)
+
+	car.recover()
+
+	assert_float(car.global_transform.basis.y.dot(Vector3.UP)) \
+		.override_failure_message("recovered car is upright").is_equal_approx(1.0, 0.001)
+	assert_vector(car.linear_velocity).is_equal(Vector3.ZERO)
+	assert_vector(car.angular_velocity).is_equal(Vector3.ZERO)
+	assert_float(car.global_position.y).is_greater(2.0)
+
+
+func test_recover_returns_to_a_remembered_safe_point_facing_its_heading() -> void:
+	var car := _make_car()
+	_spawn(car)
+	car.teleport(Vector3(10, 0, 20), Vector3.LEFT)
+	car.remember_safe_point()
+	car.global_transform = Transform3D(Basis(Vector3.FORWARD, PI * 0.5), Vector3(50, 0, 50))
+
+	car.recover()
+
+	assert_float(car.global_position.x).is_equal_approx(10.0, 0.001)
+	assert_float(car.global_position.z).is_equal_approx(20.0, 0.001)
+	# The nose is +Z in the car's frame.
+	assert_vector(car.global_transform.basis.z).is_equal_approx(Vector3.LEFT, Vector3.ONE * 0.001)

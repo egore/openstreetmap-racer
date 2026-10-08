@@ -238,6 +238,19 @@ var _last_kudos_total: int = -1
 ## speed at query time so fast passes have a longer detection reach.
 const _NEAR_MISS_PROBE_BASE := 6.0
 
+## Breadcrumbs of recent safe driving, used by recover(). Preloaded rather than
+## referenced by class_name so it resolves before the global class cache does.
+const RecoveryTrackerScript := preload("res://scripts/recovery_tracker.gd")
+var _recovery := RecoveryTrackerScript.new()
+## A breadcrumb is only laid when the car is this upright (dot of up vectors) and
+## moving at least this fast (m/s). Moving matters: a car pinned against a wall
+## is upright and on the road, but it is not somewhere worth returning to.
+const _SAFE_UPRIGHTNESS := 0.9
+const _SAFE_MIN_SPEED := 2.0
+## Height (m) above the remembered pose the car is dropped from on recovery, so
+## the wheels settle onto the road instead of spawning intersecting it.
+const _RECOVERY_LIFT := 0.6
+
 ## Switch every driver aid (TCS, ABS, stability control) on or off together —
 ## the "assists off / pro" preset every racing game offers. The countersteer
 ## assist in the steering rack goes with them, since it is the same class of help.
@@ -264,6 +277,53 @@ func set_engine_muted(muted: bool) -> void:
 	if muted and _screech_sound != null:
 		_screech_sound.stop()
 		# Screech restarts naturally via _update_screech_sound() when un-muted.
+
+
+## Put the car back on the road, upright and stationary, at the last place it was
+## driving safely (see RecoveryTracker). With no history yet it is simply righted
+## where it stands.
+func recover() -> void:
+	var point := _recovery.take_recovery_point()
+	if point == null:
+		teleport(global_position + Vector3.UP * _RECOVERY_LIFT, global_transform.basis.z)
+	else:
+		teleport(point.position + Vector3.UP * _RECOVERY_LIFT, point.forward)
+
+
+## Remember the current pose as safe, e.g. the spawn point, so recover() has
+## somewhere to go before the player has driven anywhere.
+func remember_safe_point() -> void:
+	_recovery.remember(global_position, global_transform.basis.z)
+
+
+## Move the car to `at`, level and nose along `forward`, with all motion
+## cancelled. Everything that integrates motion over frames (scoring, camera
+## follow and shake, steering rack) is told, so the jump isn't read as a crash or
+## swung through by the camera.
+func teleport(at: Vector3, forward: Vector3) -> void:
+	var flat := Vector3(forward.x, 0.0, forward.z)
+	flat = flat.normalized() if flat.length_squared() > 0.0001 else Vector3.BACK
+	# The car's nose is +Z (see forward_speed), so build the basis around it.
+	var heading := Basis(Vector3.UP.cross(flat), Vector3.UP, flat)
+	global_transform = Transform3D(heading, at)
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	_kudos.forget_motion()
+	_steering.reset()
+	_was_airborne = false
+	_camera_shake.trauma = 0.0
+	if camera_pivot != null:
+		camera_pivot.global_basis = Basis.looking_at(flat, Vector3.UP)
+
+
+## Start a fresh score, e.g. at the start of a timed run.
+func reset_kudos() -> void:
+	_kudos.reset()
+	_last_kudos_total = -1
+
+
+func get_kudos() -> int:
+	return _kudos.get_kudos()
 
 
 func _ready() -> void:
@@ -888,6 +948,10 @@ func _update_kudos(delta: float, forward_speed: float) -> void:
 	var screech_speed := 0.0 if airborne_now else t.speed
 	_audio_triggers.update_screech(t.slip_angle, screech_speed, gripping, delta)
 	_update_screech_sound()
+
+	var safe := t.wheels_on_ground == 4 and t.on_road \
+			and t.uprightness > _SAFE_UPRIGHTNESS and t.speed > _SAFE_MIN_SPEED
+	_recovery.update(delta, global_position, global_transform.basis.z, safe)
 
 	var events := _kudos.update(t, delta)
 	for ev: KudosTracker.KudosEvent in events:

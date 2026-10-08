@@ -161,6 +161,25 @@ func get_combo() -> float:
 	return _combo
 
 
+## Zero the score and combo for a fresh run.
+func reset() -> void:
+	_kudos = 0.0
+	forget_motion()
+
+
+## Tell the tracker the car was moved by hand (recovery, respawn) rather than by
+## physics. The jump in speed and pose between frames is not a crash, so frame-to-
+## frame history is dropped. Resetting a car is also not stylish: the combo ends.
+func forget_motion() -> void:
+	_prev_speed = -1.0
+	_was_flipped = false
+	_was_spinning = false
+	_was_drifting = false
+	_combo = 1.0
+	_combo_idle = 0.0
+	_near_miss_timer = 0.0
+
+
 ## Integrate one physics frame of telemetry. Returns the list of discrete
 ## KudosEvents that fired this frame (usually empty; the drift/airtime trickle
 ## emits one event when the move *starts* so the HUD does not spam). The running

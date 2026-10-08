@@ -193,6 +193,9 @@ count for slope smoothness.
 
 - **W / S** — Accelerate / Brake
 - **A / D** — Steer left / right
+- **Space** — Handbrake
+- **R** — Recover: put the car back on the road, upright, where it was last
+  driving cleanly (about two seconds before things went wrong)
 - **T** — Cycle the camera: chase → isometric → top-down → chase
 - **P** — Save a screenshot
 - **Escape** — Pause / resume (frees the mouse for the menu)

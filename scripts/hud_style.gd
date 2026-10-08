@@ -22,14 +22,14 @@ func _ready() -> void:
 	mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(mark)
 	var hint := Label.new()
-	hint.text = "WASD  DRIVE     SPACE  HANDBRAKE     T  CAMERA     ESC  PAUSE"
+	hint.text = "WASD  DRIVE     SPACE  HANDBRAKE     R  RECOVER     T  CAMERA     ESC  PAUSE"
 	hint.theme = InterfaceTheme.create()
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.add_theme_color_override("font_color", InterfaceTheme.MUTED)
 	hint.add_theme_stylebox_override("normal", InterfaceTheme.panel(Color(0.067, 0.098, 0.11, 0.9), Color("344448"), 10))
 	hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
-	hint.offset_left = -218
-	hint.offset_right = 218
+	hint.offset_left = -262
+	hint.offset_right = 262
 	hint.offset_top = -50
 	hint.offset_bottom = -24
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
