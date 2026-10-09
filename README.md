@@ -214,6 +214,22 @@ count for slope smoothness.
 - **F4** — Dump the frame-tracer timing summary
 - **F5** — Toggle wet-road weather (rain rolls in/out over a few seconds)
 
+### Measuring performance
+
+`tools/perf_bench.gd` drives the real world scene along a planned route through
+the street graph (so tiles stream as they would in play, and the car never stalls
+on a wall) and reports frame time, draw calls and triangles. It needs a window:
+
+```bash
+godot --path . --disable-vsync -s tools/perf_bench.gd
+BENCH_SPEED=0 BENCH_OFF=ssr,ssao,ssil godot --path . -s tools/perf_bench.gd   # parked, effects off
+OSMRACER_TRACE=1 OSMRACER_TRACE_MS=10 godot --path . -s tools/perf_bench.gd    # name slow main-thread spans
+```
+
+`BENCH_OFF` takes `ssr,ssao,ssil,glow,dof,msaa,shadows,fog,minimap,traffic,world,all_pp`;
+`BENCH_SPEED` is the car's speed in m/s, `BENCH_SECONDS` the length of the run,
+`BENCH_CENSUS=1` lists triangles per mesh kind.
+
 **T** cycles three camera modes, which differ in more than framing:
 
 | Mode | Projection | Framing |
