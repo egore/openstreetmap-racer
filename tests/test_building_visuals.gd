@@ -186,3 +186,13 @@ func test_building_meshes_keep_a_cpu_copy_instead_of_reading_the_gpu_back() -> v
 			var mi := root.get_node(name_str) as MeshInstance3D
 			assert_bool(mi.has_meta(BuildingSurfaceUV.CPU_SURFACES_META)).is_true()
 			assert_int(BuildingSurfaceUV.faces_of(mi).size()).is_equal(mi.mesh.get_faces().size())
+
+
+func test_buildings_with_the_same_look_share_materials() -> void:
+	var tags := {"building": "house", "height": "6", "roof:shape": "gabled", "roof:height": "2", "building:colour": "#805044", "roof:colour": "#4b4c50"}
+	var first := auto_free(OSMBuildingBuilder.new().build_building_from_polygon(_rectangle(), tags, 1)) as Node3D
+	var second := auto_free(OSMBuildingBuilder.new().build_building_from_polygon(_rectangle(Vector3(40, 0, 0)), tags, 1)) as Node3D
+	for name_str: String in ["Walls", "Roof", "WindowTrim", "RoofCaps"]:
+		var a := first.get_node(name_str) as MeshInstance3D
+		var b := second.get_node(name_str) as MeshInstance3D
+		assert_bool(a.material_override == b.material_override).is_true()

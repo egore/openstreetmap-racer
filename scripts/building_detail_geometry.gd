@@ -43,3 +43,7 @@ static func matte(color: Color, roughness: float = 0.8) -> StandardMaterial3D:
 	mat.albedo_color = color
 	mat.roughness = roughness
 	return mat
+	var key := [color, roughness]
+	if _matte_materials.has(key):
+		return _matte_materials[key]
+	_matte_materials[key] = mat

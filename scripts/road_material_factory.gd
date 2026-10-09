@@ -127,7 +127,23 @@ static func create_road_material(
 ## therefore use their own shader that WRITES depth (asphalt_junction.gdshader).
 const JUNCTION_PRIORITY := 30
 
+## Shared per highway type, like the marking and kerb materials below: they take
+## no per-feature parameters, and a material of its own for every junction cap,
+## stop bar and kerb costs the renderer a separate uniform set per draw.
+static var _junction_materials: Dictionary = {}
+static var _marking_material: Material = null
+static var _sidewalk_material: Material = null
+
+
 static func create_junction_material(highway_type: String) -> Material:
+	if _junction_materials.has(highway_type):
+		return _junction_materials[highway_type]
+	var mat := _make_junction_material(highway_type)
+	_junction_materials[highway_type] = mat
+	return mat
+
+
+static func _make_junction_material(highway_type: String) -> Material:
 	var color: Color = RoadProfileScript.color_for(highway_type)
 	if not RoadProfileScript.is_paved(highway_type):
 		var plain := StandardMaterial3D.new()
@@ -149,7 +165,10 @@ static func create_junction_material(highway_type: String) -> Material:
 ## and crossings on junction caps, where the shader's UV-driven markings can't
 ## reach). Slightly glossier than asphalt, like fresh paint.
 static func create_marking_material() -> Material:
+	if _marking_material != null:
+		return _marking_material
 	var mat := StandardMaterial3D.new()
+	_marking_material = mat
 	mat.albedo_color = Color(0.85, 0.82, 0.62)
 	mat.roughness = 0.55
 	# Paint sits on top of every road surface, so it must outrank them all.
@@ -161,7 +180,10 @@ static func create_marking_material() -> Material:
 ## corner builder so a corner is indistinguishable from the pavement leading
 ## into it.
 static func create_sidewalk_material() -> Material:
+	if _sidewalk_material != null:
+		return _sidewalk_material
 	var mat := StandardMaterial3D.new()
+	_sidewalk_material = mat
 	mat.albedo_color = RoadProfileScript.SIDEWALK_COLOR
 	mat.roughness = 0.95
 	return mat

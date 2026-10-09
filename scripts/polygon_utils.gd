@@ -155,6 +155,22 @@ const PLATFORM_GROUND_PRIORITY := -6
 ## Chosen outside the ground range so it can never collide with a real rank.
 const GROUND_NO_PRIORITY := 127
 
+static var _flat_materials: Dictionary = {}
+
+
+## One material per colour and layer, shared by every polygon that uses them: a
+## material of its own per polygon costs the renderer a separate uniform set per
+## draw, and a tile carries hundreds of them.
+static func _flat_material(color: Color, render_priority: int) -> StandardMaterial3D:
+	var key := [color, render_priority]
+	if not _flat_materials.has(key):
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = color
+		_apply_ground_layering(mat, render_priority)
+		_flat_materials[key] = mat
+	return _flat_materials[key]
+
+
 ## Apply the painter's-algorithm ground layering to a material: disable
 ## depth-write and set render_priority so overlapping coplanar ground patches
 ## are ordered by paint order (never z-fight). A GROUND_NO_PRIORITY sentinel
@@ -233,6 +249,8 @@ static func triangulate_xz(points: PackedVector3Array) -> PackedInt32Array:
 ## When drape_terrain is true, each vertex keeps its own elevation (points[idx].y)
 ## and y is added as an offset, so the polygon follows the DEM. When false (the
 ## default, used by roofs), every vertex sits at the single height y.
+## keep_cpu_copy remembers the built arrays for later stages (BuildingSurfaceUV)
+## so they never have to read the mesh back from the GPU.
 ## render_priority orders overlapping (coplanar) ground polygons in the
 ## painter's-algorithm layer stack (see ground_render_priority). When it is set
 ## to anything other than GROUND_NO_PRIORITY the material also disables
@@ -245,12 +263,11 @@ static func build_flat_polygon_mesh(
 		y: float = 0.01,
 		drape_terrain: bool = false,
 		render_priority: int = GROUND_NO_PRIORITY,
+		keep_cpu_copy: bool = false,
 ) -> MeshInstance3D:
 	if points.size() < 3:
 		return null
 
-## keep_cpu_copy remembers the built arrays for later stages (BuildingSurfaceUV)
-## so they never have to read the mesh back from the GPU.
 	var indices := triangulate_xz(points)
 	if indices.size() == 0:
 		return null
@@ -258,12 +275,8 @@ static func build_flat_polygon_mesh(
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	_apply_ground_layering(mat, render_priority)
-	st.set_material(mat)
+	st.set_material(_flat_material(color, render_priority))
 
-		keep_cpu_copy: bool = false,
 	for i: int in range(indices.size()):
 		var idx: int = indices[i]
 		var vy: float = (points[idx].y + y) if drape_terrain else y
@@ -817,10 +830,7 @@ static func build_terrain_draped_mesh(
 
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	_apply_ground_layering(mat, render_priority)
-	st.set_material(mat)
+	st.set_material(_flat_material(color, render_priority))
 
 	var has_tris := false
 	var cell_x := grid_x0

@@ -95,10 +95,7 @@ static func build(root: Node3D, points: PackedVector3Array, base: float, height:
 				var seed_value := float(absi(hash("%d:%d:%d:%d" % [style.seed, edge, floor_index, bay])) % 256) / 255.0
 				_add_opening(openings, frames, p, along, width, window_height, seed_value, 0.0)
 				count += 1
-	var mat := ShaderMaterial.new()
-	mat.shader = OPENING_SHADER
-	mat.set_shader_parameter("frame_color", style.frame_color)
-	mat.set_shader_parameter("door_color", style.door_color)
+	var mat := _opening_material(style.frame_color, style.door_color)
 	var panes := BuildingDetailGeometry.finish(openings, "Openings", mat)
 	if panes != null:
 		panes.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -106,6 +103,20 @@ static func build(root: Node3D, points: PackedVector3Array, base: float, height:
 	var trim := BuildingDetailGeometry.finish(frames, "WindowTrim", BuildingDetailGeometry.matte(style.frame_color), DETAIL_DISTANCE)
 	if trim != null:
 		root.add_child(trim)
+
+
+static var _opening_materials: Dictionary = {}
+
+
+static func _opening_material(frame_color: Color, door_color: Color) -> ShaderMaterial:
+	var key := [frame_color, door_color]
+	if not _opening_materials.has(key):
+		var mat := ShaderMaterial.new()
+		mat.shader = OPENING_SHADER
+		mat.set_shader_parameter("frame_color", frame_color)
+		mat.set_shader_parameter("door_color", door_color)
+		_opening_materials[key] = mat
+	return _opening_materials[key]
 
 
 static func _blocked(context: BuildingNeighborhood, p: Vector3, along: Vector3, normal: Vector3, width: float, height: float, id: int) -> bool:
