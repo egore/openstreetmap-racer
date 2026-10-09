@@ -83,6 +83,64 @@ func _spawn(car: CarController) -> void:
 
 # ─── Steering is actually applied to the wheels ──────────────────────────────
 
+func test_car_does_not_inherit_always_processing_during_pause() -> void:
+	var parent := Node3D.new()
+	parent.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(auto_free(parent))
+	var car := _make_car()
+	parent.add_child(car)
+	get_tree().paused = true
+	var processes_while_paused := car.can_process()
+	get_tree().paused = false
+	assert_bool(processes_while_paused).is_false()
+
+
+func test_muting_stops_all_car_audio() -> void:
+	var car := _make_car()
+	_spawn(car)
+	car._engine_sound.update_engine(60.0, 2, 0.5)
+	car._dirt_sound.play()
+	car._screech_sound.play()
+	car._impact_sound.play()
+	car.set_engine_muted(true)
+	assert_bool(car._engine_sound._player.playing).is_false()
+	assert_bool(car._dirt_sound.playing).is_false()
+	assert_bool(car._screech_sound.playing).is_false()
+	assert_bool(car._impact_sound.playing).is_false()
+
+
+func test_muted_car_audio_does_not_restart_on_updates() -> void:
+	var car := _make_car()
+	_spawn(car)
+	car._wheel_surfaces[0] = SurfaceDetector.Surface.GRASS
+	car._audio_triggers.screech_level = 1.0
+	car.set_engine_muted(true)
+	car._engine_sound.update_engine(60.0, 2, 0.5)
+	car._update_dirt_sound(20.0)
+	car._update_screech_sound()
+	car._play_impact(100.0)
+	assert_bool(car._engine_sound._player.playing).is_false()
+	assert_bool(car._dirt_sound.playing).is_false()
+	assert_bool(car._screech_sound.playing).is_false()
+	assert_bool(car._impact_sound.playing).is_false()
+
+
+func test_unmuting_restores_car_audio_on_updates() -> void:
+	var car := _make_car()
+	_spawn(car)
+	car._wheel_surfaces[0] = SurfaceDetector.Surface.GRASS
+	car._audio_triggers.screech_level = 1.0
+	car.set_engine_muted(true)
+	car.set_engine_muted(false)
+	car._engine_sound.update_engine(60.0, 2, 0.5)
+	car._update_dirt_sound(20.0)
+	car._update_screech_sound()
+	car._play_impact(100.0)
+	assert_bool(car._engine_sound._player.playing).is_true()
+	assert_bool(car._dirt_sound.playing).is_true()
+	assert_bool(car._screech_sound.playing).is_true()
+	assert_bool(car._impact_sound.playing).is_true()
+
 func test_steering_reaches_the_front_wheels() -> void:
 	var car := _make_car()
 	_spawn(car)

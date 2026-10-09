@@ -106,6 +106,7 @@ var _run: RunControllerScript = null
 func _ready() -> void:
 	# Keep handling input even while the tree is paused so Escape can resume.
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	car.set_engine_muted(true)
 
 	# Capture mouse for camera control
 	Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
@@ -381,6 +382,7 @@ func _on_world_ready(_osm_data: OSMParser.OSMData) -> void:
 	_is_world_ready = true
 	street_banner.reset()
 	world_ready.emit()
+	car.set_engine_muted(false)
 	if _run != null:
 		_run.road_network = traffic_manager.road_network()
 		_run.begin()

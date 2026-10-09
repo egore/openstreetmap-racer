@@ -120,6 +120,7 @@ var _current_gear: int = Transmission.GEAR_NEUTRAL
 
 ## Engine audio: loops a single-gear sample and pitch-shifts it by RPM.
 var _engine_sound := EngineSound.new()
+var _audio_muted: bool = false
 
 ## Surface detection: determines whether each wheel is on road or grass.
 var _surface_detector := SurfaceDetector.new()
@@ -271,9 +272,9 @@ func are_driving_assists_enabled() -> bool:
 	return _assists.traction_control_enabled
 
 
-## Silence or restore all car audio (engine loop and dirt driving sound).
-## Called by the main scene when the pause menu opens / closes.
+## Silence or restore all car audio during loading, pause and results screens.
 func set_engine_muted(muted: bool) -> void:
+	_audio_muted = muted
 	_engine_sound.set_muted(muted)
 	if _dirt_sound != null:
 		if muted:
@@ -282,6 +283,8 @@ func set_engine_muted(muted: bool) -> void:
 	if muted and _screech_sound != null:
 		_screech_sound.stop()
 		# Screech restarts naturally via _update_screech_sound() when un-muted.
+	if muted and _impact_sound != null:
+		_impact_sound.stop()
 
 
 ## Put the car back on the road, upright and stationary, at the last place it was
@@ -332,6 +335,8 @@ func get_kudos() -> int:
 
 
 func _ready() -> void:
+	# The main scene processes pause-menu input even while the world is paused.
+	process_mode = Node.PROCESS_MODE_PAUSABLE
 	center_of_mass_mode = RigidBody3D.CENTER_OF_MASS_MODE_CUSTOM
 	# Drop the centre of mass well below the wheel mounts (wheels sit at ~Y 0.32).
 	# A low COM is the single biggest factor in stopping arcade cars from flipping.
@@ -522,6 +527,8 @@ func _wav_frame_count(wav: AudioStreamWAV) -> int:
 ## penalty). The trigger logic gates on severity + a cooldown so a multi-frame
 ## crash thumps once, not in a burst. No-ops if the sound file is absent.
 func _play_impact(severity: float) -> void:
+	if _audio_muted:
+		return
 	var decision := _audio_triggers.register_impact(severity)
 	if not decision["play"]:
 		return
@@ -560,6 +567,8 @@ func _burst_impact_particles(severity: float) -> void:
 ## from zero every few frames and produced no audible sound at all. Instead we let
 ## the loop run and just duck the volume to (near) silent when there's no slip.
 func _update_screech_sound() -> void:
+	if _audio_muted:
+		return
 	if _screech_sound == null or _screech_sound.stream == null:
 		return
 	var level := _audio_triggers.screech_level
@@ -816,6 +825,8 @@ func _update_wheel_particles() -> void:
 ## above the particle speed threshold. Volume and pitch scale with speed so
 ## the sound swells naturally with the particle spray.
 func _update_dirt_sound(car_speed: float) -> void:
+	if _audio_muted:
+		return
 	if _dirt_sound == null or _dirt_sound.stream == null:
 		return
 	var any_on_grass := false
