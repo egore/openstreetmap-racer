@@ -39,7 +39,7 @@ static func add_quad(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vec
 static func make_mesh(st: SurfaceTool, name_str: String) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.name = name_str
-	mi.mesh = st.commit()
+	mi.mesh = BuildingSurfaceUV.commit(st, mi)
 	return mi
 
 # ─── Ridge axis helpers ──────────────────────────────────────────────────────

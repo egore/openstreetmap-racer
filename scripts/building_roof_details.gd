@@ -9,7 +9,7 @@ static func build(root: Node3D, points: PackedVector3Array, base: float, shape: 
 	var trim := BuildingDetailGeometry.surface()
 	var caps := BuildingDetailGeometry.surface()
 	var gutters := BuildingDetailGeometry.surface()
-	var triangles := roof.mesh.get_faces()
+	var triangles := BuildingSurfaceUV.faces_of(roof)
 	var edges := {}
 	var top := base
 	for i: int in range(0, triangles.size(), 3):

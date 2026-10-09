@@ -249,6 +249,8 @@ static func build_flat_polygon_mesh(
 	if points.size() < 3:
 		return null
 
+## keep_cpu_copy remembers the built arrays for later stages (BuildingSurfaceUV)
+## so they never have to read the mesh back from the GPU.
 	var indices := triangulate_xz(points)
 	if indices.size() == 0:
 		return null
@@ -261,6 +263,7 @@ static func build_flat_polygon_mesh(
 	_apply_ground_layering(mat, render_priority)
 	st.set_material(mat)
 
+		keep_cpu_copy: bool = false,
 	for i: int in range(indices.size()):
 		var idx: int = indices[i]
 		var vy: float = (points[idx].y + y) if drape_terrain else y
@@ -268,7 +271,10 @@ static func build_flat_polygon_mesh(
 		st.add_vertex(Vector3(points[idx].x, vy, points[idx].z))
 
 	var mesh_instance := MeshInstance3D.new()
-	mesh_instance.mesh = st.commit()
+	if keep_cpu_copy:
+		mesh_instance.mesh = BuildingSurfaceUV.commit(st, mesh_instance)
+	else:
+		mesh_instance.mesh = st.commit()
 	return mesh_instance
 
 ## Check if the XZ-projected polygon winds counter-clockwise (shoelace formula).

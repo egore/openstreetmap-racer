@@ -9,7 +9,7 @@ extends RefCounted
 # ─── Flat ────────────────────────────────────────────────────────────────────
 
 static func flat(points: PackedVector3Array, base_y: float, color: Color) -> Array[Node3D]:
-	var mi := PolygonUtils.build_flat_polygon_mesh(points, color, base_y)
+	var mi := PolygonUtils.build_flat_polygon_mesh(points, color, base_y, false, PolygonUtils.GROUND_NO_PRIORITY, true)
 	if mi != null:
 		mi.name = "Roof"
 		return [mi]

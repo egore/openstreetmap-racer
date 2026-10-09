@@ -604,5 +604,5 @@ func _build_walls(points: PackedVector3Array, height: float, color: Color, base_
 
 	var mesh_instance := MeshInstance3D.new()
 	mesh_instance.name = "Walls"
-	mesh_instance.mesh = st.commit()
+	mesh_instance.mesh = BuildingSurfaceUV.commit(st, mesh_instance)
 	return mesh_instance

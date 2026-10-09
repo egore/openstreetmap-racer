@@ -177,3 +177,12 @@ func test_roof_edges_extend_silhouette() -> void:
 	assert_float(bounds.end.x).is_greater(10.0)
 	assert_object(root.get_node_or_null("RoofCaps")).is_not_null()
 	assert_object(root.get_node_or_null("Gutters")).is_not_null()
+
+
+func test_building_meshes_keep_a_cpu_copy_instead_of_reading_the_gpu_back() -> void:
+	for tags: Dictionary in [{"building": "house", "roof:shape": "gabled", "roof:height": "3", "height": "9"}, {"building": "house", "roof:shape": "flat", "height": "6"}]:
+		var root := auto_free(OSMBuildingBuilder.new().build_building_from_polygon(_rectangle(), tags, 1)) as Node3D
+		for name_str: String in ["Walls", "Roof"]:
+			var mi := root.get_node(name_str) as MeshInstance3D
+			assert_bool(mi.has_meta(BuildingSurfaceUV.CPU_SURFACES_META)).is_true()
+			assert_int(BuildingSurfaceUV.faces_of(mi).size()).is_equal(mi.mesh.get_faces().size())
