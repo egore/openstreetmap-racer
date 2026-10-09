@@ -196,3 +196,21 @@ func test_buildings_with_the_same_look_share_materials() -> void:
 		var a := first.get_node(name_str) as MeshInstance3D
 		var b := second.get_node(name_str) as MeshInstance3D
 		assert_bool(a.material_override == b.material_override).is_true()
+
+
+func test_small_trim_does_not_cast_shadows() -> void:
+	var root := auto_free(OSMBuildingBuilder.new().build_building_from_polygon(_rectangle(), {"building": "house", "height": "9", "roof:shape": "gabled", "roof:height": "3"}, 1)) as Node3D
+	for name_str: String in ["WindowTrim", "RoofTrim", "RoofCaps", "Gutters"]:
+		assert_int((root.get_node(name_str) as MeshInstance3D).cast_shadow).is_equal(GeometryInstance3D.SHADOW_CASTING_SETTING_OFF)
+	assert_int((root.get_node("Walls") as MeshInstance3D).cast_shadow).is_equal(GeometryInstance3D.SHADOW_CASTING_SETTING_ON)
+
+
+func test_box_can_leave_out_faces_that_are_hidden() -> void:
+	var counts := {}
+	for skip: int in [0, BuildingDetailGeometry.SKIP_BACK, BuildingDetailGeometry.SKIP_BACK | BuildingDetailGeometry.SKIP_ENDS]:
+		var st := BuildingDetailGeometry.surface()
+		BuildingDetailGeometry.box(st, Vector3.ZERO, Vector3.ONE, Vector3.RIGHT, skip)
+		counts[skip] = (st.commit_to_arrays()[Mesh.ARRAY_VERTEX] as PackedVector3Array).size() / 3
+	assert_int(counts[0]).is_equal(12)
+	assert_int(counts[BuildingDetailGeometry.SKIP_BACK]).is_equal(10)
+	assert_int(counts[BuildingDetailGeometry.SKIP_BACK | BuildingDetailGeometry.SKIP_ENDS]).is_equal(6)

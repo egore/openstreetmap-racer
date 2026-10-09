@@ -140,8 +140,8 @@ static func _add_opening(st: SurfaceTool, frames: SurfaceTool, p: Vector3, along
 		st.add_vertex(origin + along * width * uv.x + Vector3.UP * height * uv.y)
 	var center := p + normal * 0.075
 	for side: float in [-1.0, 1.0]:
-		BuildingDetailGeometry.box(frames, center + along * side * (width * 0.5 - 0.04) + Vector3.UP * height * 0.5, Vector3(0.08, height, 0.14), along)
-		BuildingDetailGeometry.box(frames, center + Vector3.UP * (height * (side + 1.0) * 0.5), Vector3(width + 0.04, 0.09, 0.14), along)
+		BuildingDetailGeometry.box(frames, center + along * side * (width * 0.5 - 0.04) + Vector3.UP * height * 0.5, Vector3(0.08, height, 0.14), along, BuildingDetailGeometry.SKIP_BACK | BuildingDetailGeometry.SKIP_ENDS)
+		BuildingDetailGeometry.box(frames, center + Vector3.UP * (height * (side + 1.0) * 0.5), Vector3(width + 0.04, 0.09, 0.14), along, BuildingDetailGeometry.SKIP_BACK)
 	if kind < 0.5:
-		BuildingDetailGeometry.box(frames, center + Vector3.UP * height * 0.5, Vector3(0.05, height, 0.10), along)
-		BuildingDetailGeometry.box(frames, center + normal * 0.055 - Vector3.UP * 0.045, Vector3(width + 0.22, 0.12, 0.3), along)
+		BuildingDetailGeometry.box(frames, center + Vector3.UP * height * 0.5, Vector3(0.05, height, 0.10), along, BuildingDetailGeometry.SKIP_BACK | BuildingDetailGeometry.SKIP_ENDS)
+		BuildingDetailGeometry.box(frames, center + normal * 0.055 - Vector3.UP * 0.045, Vector3(width + 0.22, 0.12, 0.3), along, BuildingDetailGeometry.SKIP_BACK)
