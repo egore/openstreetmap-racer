@@ -99,49 +99,57 @@ func build_building_from_way(way: OSMParser.OSMWay, osm_data: OSMParser.OSMData)
 	if points.size() < 3:
 		return null
 
-	return _build_building_mesh(points, way.tags, way.id)
+	return _build_building_mesh(points, way.tags, way.id, BuildingNeighborhood.for_data(osm_data))
 
-func build_building_from_polygon(points: PackedVector3Array, tags: Dictionary, id: int) -> Node3D:
+func build_building_from_polygon(points: PackedVector3Array, tags: Dictionary, id: int, context: BuildingNeighborhood = null) -> Node3D:
 	if points.size() < 3:
 		return null
-	return _build_building_mesh(points, tags, id)
+	return _build_building_mesh(points, tags, id, context)
 
-func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int) -> Node3D:
+func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int, context: BuildingNeighborhood = null) -> Node3D:
 	# Capture footprint elevation, then flatten points to y=0 so all geometry is
 	# built in local space relative to BUILDING_Y. The root node is raised to the
 	# terrain height afterward (see below), keeping walls and roofs coplanar.
 	var ground_y := _average_footprint_y(points)
 	for i: int in range(points.size()):
 		points[i] = Vector3(points[i].x, 0.0, points[i].z)
+	if not points[0].is_equal_approx(points[points.size() - 1]):
+		points.append(points[0])
+	points = _simplify_footprint(points)
 
 	# Normalize winding to CCW so all wall/roof code can assume consistent vertex order
 	points = PolygonUtils.normalize_to_ccw(points)
+	var style := BuildingStyleResolver.resolve(tags, points, id)
+	if tags.get("building", "") != "roof":
+		tags = style.tags
 
 	var height := _get_building_height(tags)
 	var min_height := _get_min_height(tags)
 	var roof_shape := _get_roof_shape(tags)
 	var roof_orientation: String = tags.get("roof:orientation", "along")
 	var roof_height := _get_roof_height(tags, roof_shape, points, roof_orientation)
+	if not tags.has("height") and tags.has("building:levels") and not tags.has("roof:levels") and roof_shape != "flat":
+		height += roof_height
 	var roof_color := _get_roof_color(tags)
 	var building_type: String = tags.get("building", tags.get("building:part", "yes"))
 	var wall_color: Color = BUILDING_COLORS.get(building_type, DEFAULT_BUILDING_COLOR)
 	if tags.has("building:colour"):
 		var parsed := _parse_color(tags["building:colour"].strip_edges().to_lower())
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			wall_color = parsed
 	elif tags.has("building:color"):
 		var parsed := _parse_color(tags["building:color"].strip_edges().to_lower())
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			wall_color = parsed
 	elif tags.has("colour"):
 		# Bare `colour` tag — used by some building parts in place of the
 		# namespaced `building:colour` key.
 		var parsed := _parse_color(tags["colour"].strip_edges().to_lower())
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			wall_color = parsed
 	elif tags.has("color"):
 		var parsed := _parse_color(tags["color"].strip_edges().to_lower())
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			wall_color = parsed
 	elif tags.has("building:material"):
 		var mat_name: String = tags["building:material"].strip_edges().to_lower()
@@ -173,6 +181,7 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	#  "building" tag specifically rather than the merged building_type.)
 	if tags.get("building", "") == "roof":
 		_build_open_roof(root, points, height, min_height, roof_height, roof_color, wall_color, roof_shape, roof_orientation, roof_direction)
+		BuildingSurfaceUV.apply(root, PolygonUtils.polygon_centroid(points), RoofGeometry.get_ridge_dir(points, roof_orientation, roof_direction))
 		_apply_surface_materials(root, wall_kind, roof_kind)
 		if tags.has("name") and tags["name"] != "":
 			root.add_child(_create_building_label(tags["name"], points, height))
@@ -204,7 +213,13 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 	# Swap the geometry's flat fallback materials for the procedural-PBR wall/roof
 	# shaders (before the label, which carries no surface). Done here in one place
 	# so all roof families and the wall mesh get consistent treatment.
+	var uv_origin := PolygonUtils.polygon_centroid(points)
+	uv_origin.y = wall_base
+	BuildingSurfaceUV.apply(root, uv_origin, RoofGeometry.get_ridge_dir(points, roof_orientation, roof_direction))
 	_apply_surface_materials(root, wall_kind, roof_kind)
+	BuildingFacadeBuilder.build(root, points, wall_base, wall_height, style, id, context)
+	if tags.get("building:part", "") != "roof":
+		BuildingRoofDetails.build(root, points, wall_base + wall_height, roof_shape, style, roof_color, id, context)
 
 	# Add floating label if building has a name tag
 	if tags.has("name") and tags["name"] != "":
@@ -212,6 +227,20 @@ func _build_building_mesh(points: PackedVector3Array, tags: Dictionary, id: int)
 		root.add_child(label)
 
 	return root
+
+
+func _simplify_footprint(points: PackedVector3Array) -> PackedVector3Array:
+	var result := PackedVector3Array()
+	var count := points.size() - 1
+	for i: int in range(count):
+		var before := points[i] - points[(i + count - 1) % count]
+		var after := points[(i + 1) % count] - points[i]
+		if before.length() > 0.01 and after.length() > 0.01 and before.normalized().dot(after.normalized()) < 0.99999:
+			result.append(points[i])
+	if result.size() < 3:
+		return points
+	result.append(result[0])
+	return result
 
 
 ## Stamp the procedural wall/roof ShaderMaterials onto every mesh under `root`.
@@ -450,12 +479,12 @@ func _get_roof_color(tags: Dictionary) -> Color:
 	if tags.has("roof:colour"):
 		var c: String = tags["roof:colour"].strip_edges().to_lower()
 		var parsed := _parse_color(c)
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			return parsed
 	elif tags.has("roof:color"):
 		var c: String = tags["roof:color"].strip_edges().to_lower()
 		var parsed := _parse_color(c)
-		if parsed != Color.BLACK:
+		if parsed != Color.TRANSPARENT:
 			return parsed
 	if tags.has("roof:material"):
 		var mat_name: String = tags["roof:material"].strip_edges().to_lower()
@@ -464,7 +493,7 @@ func _get_roof_color(tags: Dictionary) -> Color:
 	return DEFAULT_ROOF_COLOR
 
 func _parse_color(c: String) -> Color:
-	if c.begins_with("#") and (c.length() == 7 or c.length() == 4):
+	if c.begins_with("#") and (c.length() == 7 or c.length() == 4) and Color.html_is_valid(c):
 		return Color.html(c)
 	var named_colors := {
 		"red": Color(0.7, 0.2, 0.15),
@@ -480,7 +509,7 @@ func _parse_color(c: String) -> Color:
 	}
 	if named_colors.has(c):
 		return named_colors[c]
-	return Color.BLACK
+	return Color.TRANSPARENT
 
 func _create_building_label(text: String, points: PackedVector3Array, height: float) -> Label3D:
 	var label := Label3D.new()

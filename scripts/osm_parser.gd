@@ -28,6 +28,7 @@ class OSMData:
 	var center_lat: float = 0.0
 	var center_lon: float = 0.0
 	var height_provider: HeightProvider = null  # null or flat when no DEM loaded
+	var building_neighborhood: RefCounted = null
 
 ## Parse an .osm file into structured data.
 ##

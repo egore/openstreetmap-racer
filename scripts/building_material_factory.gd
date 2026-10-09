@@ -1,25 +1,8 @@
 class_name BuildingMaterialFactory
 extends RefCounted
 
-## Builds the procedural-PBR surface materials for building walls and roofs, the
-## building-side analogue of RoadMaterialFactory.
-##
-## Walls and roofs keep their per-building tint (resolved by OSMBuildingBuilder
-## from the colour/material tags), but instead of a flat StandardMaterial3D they
-## get a ShaderMaterial backed by building_wall.gdshader / roof.gdshader. Those
-## shaders fake masonry courses / tile rows / panel seams and a micro-normal from
-## world-space noise — no texture files, matching the asphalt shader's approach —
-## so the buildings catch light and reflect the sky (under SSR) like real
-## surfaces rather than reading as flat blockout.
-##
-## The one bit of interpretation this class owns is the "surface kind": mapping an
-## OSM building:material / roof:material value onto one of the shader's three
-## looks (smooth / masonry / panel for walls; tiles / flat / metal for roofs).
-## That mapping is pure and table-driven, so it is unit-tested directly without
-## building any geometry.
-##
-## The shaders are preloaded once and shared; each building gets a lightweight
-## ShaderMaterial that only overrides `base_color` and `surface_kind`.
+## Maps resolved OSM materials to shared procedural shaders. BuildingSurfaceUV
+## supplies metre-scaled UVs and tangents before these materials are applied.
 
 const WALL_SHADER: Shader = preload("res://scripts/shaders/building_wall.gdshader")
 const ROOF_SHADER: Shader = preload("res://scripts/shaders/roof.gdshader")

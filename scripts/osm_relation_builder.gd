@@ -61,7 +61,7 @@ func _build_multipolygon_building(rel: OSMParser.OSMRelation, osm_data: OSMParse
 		for k: String in rel.tags:
 			merged_tags[k] = rel.tags[k]
 
-		var building_node := _building_builder.build_building_from_polygon(points, merged_tags, way_id)
+		var building_node := _building_builder.build_building_from_polygon(points, merged_tags, way_id, BuildingNeighborhood.for_data(osm_data))
 		if building_node != null:
 			root.add_child(building_node)
 			has_children = true
@@ -177,7 +177,7 @@ func _build_building_relation(rel: OSMParser.OSMRelation, osm_data: OSMParser.OS
 		for k: String in way.tags:
 			merged_tags[k] = way.tags[k]
 
-		var building_node := _building_builder.build_building_from_polygon(points, merged_tags, way_id)
+		var building_node := _building_builder.build_building_from_polygon(points, merged_tags, way_id, BuildingNeighborhood.for_data(osm_data))
 		if building_node != null:
 			root.add_child(building_node)
 			has_children = true

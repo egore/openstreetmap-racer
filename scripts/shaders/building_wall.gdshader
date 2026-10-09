@@ -1,268 +1,63 @@
 shader_type spatial;
-
-// Procedural PBR detail for building walls.
-//
-// Like the asphalt shader, all detail is faked through lighting on flat,
-// UV-less wall geometry — no texture files. Everything is driven from
-// WORLD-SPACE position so the pattern is seamless across a building's wall
-// segments and keeps a constant real-world scale regardless of wall length or
-// orientation. The per-building tint arrives in `base_color`; a `surface_kind`
-// selects how the wall reads:
-//
-//   0 = smooth   (plaster / render / stucco): faint mottling, matte.
-//   1 = masonry  (brick / stone): running-bond courses with recessed mortar
-//                 lines cut into the normal + darker mortar albedo.
-//   2 = panel    (concrete / metal / glass): large vertical panel joints, a
-//                 touch glossier so SSR gives it a subtle sheen.
-//
-// The mortar/panel joints are cut into NORMAL_MAP (not geometry) so they catch
-// light at grazing angles the way real recessed joints do, which is most of
-// what sells masonry at a distance.
-
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
-// Per-building tint (from BUILDING/MATERIAL colour tables).
+#include "building_surface.gdshaderinc"
+
 uniform vec4 base_color : source_color = vec4(0.7, 0.68, 0.62, 1.0);
-
-// Which wall treatment to draw (see header). Float so it can be a uniform.
 uniform float surface_kind : hint_range(0.0, 2.0) = 0.0;
-
-// Brick course height and brick length in metres (masonry only).
-uniform float course_height : hint_range(0.05, 1.5) = 0.24;
-uniform float brick_length : hint_range(0.1, 3.0) = 0.52;
-// Panel size in metres (panel only): width across, height up.
-uniform float panel_width : hint_range(0.5, 8.0) = 3.0;
-uniform float panel_height : hint_range(0.5, 8.0) = 3.5;
-
-// How deep the mortar / panel joints read in the faked normal.
-uniform float joint_depth : hint_range(0.0, 2.0) = 0.8;
-// Fine surface grain (albedo + micro-normal), like the asphalt speckle. This is
-// the noise-lattice spacing IN METRES: at 0.04 the finest speckle is ~4 cm and
-// the coarsest fbm blob a few cells across (~15 cm), which reads as real plaster
-// stipple / brick grit rather than the rolling half-metre lumps a large value
-// produces. Keep it small — a big grain_scale is what made the wall look like
-// it was covered in 50 cm cauliflower.
-uniform float grain_scale : hint_range(0.01, 0.4) = 0.04;
-uniform float albedo_variation : hint_range(0.0, 0.6) = 0.08;
-// How strongly the fine grain tilts the normal. The grain is a MICRO-texture:
-// it should catch light as a subtle tooth, not sculpt visible hills, so its
-// contribution to the bump is a small fraction of the joint relief.
-uniform float grain_bump : hint_range(0.0, 1.0) = 0.15;
-
-// Base roughness; masonry is rough, panels a little smoother.
-uniform float roughness_base : hint_range(0.0, 1.0) = 0.85;
-
-// --- Weathering ------------------------------------------------------------
-// Real walls are never a flat, even colour: rain washes dirt down in vertical
-// streaks, the base is grimier than the top, and per-brick/per-panel tone
-// varies. These three terms add that grime without any texture files, which is
-// most of what separates a "plausible" wall from an obvious blockout tint.
-
-// Overall strength of the dirt/streak darkening (0 = pristine, 1 = filthy).
-uniform float weathering : hint_range(0.0, 1.0) = 0.35;
-// Extra grime toward the base of the wall (rising damp / splash-back).
-uniform float base_grime : hint_range(0.0, 1.0) = 0.4;
-// Metres of wall over which the base grime fades out going up.
-uniform float base_grime_height : hint_range(0.5, 12.0) = 4.0;
-// Per-unit (brick / panel / course) tonal spread — makes masonry read as many
-// individually-fired bricks rather than one flat sheet.
-uniform float unit_tone_variation : hint_range(0.0, 0.5) = 0.12;
-
-varying vec3 world_pos;
-varying vec3 world_normal;
-
-// --- Value noise (shared idiom with asphalt.gdshader) -----------------------
-float hash(vec2 p) {
-	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-	p3 += dot(p3, p3.yzx + 33.33);
-	return fract((p3.x + p3.y) * p3.z);
-}
-
-float value_noise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-	float a = hash(i + vec2(0.0, 0.0));
-	float b = hash(i + vec2(1.0, 0.0));
-	float c = hash(i + vec2(0.0, 1.0));
-	float d = hash(i + vec2(1.0, 1.0));
-	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
-}
-
-float fbm(vec2 p) {
-	const mat2 rot = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
-	float sum = 0.0;
-	float amp = 0.5;
-	for (int i = 0; i < 3; i++) {
-		sum += amp * value_noise(p);
-		p = rot * p * 2.0 + 17.3;
-		amp *= 0.5;
-	}
-	return sum / 0.875;
-}
-
-// Horizontal position along the wall, in metres, derived from world XZ. Using
-// (x + z) gives a single monotonic coordinate that runs along any wall
-// orientation without needing per-face UVs — good enough for a repeating
-// brick/panel pattern that only has to look plausible, not registered.
-float wall_u(vec3 wp) {
-	return wp.x + wp.z;
-}
-
-// Soft "line" coverage: 1 near a joint (fractional coord close to 0), fading to
-// 0 across `soft`. Used to darken mortar and to cut the normal.
-float joint_line(float coord, float soft) {
-	float d = min(fract(coord), 1.0 - fract(coord));
-	return 1.0 - smoothstep(0.0, soft, d);
-}
-
-// Signed [-1,1] per-cell random keyed on integer grid cell `cell`. Used to give
-// each brick / panel its own slight tonal offset so the wall reads as many
-// discrete units, not one flat sheet.
-float cell_tone(vec2 cell) {
-	return hash(floor(cell) + 0.5) * 2.0 - 1.0;
-}
-
-// Rain-driven dirt streaks: predominantly vertical smears that darken the wall,
-// stronger toward the base. `u` runs along the wall, `y` is height in metres.
-// Returns a 0..1 grime mask (1 = fully grimy). Kept UV/texture-free by driving
-// everything from world-space noise stretched hard in Y so it streaks downward.
-float weather_grime(float u, float y) {
-	// Vertical streaks: sample noise that is stretched ~8x in the vertical so
-	// features smear top-to-bottom the way rain runoff does.
-	float streak = fbm(vec2(u * 0.9, y * 0.12) + vec2(11.0, 3.0));
-	// Broad blotches so the streaks aren't perfectly regular.
-	float blotch = fbm(vec2(u * 0.18, y * 0.09) + vec2(41.0, 7.0));
-	float streaks = clamp(streak * 0.7 + blotch * 0.5 - 0.35, 0.0, 1.0);
-	// Base grime: a soft ramp that is strong at y=0 and gone by base_grime_height.
-	float base = base_grime * (1.0 - smoothstep(0.0, base_grime_height, y));
-	return clamp(streaks * weathering + base, 0.0, 1.0);
-}
-
-void vertex() {
-	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
-}
+uniform float course_height = 0.075;
+uniform float brick_length = 0.23;
+uniform float panel_width = 3.0;
+uniform float panel_height = 3.0;
+uniform float joint_depth = 0.28;
+uniform float grain_scale = 0.04;
+uniform float albedo_variation = 0.025;
+uniform float grain_bump = 0.025;
+uniform float roughness_base = 0.85;
+uniform float weathering = 0.25;
+uniform float base_grime = 0.18;
+uniform float base_grime_height = 1.2;
+uniform float unit_tone_variation = 0.12;
 
 void fragment() {
-	// Wrap into a SMALL window before dividing by the fine grain_scale. Dividing
-	// a large world coordinate (walls can be hundreds of metres from the dataset
-	// origin) by ~0.18 pushes the noise input into the thousands, where the hash
-	// loses precision and the grain degrades into coarse multi-metre blocks. A
-	// 64 m window is far larger than any wall face on screen, so its seam is
-	// never visible, but keeps the noise input small and the grain fine.
-	vec2 wrapped = mod(vec2(wall_u(world_pos), world_pos.y), 64.0);
-	// Joints also use a wrapped coordinate: fract() of a large world value loses
-	// precision and makes the courses drift/blur far from the origin. The 64 m
-	// window holds a whole-number count only for scales that divide it, but the
-	// small residual seam sits off any single wall face and is imperceptible.
-	float u = wrapped.x;
-	float v = wrapped.y;
-
-	// Fine grain gets its OWN tight wrap. Feeding the 64 m `wrapped` window into
-	// fbm(.../grain_scale) pushes the noise-lattice input up to 64/0.18 ≈ 355,
-	// where the hash's float bit-mixing loses precision and the grain collapses
-	// into coarse ~half-metre blobs (the "50 cm grain" artefact). Wrapping the
-	// grain coordinate to a small window FIRST keeps the lattice input in the
-	// low tens, so the speckle stays fine. The window is chosen as a whole
-	// multiple of grain_scale so the noise tiles seamlessly across the seam.
-	vec2 grain_uv = mod(vec2(wall_u(world_pos), world_pos.y), grain_scale * 64.0) / grain_scale;
-	float grain = fbm(grain_uv);
-
-	vec3 col = base_color.rgb;
+	float detail = 1.0 - smoothstep(45.0, 100.0, length(VERTEX));
+	vec3 color = base_color.rgb;
 	float rough = roughness_base;
-	float metallic = 0.0;
-	float spec = 0.5;
-
-	// Joint mask (in the horizontal, jh, and vertical, jv, directions) plus a
-	// mortar darkening term. Filled per surface kind below.
-	float jh = 0.0;
-	float jv = 0.0;
-	float mortar = 0.0;
-
-	if (surface_kind < 0.5) {
-		// Smooth plaster/render: just gentle mottling, no joints.
-		rough = clamp(roughness_base, 0.6, 1.0);
-	} else if (surface_kind < 1.5) {
-		// Masonry: running-bond courses. Every other course is offset by half a
-		// brick so the vertical joints stagger like real brickwork.
-		float course = v / course_height;
-		float row = floor(course);
-		float offset = mod(row, 2.0) * 0.5;
-		float along = u / brick_length + offset;
-		jv = joint_line(course, 0.12);            // horizontal mortar lines
-		jh = joint_line(along, 0.06);             // vertical (staggered) joints
-		mortar = max(jv, jh);
-		// Per-brick tone: each brick (row, column) gets its own slight shade so
-		// the wall looks fired one brick at a time. Cell index staggers with the
-		// running-bond offset so tone changes at the real brick boundaries.
-		float brick_tone = cell_tone(vec2(floor(along), row));
-		col = clamp(col * (1.0 + brick_tone * unit_tone_variation), vec3(0.0), vec3(1.0));
-		// Mortar is a lighter grey and rougher than the brick face.
-		col = mix(col, col * 0.75 + vec3(0.12), mortar * 0.8);
-		rough = mix(roughness_base, 1.0, mortar);
-	} else {
-		// Panels: large rectangular joints, slightly glossier face for SSR.
-		jh = joint_line(u / panel_width, 0.03);
-		jv = joint_line(v / panel_height, 0.03);
-		mortar = max(jh, jv);
-		// Per-panel tone so a curtain wall reads as separate cast/glazed units.
-		float panel_tone = cell_tone(vec2(floor(u / panel_width), floor(v / panel_height)));
-		col = clamp(col * (1.0 + panel_tone * unit_tone_variation * 0.6), vec3(0.0), vec3(1.0));
-		col = mix(col, col * 0.7, mortar);
-		rough = clamp(roughness_base - 0.25, 0.15, 1.0);
-		spec = 0.6;
+	vec2 bump = vec2(0.0);
+	float joint = 0.0;
+	if (surface_kind > 0.5) {
+		vec2 unit = surface_kind < 1.5 ? vec2(brick_length, course_height) : vec2(panel_width, panel_height);
+		vec2 grid = UV / unit;
+		vec2 pixel = max(fwidth(grid), vec2(0.001));
+		if (surface_kind < 1.5) {
+			grid.x += mod(floor(grid.y), 2.0) * 0.5;
+		} else {
+			rough = 0.65;
+		}
+		vec2 coverage = 1.0 - smoothstep(vec2(0.2), vec2(0.8), pixel);
+		float resolved = min(coverage.x, coverage.y);
+		float horizontal = surface_joint(grid.y, 0.045, pixel.y) * resolved;
+		float vertical = surface_joint(grid.x, 0.025, pixel.x) * resolved;
+		joint = max(horizontal, vertical);
+		float tone = surface_hash(floor(grid)) * 2.0 - 1.0;
+		color *= 1.0 + tone * unit_tone_variation * min(coverage.x, coverage.y);
+		vec3 mortar = surface_kind < 1.5 ? vec3(0.48, 0.46, 0.41) : base_color.rgb * 0.65;
+		color = mix(color, mortar, joint * 0.65);
+		bump = sign(vec2(0.5) - fract(grid)) * vec2(vertical, horizontal) * joint_depth * detail;
 	}
-
-	// Fine grain on the albedo (kept subtle so light walls don't look noisy).
-	col = clamp(col + vec3((grain - 0.5) * albedo_variation), vec3(0.0), vec3(1.0));
-
-	// Weathering: rain streaks + base grime darken the albedo and roughen the
-	// surface. Applied after joints/grain so grime settles over the whole wall,
-	// and mortar valleys get a touch extra grime (dirt collects in recesses).
-	float grime = weather_grime(u, world_pos.y) + mortar * 0.15 * weathering;
-	grime = clamp(grime, 0.0, 1.0);
-	// Dirt is a desaturated dark brown-grey, not pure black.
-	vec3 dirt = vec3(0.14, 0.13, 0.11);
-	col = mix(col, dirt, grime * 0.55);
-	rough = clamp(rough + grime * 0.25, 0.0, 1.0);
-
-	ALBEDO = col;
-	ROUGHNESS = clamp(rough, 0.0, 1.0);
-	METALLIC = metallic;
-	SPECULAR = spec;
-
-	// Faked bump. The wall meshes carry no UVs or tangents (they are extruded
-	// footprints), so we can't use NORMAL_MAP — instead we build a tangent frame
-	// on the fly from screen-space derivatives of world position and tilt the
-	// interpolated NORMAL by a height field (grain + joint valleys). This is
-	// UV/tangent-free and works on any geometry.
-	// Derivative step in noise-lattice space (grain_uv is already divided by
-	// grain_scale, so a step of 0.5 here is 0.5 lattice cells). The grain is a
-	// micro-texture, so its normal contribution is scaled right down by
-	// grain_bump — otherwise the fine noise sculpts visible rolling lumps.
-	float e = 0.5;
-	float gx = (fbm(grain_uv + vec2(e, 0.0)) - fbm(grain_uv - vec2(e, 0.0))) * grain_bump;
-	float gy = (fbm(grain_uv + vec2(0.0, e)) - fbm(grain_uv - vec2(0.0, e))) * grain_bump;
-	// Joint gradients: sign follows which side of the joint we're on so the
-	// valley has two facing slopes rather than one flat step.
-	float jx = (fract(u / max(brick_length, 0.001)) - 0.5) * jh;
-	float jy = (fract(v / max(course_height, 0.001)) - 0.5) * jv;
-	// Height-field gradient: gu runs horizontally along the wall, gv vertically.
-	float gu = gx + jx * joint_depth;
-	float gv = gy + jy * joint_depth;
-
-	// Build a tangent frame around the geometric world normal without UVs:
-	// the vertical tangent is world-up projected into the wall plane; the
-	// horizontal tangent is perpendicular to both. Tilting N by the gradient
-	// along these two axes gives a stable bump on vertical walls.
-	vec3 N = normalize(world_normal);
-	vec3 up = vec3(0.0, 1.0, 0.0);
-	vec3 Tv = up - N * dot(N, up);           // vertical in-plane direction
-	if (length(Tv) < 0.001) {
-		Tv = vec3(1.0, 0.0, 0.0);            // wall is horizontal; pick any axis
+	float streak = surface_noise(UV * vec2(0.65, 0.08));
+	float damp = (1.0 - smoothstep(0.0, base_grime_height, UV.y)) * base_grime;
+	float grime = damp + max(streak - 0.4, 0.0) * weathering;
+	color *= 1.0 - grime * 0.45;
+	if (detail > 0.0) {
+		vec2 grain_uv = mod(UV, grain_scale * 64.0) / grain_scale;
+		float grain = surface_noise(grain_uv) - 0.5;
+		color += grain * albedo_variation * detail;
+		bump += vec2(grain, surface_noise(grain_uv + 13.7) - 0.5) * grain_bump * detail;
 	}
-	Tv = normalize(Tv);
-	vec3 Tu = normalize(cross(N, Tv));       // horizontal in-plane direction
-	NORMAL = normalize(N - (Tu * gu + Tv * gv));
+	ALBEDO = clamp(color, vec3(0.0), vec3(1.0));
+	ROUGHNESS = clamp(rough + joint * 0.1 + grime * 0.2, 0.0, 1.0);
+	SPECULAR = 0.35;
+	// Godot supplies the tangent frame in view space, like fragment NORMAL.
+	NORMAL = normalize(NORMAL - TANGENT * bump.x - BINORMAL * bump.y);
 }

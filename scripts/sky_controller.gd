@@ -202,6 +202,8 @@ func _blend_step(weight: float, from: SkyPreset, to: SkyPreset) -> void:
 
 ## Pushes the live state onto the sky shader, the sun light and the environment.
 func _apply_current() -> void:
+	var night := inverse_lerp(float(DAY["light_energy"]), float(NIGHT["light_energy"]), _current.light_energy)
+	RenderingServer.global_shader_parameter_set("building_night", clampf(night, 0.0, 1.0))
 	# Sun/moon direction: convert elevation + azimuth into a unit vector, then
 	# orient the light to point along it. The sky shader needs the *travel*
 	# direction (toward the sky), which is the negation of "up toward the sun".
