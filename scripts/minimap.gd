@@ -3,7 +3,13 @@ extends Control
 
 ## Draws a 2D top-down city minimap centered on the player car.
 ## The car's forward direction always points upward on the minimap.
-## All geometry is clipped to a circle using geometric intersection.
+##
+## The map is cheap to draw because almost none of it is done in script each
+## frame. Features are cached in world space, batched into spatial chunks, and
+## drawn under one transform that turns the map to the car's heading; the circle
+## is cut out on the GPU by a clipping layer instead of intersecting every
+## feature with it. (Projecting and clipping each point in GDScript used to cost
+## about a third of the frame.)
 
 @export var map_radius: float = 200.0  ## World-space radius shown on the minimap (meters)
 @export var car_node_path: NodePath
@@ -13,20 +19,40 @@ var _car: VehicleBody3D = null
 var _tile_manager: OSMTileManager = null
 var _data_ready: bool = false
 
-# Cached draw data for roads/waterways/buildings within a large radius
-var _cached_road_segments: Array = []   # Array of { points: PackedVector3Array, highway: String }
-var _cached_waterway_segments: Array = []  # Array of { points: PackedVector3Array, waterway: String }
-var _cached_building_outlines: Array = []  # Array of PackedVector3Array
+## Features near the car, batched into square chunks so a frame draws a few dozen
+## canvas commands rather than one per way. A chunk is
+## { bounds: Rect2, b_points, b_indices, b_colors (buildings, triangulated),
+##   water: { width: segment points }, minor / major: segment points (pairs) }.
+var _chunks: Array = []
 var _cache_center: Vector3 = Vector3.ZERO
+var _has_cache: bool = false
+
+# The cache is rebuilt on a worker thread: collecting a 600 m neighbourhood
+# cold-parses tiles, which takes hundreds of ms and froze the frame when it ran
+# in _process. The old cache keeps drawing until the new one is adopted.
+var _rebuild_task: int = -1
+var _rebuilt: Dictionary = {}
+
+# The chunks near enough to the car to matter, refreshed every VISIBLE_REFRESH
+# metres so a frame only walks the few it can show.
+const CHUNK_SIZE := 96.0
+const VISIBLE_MARGIN := 40.0
+const VISIBLE_REFRESH := 30.0
+var _visible_chunks: Array = []
+var _visible_center := Vector2(INF, INF)
 
 # A course to follow (sprint): the line to drive and its gates, of which the
 # ones from _next_gate on are still to come. Empty in free drive.
 var _route := PackedVector3Array()
+var _route_xz := PackedVector2Array()
 var _route_gates := PackedVector3Array()
 var _next_gate: int = 0
 
-# Pre-built circle polygon used for geometric clipping (built once in _ready)
-var _clip_circle: PackedVector2Array
+# Layers, built in _ready. They draw behind this control's own drawing (rim,
+# car, north arrow), in order: backdrop, then the map inside a circular mask.
+var _backdrop: Layer
+var _map_mask: Layer
+var _map_content: Layer
 
 # Colors
 const BG_COLOR := Color(0.067, 0.098, 0.11, 0.95)
@@ -55,18 +81,47 @@ const WATERWAY_WIDTHS := {
 }
 const WATERWAY_DEFAULT_WIDTH := 1.5
 
-const CLIP_CIRCLE_SEGMENTS := 48
+
+## A full-size child control that hands its drawing to a callable, so the layers
+## can share the minimap's data and helpers.
+class Layer extends Control:
+	var painter: Callable
+
+	func _draw() -> void:
+		painter.call(self)
 
 
 func _ready() -> void:
 	call_deferred("_resolve_nodes")
-	# Build clip circle once; will be rebuilt if size changes
-	_build_clip_circle()
+	_backdrop = _make_layer(_paint_backdrop)
+	_map_mask = _make_layer(_paint_mask)
+	_map_mask.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
+	_map_content = _make_layer(_paint_content)
+	_map_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_map_mask.add_child(_map_content)
+	add_child(_backdrop)
+	add_child(_map_mask)
+	resized.connect(_on_resized)
+
+
+func _make_layer(painter: Callable) -> Layer:
+	var layer := Layer.new()
+	layer.painter = painter
+	layer.show_behind_parent = true
+	layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	return layer
+
+
+func _on_resized() -> void:
+	_backdrop.queue_redraw()
+	_map_mask.queue_redraw()
 
 
 ## Show a course on the map: the line to drive and its gates in order.
 func set_route(points: PackedVector3Array, gates: PackedVector3Array) -> void:
 	_route = points
+	_route_xz = _to_xz(points)
 	_route_gates = gates
 	_next_gate = 0
 
@@ -78,25 +133,13 @@ func set_next_gate(index: int) -> void:
 
 func clear_route() -> void:
 	_route = PackedVector3Array()
+	_route_xz = PackedVector2Array()
 	_route_gates = PackedVector3Array()
 	_next_gate = 0
 
 
 func has_route() -> bool:
 	return not _route.is_empty()
-
-
-func _build_clip_circle() -> void:
-	var radius := minf(size.x, size.y) / 2.0
-	_clip_circle = PackedVector2Array()
-	for i: int in range(CLIP_CIRCLE_SEGMENTS):
-		var angle := TAU * float(i) / float(CLIP_CIRCLE_SEGMENTS)
-		_clip_circle.append(Vector2(cos(angle), sin(angle)) * radius)
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
-		_build_clip_circle()
 
 
 func _resolve_nodes() -> void:
@@ -113,7 +156,7 @@ func _resolve_nodes() -> void:
 
 func _on_data_loaded(_osm_data: OSMParser.OSMData) -> void:
 	_data_ready = true
-	_cached_road_segments.clear()  # force a rebuild on the next frame
+	_has_cache = false  # force a rebuild on the next frame
 
 
 func _process(_delta: float) -> void:
@@ -121,41 +164,195 @@ func _process(_delta: float) -> void:
 		_resolve_nodes()
 		return
 	var car_pos := _car.global_position
-	var cache_rebuild_threshold := map_radius * 1.5
-	if _cached_road_segments.is_empty() or car_pos.distance_to(_cache_center) > cache_rebuild_threshold:
-		_rebuild_cache(car_pos)
+	var car_xz := Vector2(car_pos.x, car_pos.z)
+	_adopt_finished_rebuild()
+	if _rebuild_task == -1 and (not _has_cache or car_pos.distance_to(_cache_center) > map_radius * 1.5):
+		_rebuild_task = WorkerThreadPool.add_task(_rebuild_cache.bind(car_pos))
+	if _has_cache and car_xz.distance_to(_visible_center) > VISIBLE_REFRESH:
+		_refresh_visible(car_xz)
 	queue_redraw()
+	if _map_content != null:
+		_map_content.queue_redraw()
 
 
+func _exit_tree() -> void:
+	if _rebuild_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_rebuild_task)
+		_rebuild_task = -1
+
+
+func _adopt_finished_rebuild() -> void:
+	if _rebuild_task == -1 or not WorkerThreadPool.is_task_completed(_rebuild_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(_rebuild_task)
+	_rebuild_task = -1
+	if _rebuilt.is_empty():
+		return
+	_cache_center = _rebuilt["center"]
+	_chunks = _rebuilt["chunks"]
+	_rebuilt = {}
+	_has_cache = true
+	_visible_center = Vector2(INF, INF)
+
+
+func _refresh_visible(car_xz: Vector2) -> void:
+	_visible_center = car_xz
+	var reach := map_radius + VISIBLE_MARGIN
+	_visible_chunks = _chunks.filter(
+		func(chunk: Dictionary) -> bool: return (chunk["bounds"] as Rect2).grow(reach).has_point(car_xz))
+
+
+## Runs on a worker thread; hands its result over through _rebuilt.
 func _rebuild_cache(center: Vector3) -> void:
-	_cache_center = center
-	_cached_road_segments.clear()
-	_cached_waterway_segments.clear()
-	_cached_building_outlines.clear()
-
 	if _tile_manager == null:
+		_rebuilt = {}
 		return
 
 	# Pull ways near the car from the same tile source the 3D world streams from,
 	# so the minimap stays consistent with what's rendered (and, on the disk
 	# streaming path, the whole country is never iterated). The 3.0x radius keeps
 	# a margin so features don't pop in at the minimap edge.
+	var chunks := {}  # Vector2i -> chunk
 	var cache_radius := map_radius * 3.0
 	for entry: Dictionary in _tile_manager.collect_ways_near(center, cache_radius):
 		var way: OSMParser.OSMWay = entry["way"]
-		var points: PackedVector3Array = entry["points"]
+		var flat := _to_xz(entry["points"])
+		if flat.size() < 2:
+			continue
+		var bounds := _bounds_of(flat)
+		var cell := Vector2i((bounds.get_center() / CHUNK_SIZE).floor())
+		if not chunks.has(cell):
+			chunks[cell] = _new_chunk(bounds)
+		var chunk: Dictionary = chunks[cell]
+		chunk["bounds"] = (chunk["bounds"] as Rect2).merge(bounds)
 		if way.tags.has("highway"):
-			_cached_road_segments.append({
-				"points": points,
-				"highway": way.tags.get("highway", "unclassified"),
-			})
+			var major: bool = way.tags.get("highway", "unclassified") in MAJOR_HIGHWAYS
+			_append_segments(chunk["major" if major else "minor"], flat)
 		elif WaterwayHandler.is_waterway(way):
-			_cached_waterway_segments.append({
-				"points": points,
-				"waterway": way.tags.get("waterway", "stream"),
-			})
+			var width: float = WATERWAY_WIDTHS.get(way.tags.get("waterway", "stream"), WATERWAY_DEFAULT_WIDTH)
+			if not chunk["water"].has(width):
+				chunk["water"][width] = PackedVector2Array()
+			_append_segments(chunk["water"][width], flat)
 		elif way.tags.has("building"):
-			_cached_building_outlines.append(points)
+			# A rigid motion keeps a polygon's triangulation valid, so it is done
+			# once here instead of every frame the building is on the map.
+			var ring := flat
+			if ring.size() > 3 and ring[0] == ring[ring.size() - 1]:
+				ring = ring.slice(0, ring.size() - 1)
+			var indices := Geometry2D.triangulate_polygon(ring)
+			if indices.is_empty():
+				continue
+			_append_polygon(chunk["b_points"], chunk["b_indices"], ring, indices)
+	for chunk: Dictionary in chunks.values():
+		var colors := PackedColorArray()
+		colors.resize((chunk["b_points"] as PackedVector2Array).size())
+		colors.fill(BUILDING_FILL)
+		chunk["b_colors"] = colors
+	_rebuilt = {"center": center, "chunks": chunks.values()}
+
+
+static func _new_chunk(bounds: Rect2) -> Dictionary:
+	return {
+		"bounds": bounds,
+		"b_points": PackedVector2Array(),
+		"b_indices": PackedInt32Array(),
+		"water": {},
+		"minor": PackedVector2Array(),
+		"major": PackedVector2Array(),
+	}
+
+
+## Adds a triangulated polygon to a chunk's batched buildings. The arrays are
+## taken as parameters because packed arrays are only shared by reference that
+## way; appending to one pulled out of a dictionary would change a copy.
+static func _append_polygon(points: PackedVector2Array, indices: PackedInt32Array,
+		ring: PackedVector2Array, ring_indices: PackedInt32Array) -> void:
+	var offset := points.size()
+	for index: int in ring_indices:
+		indices.append(index + offset)
+	points.append_array(ring)
+
+
+## Appends a polyline as separate segments (point pairs), the form draw_multiline
+## takes, so a whole chunk's roads go out in one call.
+static func _append_segments(out: PackedVector2Array, points: PackedVector2Array) -> void:
+	for i: int in range(points.size() - 1):
+		out.append(points[i])
+		out.append(points[i + 1])
+
+
+static func _to_xz(points: PackedVector3Array) -> PackedVector2Array:
+	var flat := PackedVector2Array()
+	flat.resize(points.size())
+	for i: int in points.size():
+		flat[i] = Vector2(points[i].x, points[i].z)
+	return flat
+
+
+static func _bounds_of(points: PackedVector2Array) -> Rect2:
+	var bounds := Rect2(points[0], Vector2.ZERO)
+	for p: Vector2 in points:
+		bounds = bounds.expand(p)
+	return bounds
+
+
+## Maps world (x, z) to minimap pixels around the control's centre: the same
+## projection as _world_to_minimap, as a transform so a whole layer can be drawn
+## under it.
+func _view_transform(car_pos: Vector3, car_angle: float, scale_factor: float, center: Vector2) -> Transform2D:
+	var sin_a := sin(car_angle)
+	var cos_a := cos(car_angle)
+	var x_axis := Vector2(-cos_a, -sin_a) * scale_factor
+	var y_axis := Vector2(sin_a, -cos_a) * scale_factor
+	return Transform2D(x_axis, y_axis, center - (x_axis * car_pos.x + y_axis * car_pos.z))
+
+
+func _paint_backdrop(layer: Control) -> void:
+	var center := layer.size / 2.0
+	var radius := minf(layer.size.x, layer.size.y) / 2.0
+	layer.draw_circle(center + Vector2(0, 3), radius + 3, Color(0, 0, 0, 0.22))
+	layer.draw_circle(center, radius, BG_COLOR)
+	layer.draw_arc(center, radius * 0.5, 0, TAU, 64, Color(0.32, 0.38, 0.39, 0.25), 1, true)
+
+
+## Only its alpha matters: the content layer is clipped to this circle.
+func _paint_mask(layer: Control) -> void:
+	layer.draw_circle(layer.size / 2.0, minf(layer.size.x, layer.size.y) / 2.0, Color.WHITE)
+
+
+func _paint_content(layer: Control) -> void:
+	if _car == null:
+		return
+	var scale_factor := minf(size.x, size.y) / 2.0 / map_radius
+	var car_pos := _car.global_position
+	var car_forward := _car.global_transform.basis.z
+	var car_angle := atan2(car_forward.x, car_forward.z)
+	var car_xz := Vector2(car_pos.x, car_pos.z)
+	layer.draw_set_transform_matrix(_view_transform(car_pos, car_angle, scale_factor, size / 2.0))
+
+	# Widths are in world units under this transform, so divide the scale back out.
+	var px := 1.0 / scale_factor
+	var canvas := layer.get_canvas_item()
+	var reach := map_radius
+	var near: Array = _visible_chunks.filter(
+		func(chunk: Dictionary) -> bool: return (chunk["bounds"] as Rect2).grow(reach).has_point(car_xz))
+
+	for chunk: Dictionary in near:
+		if not (chunk["b_indices"] as PackedInt32Array).is_empty():
+			RenderingServer.canvas_item_add_triangle_array(
+				canvas, chunk["b_indices"], chunk["b_points"], chunk["b_colors"])
+	for chunk: Dictionary in near:
+		for width: float in chunk["water"]:
+			layer.draw_multiline(chunk["water"][width], WATERWAY_COLOR, width * px, true)
+	for chunk: Dictionary in near:
+		if not (chunk["minor"] as PackedVector2Array).is_empty():
+			layer.draw_multiline(chunk["minor"], ROAD_COLOR, 1.5 * px, true)
+	for chunk: Dictionary in near:
+		if not (chunk["major"] as PackedVector2Array).is_empty():
+			layer.draw_multiline(chunk["major"], MAJOR_ROAD_COLOR, 2.5 * px, true)
+	if _route_xz.size() >= 2:
+		layer.draw_polyline(_route_xz, ROUTE_CASING, 6.0 * px, true)
+		layer.draw_polyline(_route_xz, ROUTE_COLOR, 3.0 * px, true)
 
 
 func _draw() -> void:
@@ -177,34 +374,7 @@ func _draw() -> void:
 	# Set draw origin to center of the control
 	draw_set_transform(center_pos)
 
-	# Background circle
-	draw_circle(Vector2(0, 3), radius + 3, Color(0, 0, 0, 0.22))
-	draw_circle(Vector2.ZERO, radius, BG_COLOR)
-	draw_arc(Vector2.ZERO, radius * 0.5, 0, TAU, 64, Color(0.32, 0.38, 0.39, 0.25), 1, true)
-
-	# Draw buildings (clipped to circle)
-	for outline: PackedVector3Array in _cached_building_outlines:
-		_draw_polygon_on_map(outline, car_pos, car_angle, scale_factor, radius, BUILDING_FILL)
-
-	# Draw waterways (below roads, like the 3D world)
-	for seg: Dictionary in _cached_waterway_segments:
-		var width: float = WATERWAY_WIDTHS.get(seg["waterway"], WATERWAY_DEFAULT_WIDTH)
-		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, WATERWAY_COLOR, width)
-
-	# Draw roads: minor first, then major on top
-	for seg: Dictionary in _cached_road_segments:
-		var highway: String = seg["highway"]
-		if highway in MAJOR_HIGHWAYS:
-			continue
-		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, ROAD_COLOR, 1.5)
-
-	for seg: Dictionary in _cached_road_segments:
-		var highway: String = seg["highway"]
-		if highway not in MAJOR_HIGHWAYS:
-			continue
-		_draw_road_on_map(seg["points"], car_pos, car_angle, scale_factor, radius, MAJOR_ROAD_COLOR, 2.5)
-
-	_draw_route(car_pos, car_angle, scale_factor, radius)
+	_draw_route_gates(car_pos, car_angle, scale_factor, radius)
 
 	# Car indicator: triangle pointing up
 	draw_circle(Vector2.ZERO, 13, Color(0.835, 0.953, 0.42, 0.12))
@@ -231,13 +401,12 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO)
 
 
-## The course line, the gates still to come, and, when the next gate is beyond
-## the map's edge, a marker on the rim pointing at it.
-func _draw_route(car_pos: Vector3, car_angle: float, scale_factor: float, radius: float) -> void:
+## The gates still to come and, when the next gate is beyond the map's edge, a
+## marker on the rim pointing at it. (The course line itself is part of the
+## clipped map content.)
+func _draw_route_gates(car_pos: Vector3, car_angle: float, scale_factor: float, radius: float) -> void:
 	if _route.is_empty():
 		return
-	_draw_road_on_map(_route, car_pos, car_angle, scale_factor, radius, ROUTE_CASING, 6.0)
-	_draw_road_on_map(_route, car_pos, car_angle, scale_factor, radius, ROUTE_COLOR, 3.0)
 	var last := _route_gates.size() - 1
 	for i: int in range(last, _next_gate - 1, -1):
 		var p := _world_to_minimap(_route_gates[i], car_pos, car_angle, scale_factor)
@@ -315,96 +484,3 @@ func _world_to_minimap(world_pos: Vector3, car_pos: Vector3, car_angle: float, s
 	var sy := -(dx * sin_a + dz * cos_a)
 
 	return Vector2(sx, sy) * scale_factor
-
-
-## Clip a polyline to the circle and draw visible segments.
-func _draw_road_on_map(points: PackedVector3Array, car_pos: Vector3, car_angle: float,
-		scale_factor: float, radius: float, color: Color, width: float) -> void:
-	if points.size() < 2:
-		return
-
-	var screen_points := PackedVector2Array()
-	for p: Vector3 in points:
-		screen_points.append(_world_to_minimap(p, car_pos, car_angle, scale_factor))
-
-	# Quick reject
-	var any_visible := false
-	for sp: Vector2 in screen_points:
-		if sp.length() < radius + 20.0:
-			any_visible = true
-			break
-	if not any_visible:
-		return
-
-	# Clip each line segment to the circle and draw visible parts
-	var r_sq := radius * radius
-	for i: int in range(screen_points.size() - 1):
-		var a := screen_points[i]
-		var b := screen_points[i + 1]
-		var clipped := _clip_segment_to_circle(a, b, radius, r_sq)
-		if clipped.size() == 2:
-			draw_line(clipped[0], clipped[1], color, width, true)
-
-
-## Clip a line segment (a->b) to a circle of given radius centered at origin.
-## Returns empty array if fully outside, or [clipped_a, clipped_b].
-func _clip_segment_to_circle(a: Vector2, b: Vector2, _radius: float, r_sq: float) -> Array:
-	var a_inside := a.length_squared() <= r_sq
-	var b_inside := b.length_squared() <= r_sq
-
-	if a_inside and b_inside:
-		return [a, b]
-
-	# Find intersection(s) of line segment with circle
-	var d := b - a
-	var f := a  # relative to origin (already is)
-	var a_coeff := d.dot(d)
-	var b_coeff := 2.0 * f.dot(d)
-	var c_coeff := f.dot(f) - r_sq
-	var discriminant := b_coeff * b_coeff - 4.0 * a_coeff * c_coeff
-
-	if discriminant < 0.0:
-		return []  # No intersection
-
-	var sqrt_disc := sqrt(discriminant)
-	var t1 := (-b_coeff - sqrt_disc) / (2.0 * a_coeff)
-	var t2 := (-b_coeff + sqrt_disc) / (2.0 * a_coeff)
-
-	# Clamp to segment range [0, 1]
-	var t_enter := maxf(minf(t1, t2), 0.0)
-	var t_exit := minf(maxf(t1, t2), 1.0)
-
-	if t_enter > t_exit:
-		return []  # Segment is outside
-
-	var ca: Vector2 = a + d * t_enter if not a_inside else a
-	var cb: Vector2 = a + d * t_exit if not b_inside else b
-	return [ca, cb]
-
-
-## Clip a polygon to the circle and draw it.
-func _draw_polygon_on_map(points: PackedVector3Array, car_pos: Vector3, car_angle: float,
-		scale_factor: float, radius: float, color: Color) -> void:
-	if points.size() < 3:
-		return
-
-	var screen_points := PackedVector2Array()
-	for p: Vector3 in points:
-		screen_points.append(_world_to_minimap(p, car_pos, car_angle, scale_factor))
-
-	# Quick reject
-	var any_visible := false
-	for sp: Vector2 in screen_points:
-		if sp.length() < radius + 20.0:
-			any_visible = true
-			break
-	if not any_visible:
-		return
-
-	# Intersect the polygon with the clip circle
-	var clipped_polys := Geometry2D.intersect_polygons(screen_points, _clip_circle)
-	for poly: PackedVector2Array in clipped_polys:
-		if poly.size() >= 3:
-			var indices := Geometry2D.triangulate_polygon(poly)
-			if indices.size() > 0:
-				draw_colored_polygon(poly, color)
